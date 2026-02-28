@@ -1,0 +1,62 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="wheel_module">
+
+  <!-- 
+    轮子模块的XACRO宏定义
+    参数说明：
+    - suffix     : 后缀，例如 "_rf" 表示右前腿
+    - parent_link: 父链接名称（一般为对应的转向电机，如 "motor_rf"）
+    - xyz        : 相对于父链接的安装位置 (默认 "0 0 0")
+    - rpy        : 相对于父链接的安装旋转 (默认 "0 0 0")
+    - mesh_scale : OBJ 网格缩放比例，用于左右/前后镜像 (默认 "0.001 0.001 0.001")
+  -->
+  <xacro:macro name="wheel" 
+               params="suffix parent_link 
+                       xyz:='0 0 0' 
+                       rpy:='0 0 0'
+                       mesh_scale:='0.001 0.001 0.001'">
+
+    <!-- 轮子连杆 -->
+    <link name="wheel_${suffix}">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://robot/meshes/wheel-rf.obj"
+                scale="${mesh_scale}"/>
+        </geometry>
+        <!-- 使用黑色橡胶材质，需确保材质文件已包含 -->
+        <xacro:get_material_by_name material_name="tire_black"/>
+      </visual>
+      
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://robot/meshes/wheel-rf.obj"
+                scale="${mesh_scale}"/>
+        </geometry>
+      </collision>
+      
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="0.3"/>
+        <!-- 简化惯性矩，根据实际模型调整 -->
+        <inertia ixx="0.0003" ixy="0.0" ixz="0.0"
+                 iyy="0.0005" iyz="0.0"
+                 izz="0.0003"/>
+      </inertial>
+    </link>
+    
+    <!-- 轮子旋转关节（连续旋转） -->
+    <joint name="wheel_${parent_link}_joint_${suffix}" type="continuous">
+      <origin xyz="${xyz}" rpy="${rpy}"/>
+      <parent link="${parent_link}"/>
+      <child link="wheel_${suffix}"/>
+      <!-- 假设轮子绕 X 轴旋转，请根据实际模型调整 -->
+      <axis xyz="1 0 0"/>
+      <!-- 连续关节无限制，但可设置动力学参数 -->
+      <dynamics damping="0.02" friction="0.0"/>
+    </joint>
+
+  </xacro:macro>
+
+</robot>

@@ -1,0 +1,106 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- 
+    硬件接口配置
+    定义所有可控制的关节及其命令/状态接口
+    如果需要参数化（例如关节名称列表），可以使用 xacro 属性传递
+  -->
+  <ros2_control name="robot_control" type="system">
+    <hardware>
+      <!-- 根据仿真环境选择插件：fake_components 用于测试，gazebo 用于仿真 -->
+      <plugin>fake_components/GenericSystem</plugin>
+      <!-- 列出所有受控关节，确保与下文定义一致 -->
+      <param name="joints">lap_body_joint_rf lap_body_joint_lf lap_body_joint_rr lap_body_joint_lr shin_lap_rf_joint_rf shin_lap_lf_joint_lf shin_lap_rr_joint_rr shin_lap_lr_joint_lr motor_shin_rf_joint_rf motor_shin_lf_joint_lf motor_shin_rr_joint_rr motor_shin_lr_joint_lr wheel_motor_rf_joint_rf wheel_motor_lf_joint_lf wheel_motor_rr_joint_rr wheel_motor_lr_joint_lr</param>
+    </hardware>
+
+    <!-- 大腿关节 -->
+    <joint name="lap_body_joint_rf">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="lap_body_joint_lf">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="lap_body_joint_rr">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="lap_body_joint_lr">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <!-- 小腿关节 -->
+    <joint name="shin_lap_rf_joint_rf">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="shin_lap_lf_joint_lf">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="shin_lap_rr_joint_rr">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="shin_lap_lr_joint_lr">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <!-- 转向电机关节 -->
+    <joint name="motor_shin_rf_joint_rf">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="motor_shin_lf_joint_lf">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="motor_shin_rr_joint_rr">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="motor_shin_lr_joint_lr">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+
+    <!-- 轮子关节（速度控制） -->
+    <joint name="wheel_motor_rf_joint_rf">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="wheel_motor_lf_joint_lf">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="wheel_motor_rr_joint_rr">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="wheel_motor_lr_joint_lr">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+</robot>

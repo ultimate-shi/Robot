@@ -1,0 +1,62 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="motor_module">
+
+  <!-- 
+    转向电机模块的XACRO宏定义
+    参数说明：
+    - suffix     : 后缀，例如 "_rf" 表示右前腿
+    - parent_link: 父链接名称（一般为对应的小腿末端，如 "shin_rf"）
+    - xyz        : 相对于父链接的安装位置 (默认 "0 0 0")
+    - rpy        : 相对于父链接的安装旋转 (默认 "0 0 0")
+    - mesh_scale : OBJ 网格缩放比例，用于左右/前后镜像 (默认 "0.001 0.001 0.001")
+  -->
+  <xacro:macro name="motor" 
+               params="suffix parent_link 
+                       xyz:='0 0 0' 
+                       rpy:='0 0 0'
+                       mesh_scale:='0.001 0.001 0.001'">
+
+    <!-- 转向电机连杆 -->
+    <link name="motor_${suffix}">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://robot/meshes/motor-rf.obj"
+                scale="${mesh_scale}"/>
+        </geometry>
+        <!-- 使用蓝色材质，需确保材质文件已包含 -->
+        <xacro:get_material_by_name material_name="pla_blue"/>
+      </visual>
+      
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://robot/meshes/motor-rf.obj"
+                scale="${mesh_scale}"/>
+        </geometry>
+      </collision>
+      
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="0.5"/>
+        <inertia ixx="0.0005" ixy="0.0" ixz="0.0"
+                 iyy="0.0005" iyz="0.0"
+                 izz="0.0005"/>
+      </inertial>
+    </link>
+    
+    <!-- 转向关节（绕 Z 轴旋转，左右各 90 度） -->
+    <joint name="motor_${parent_link}_joint_${suffix}" type="revolute">
+      <origin xyz="${xyz}" rpy="${rpy}"/>
+      <parent link="${parent_link}"/>
+      <child link="motor_${suffix}"/>
+      <!-- 假设转向绕 Z 轴，根据实际模型可调整为其他轴 -->
+      <axis xyz="0 0 -1"/>
+      <!-- 运动范围：-90° 到 90°（-1.57 到 1.57 弧度） -->
+      <limit lower="-1.57" upper="1.57" effort="5.0" velocity="1.0"/>
+      <dynamics damping="0.05" friction="0.0"/>
+    </joint>
+
+  </xacro:macro>
+
+</robot>

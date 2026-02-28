@@ -1,0 +1,26 @@
+# 适配joint_state_publisher_gui的控制器配置文件
+# 仅保留关节状态广播器，移除位置控制器（GUI直接控制关节，无需PID）
+controller_manager:
+  ros__parameters:
+    # 控制器更新频率（Hz）
+    update_rate: 100  
+
+    # 仅保留关节状态广播器（GUI控制的核心）
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+# 关节状态广播器配置（简化版，适配GUI控制）
+joint_state_broadcaster:
+  ros__parameters:
+    # 关键：广播所有关节状态，让GUI能识别并控制
+    use_local_topics: false
+    # 显式指定要广播的关节（与URDF中的旋转关节对应）
+    joints:
+      - lap_body_joint_rf
+      - lap_body_joint_lf
+      - lap_body_joint_rr
+      - lap_body_joint_lr
+    # 确保状态接口正确（匹配URDF中的state_interface）
+    state_interfaces:
+      - position
+      - velocity

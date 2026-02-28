@@ -1,0 +1,354 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="robot_materials_3dprint">
+
+  <!-- 
+    3D打印机器人材质定义
+    包含PLA/ABS/TPU等常见3D打印材料的颜色
+  -->
+
+  <!-- ========== PLA材质系列 ========== -->
+  <!-- 亮色系列 (bright colors) -->
+  <material name="pla_bright_red">
+    <color rgba="0.9 0.2 0.2 1.0"/>  <!-- 鲜红色 -->
+  </material>
+  
+  <material name="pla_blue">
+    <color rgba="0.2 0.4 0.9 1.0"/>  <!-- 蓝色 -->
+  </material>
+  
+  <material name="pla_green">
+    <color rgba="0.2 0.8 0.3 1.0"/>  <!-- 绿色 -->
+  </material>
+  
+  <material name="pla_yellow">
+    <color rgba="1.0 0.9 0.2 1.0"/>  <!-- 黄色 -->
+  </material>
+  
+  <material name="pla_orange">
+    <color rgba="1.0 0.5 0.2 1.0"/>  <!-- 橙色 -->
+  </material>
+  
+  <material name="pla_purple">
+    <color rgba="0.6 0.2 0.8 1.0"/>  <!-- 紫色 -->
+  </material>
+  
+  <material name="pla_pink">
+    <color rgba="1.0 0.6 0.8 1.0"/>  <!-- 粉色 -->
+  </material>
+  
+  <material name="pla_cyan">
+    <color rgba="0.2 0.8 1.0 1.0"/>  <!-- 青色 -->
+  </material>
+  
+  <!-- PLA自然色系列 -->
+  <material name="pla_white">
+    <color rgba="0.95 0.95 0.95 1.0"/>  <!-- 白色，略带暖色调 -->
+  </material>
+  
+  <material name="pla_black">
+    <color rgba="0.15 0.15 0.15 1.0"/>  <!-- 黑色，不是纯黑 -->
+  </material>
+  
+  <material name="pla_gray_light">
+    <color rgba="0.7 0.7 0.7 1.0"/>  <!-- 浅灰色 -->
+  </material>
+  
+  <material name="pla_gray_dark">
+    <color rgba="0.3 0.3 0.3 1.0"/>  <!-- 深灰色 -->
+  </material>
+  
+  <material name="pla_silver">
+    <color rgba="0.8 0.8 0.85 1.0"/>  <!-- 银色效果 -->
+  </material>
+  
+  <!-- PLA半透明系列 -->
+  <material name="pla_trans_red">
+    <color rgba="0.9 0.2 0.2 0.7"/>  <!-- 半透明红 -->
+  </material>
+  
+  <material name="pla_trans_blue">
+    <color rgba="0.2 0.4 0.9 0.7"/>  <!-- 半透明蓝 -->
+  </material>
+  
+  <material name="pla_trans_green">
+    <color rgba="0.2 0.8 0.3 0.7"/>  <!-- 半透明绿 -->
+  </material>
+  
+  <material name="pla_trans_clear">
+    <color rgba="0.95 0.95 0.95 0.3"/>  <!-- 透明 -->
+  </material>
+  
+  <!-- ========== ABS材质系列 ========== -->
+  <!-- ABS通常颜色更鲜艳 -->
+  <material name="abs_red">
+    <color rgba="0.85 0.1 0.1 1.0"/>  <!-- ABS红色 -->
+  </material>
+  
+  <material name="abs_blue">
+    <color rgba="0.1 0.3 0.8 1.0"/>  <!-- ABS蓝色 -->
+  </material>
+  
+  <material name="abs_green">
+    <color rgba="0.1 0.7 0.2 1.0"/>  <!-- ABS绿色 -->
+  </material>
+  
+  <material name="abs_yellow">
+    <color rgba="0.95 0.85 0.1 1.0"/>  <!-- ABS黄色 -->
+  </material>
+  
+  <!-- ABS工程色 -->
+  <material name="abs_black">
+    <color rgba="0.08 0.08 0.08 1.0"/>  <!-- ABS黑色，更黑 -->
+  </material>
+  
+  <material name="abs_gray">
+    <color rgba="0.4 0.4 0.4 1.0"/>  <!-- ABS灰色 -->
+  </material>
+  
+  <material name="abs_ivory">
+    <color rgba="0.98 0.96 0.9 1.0"/>  <!-- ABS象牙白 -->
+  </material>
+  
+  <!-- ========== TPU/柔性材料系列 ========== -->
+  <material name="tpu_black">
+    <color rgba="0.12 0.12 0.12 1.0"/>  <!-- TPU黑色，用于轮子 -->
+  </material>
+  
+  <material name="tpu_white">
+    <color rgba="0.9 0.9 0.9 1.0"/>  <!-- TPU白色 -->
+  </material>
+  
+  <material name="tpu_red">
+    <color rgba="0.8 0.2 0.2 1.0"/>  <!-- TPU红色 -->
+  </material>
+  
+  <material name="tpu_blue">
+    <color rgba="0.2 0.3 0.7 1.0"/>  <!-- TPU蓝色 -->
+  </material>
+  
+  <material name="tpu_translucent">
+    <color rgba="0.6 0.6 0.6 0.5"/>  <!-- TPU半透明 -->
+  </material>
+  
+  <!-- ========== 特殊效果材质 ========== -->
+  <!-- 金属效果 (通过颜色模拟) -->
+  <material name="metal_aluminum">
+    <color rgba="0.9 0.9 0.92 1.0"/>  <!-- 铝色 -->
+  </material>
+  
+  <material name="metal_steel">
+    <color rgba="0.65 0.67 0.72 1.0"/>  <!-- 钢色 -->
+  </material>
+  
+  <material name="metal_bronze">
+    <color rgba="0.8 0.5 0.2 1.0"/>  <!-- 青铜色 -->
+  </material>
+  
+  <material name="metal_copper">
+    <color rgba="0.85 0.54 0.4 1.0"/>  <!-- 铜色 -->
+  </material>
+  
+  <material name="metal_gold">
+    <color rgba="1.0 0.84 0.0 1.0"/>  <!-- 金色 -->
+  </material>
+  
+  <material name="metal_silver">
+    <color rgba="0.75 0.75 0.8 1.0"/>  <!-- 银色 -->
+  </material>
+  
+  <!-- 碳纤维效果 -->
+  <material name="carbon_fiber_black">
+    <color rgba="0.05 0.05 0.05 1.0"/>  <!-- 碳纤维黑 -->
+  </material>
+  
+  <material name="carbon_fiber_gray">
+    <color rgba="0.2 0.2 0.2 1.0"/>  <!-- 碳纤维灰 -->
+  </material>
+  
+  <!-- 木质效果 -->
+  <material name="wood_dark">
+    <color rgba="0.4 0.3 0.2 1.0"/>  <!-- 深木色 -->
+  </material>
+  
+  <material name="wood_light">
+    <color rgba="0.8 0.7 0.5 1.0"/>  <!-- 浅木色 -->
+  </material>
+  
+  <material name="wood_bamboo">
+    <color rgba="0.9 0.85 0.7 1.0"/>  <!-- 竹色 -->
+  </material>
+  
+  <!-- ========== 功能区分色 ========== -->
+  <!-- 结构件 -->
+  <material name="structural_black">
+    <color rgba="0.1 0.1 0.1 1.0"/>
+  </material>
+  
+  <material name="structural_gray">
+    <color rgba="0.5 0.5 0.5 1.0"/>
+  </material>
+  
+  <!-- 运动部件 -->
+  <material name="motion_red">
+    <color rgba="0.9 0.2 0.2 1.0"/>
+  </material>
+  
+  <material name="motion_blue">
+    <color rgba="0.2 0.4 0.9 1.0"/>
+  </material>
+  
+  <!-- 连接件 -->
+  <material name="connector_yellow">
+    <color rgba="1.0 0.9 0.2 1.0"/>
+  </material>
+  
+  <material name="connector_orange">
+    <color rgba="1.0 0.5 0.2 1.0"/>
+  </material>
+  
+  <!-- 电子部件 -->
+  <material name="electronics_green">
+    <color rgba="0.2 0.6 0.2 1.0"/>
+  </material>
+  
+  <!-- 轮子/轮胎 -->
+  <material name="tire_black">
+    <color rgba="0.05 0.05 0.05 1.0"/>
+  </material>
+  
+  <material name="tire_gray">
+    <color rgba="0.2 0.2 0.2 1.0"/>
+  </material>
+  
+  <!-- ========== 主题配色方案 ========== -->
+  <!-- 机器人主题1：科技蓝 -->
+  <material name="theme_tech_blue_main">
+    <color rgba="0.1 0.3 0.6 1.0"/>
+  </material>
+  
+  <material name="theme_tech_blue_accent">
+    <color rgba="0.2 0.5 0.9 1.0"/>
+  </material>
+  
+  <material name="theme_tech_blue_detail">
+    <color rgba="0.8 0.9 1.0 1.0"/>
+  </material>
+  
+  <!-- 机器人主题2：火焰红 -->
+  <material name="theme_fire_red_main">
+    <color rgba="0.6 0.1 0.1 1.0"/>
+  </material>
+  
+  <material name="theme_fire_red_accent">
+    <color rgba="0.9 0.3 0.2 1.0"/>
+  </material>
+  
+  <material name="theme_fire_red_detail">
+    <color rgba="1.0 0.8 0.6 1.0"/>
+  </material>
+  
+  <!-- 机器人主题3：森林绿 -->
+  <material name="theme_forest_green_main">
+    <color rgba="0.1 0.4 0.2 1.0"/>
+  </material>
+  
+  <material name="theme_forest_green_accent">
+    <color rgba="0.3 0.7 0.3 1.0"/>
+  </material>
+  
+  <material name="theme_forest_green_detail">
+    <color rgba="0.8 0.9 0.7 1.0"/>
+  </material>
+  
+  <!-- ========== 常用组合 ========== -->
+  <!-- 四腿机器人颜色组合 -->
+  <material name="leg_rf_color">
+    <color rgba="0.9 0.2 0.2 1.0"/>  <!-- 右前：红色 -->
+  </material>
+  
+  <material name="leg_lf_color">
+    <color rgba="0.2 0.4 0.9 1.0"/>  <!-- 左前：蓝色 -->
+  </material>
+  
+  <material name="leg_rb_color">
+    <color rgba="0.2 0.8 0.3 1.0"/>  <!-- 右后：绿色 -->
+  </material>
+  
+  <material name="leg_lb_color">
+    <color rgba="1.0 0.9 0.2 1.0"/>  <!-- 左后：黄色 -->
+  </material>
+  
+  <!-- ========== 工具函数 ========== -->
+  
+  <!-- 根据部件类型获取推荐材质 -->
+  <xacro:macro name="get_recommended_material" params="component_type">
+    <xacro:if value="${component_type == 'body'}">
+      <material name="pla_gray_dark"/>
+    </xacro:if>
+    
+    <xacro:if value="${component_type == 'lap'}">
+      <material name="pla_bright_red"/>
+    </xacro:if>
+    
+    <xacro:if value="${component_type == 'shank'}">
+      <material name="pla_blue"/>
+    </xacro:if>
+    
+    <xacro:if value="${component_type == 'wheel'}">
+      <material name="tpu_black"/>
+    </xacro:if>
+    
+    <xacro:if value="${component_type == 'joint'}">
+      <material name="metal_aluminum"/>
+    </xacro:if>
+    
+    <xacro:if value="${component_type == 'connector'}">
+      <material name="connector_yellow"/>
+    </xacro:if>
+    
+    <xacro:if value="${component_type == 'electronics'}">
+      <material name="electronics_green"/>
+    </xacro:if>
+    
+    <!-- 默认材质 -->
+    <xacro:unless value="${component_type in ['body', 'lap', 'shank', 'wheel', 'joint', 'connector', 'electronics']}">
+      <material name="pla_gray_light"/>
+    </xacro:unless>
+  </xacro:macro>
+  
+  <!-- 根据腿的位置获取颜色 -->
+  <xacro:macro name="get_leg_color" params="position">
+    <xacro:if value="${position == 'rf'}">  <!-- 右前 -->
+      <material name="leg_rf_color"/>
+    </xacro:if>
+    
+    <xacro:if value="${position == 'lf'}">  <!-- 左前 -->
+      <material name="leg_lf_color"/>
+    </xacro:if>
+    
+    <xacro:if value="${position == 'rb'}">  <!-- 右后 -->
+      <material name="leg_rb_color"/>
+    </xacro:if>
+    
+    <xacro:if value="${position == 'lb'}">  <!-- 左后 -->
+      <material name="leg_lb_color"/>
+    </xacro:if>
+  </xacro:macro>
+  
+  <!-- 简单获取材质（通过名称） -->
+  <xacro:macro name="get_material_by_name" params="material_name">
+    <material name="${material_name}"/>
+  </xacro:macro>
+  
+  <!-- 获取材质（通过名称和透明度） -->
+  <xacro:macro name="get_material_with_alpha" params="material_name alpha:=1.0">
+    <xacro:if value="${material_name == 'pla_bright_red'}">
+      <color rgba="0.9 0.2 0.2 ${alpha}"/>
+    </xacro:if>
+    <!-- 可以继续添加其他材质... -->
+    <xacro:unless value="${material_name == 'pla_bright_red'}">
+      <material name="${material_name}"/>
+    </xacro:unless>
+  </xacro:macro>
+
+</robot>

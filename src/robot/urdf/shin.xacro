@@ -1,0 +1,60 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="shin_module">
+
+  <!-- 
+    小腿模块的XACRO宏定义
+    参数说明：
+    - suffix     : 后缀，例如 "_rf" 表示右前腿
+    - parent_link: 父链接名称（一般为对应的大腿连杆，如 "lap_rf"）
+    - xyz        : 相对于父链接的安装位置 (默认 "0 0 0")
+    - rpy        : 相对于父链接的安装旋转 (默认 "0 0 0")
+    - mesh_scale : OBJ 网格缩放比例，用于左右/前后镜像 (默认 "0.001 0.001 0.001")
+  -->
+  <xacro:macro name="shin" 
+               params="suffix parent_link 
+                       xyz:='0 0 0' 
+                       rpy:='0 0 0'
+                       mesh_scale:='0.001 0.001 0.001'">
+
+    <!-- 小腿连杆 -->
+    <link name="shin_${suffix}">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://robot/meshes/shin-rf.obj"
+                scale="${mesh_scale}"/>
+        </geometry>
+        <xacro:get_material_by_name material_name="pla_green"/>
+      </visual>
+      
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://robot/meshes/shin-rf.obj"
+                scale="${mesh_scale}"/>
+        </geometry>
+      </collision>
+      
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="0.5"/>
+        <inertia ixx="0.0005" ixy="0.0" ixz="0.0"
+                 iyy="0.0005" iyz="0.0"
+                 izz="0.0005"/>
+      </inertial>
+    </link>
+    
+    <!-- 小腿与大腿的连接关节（膝盖关节） -->
+    <joint name="shin_${parent_link}_joint_${suffix}" type="revolute">
+      <origin xyz="${xyz}" rpy="${rpy}"/>
+      <parent link="${parent_link}"/>
+      <child link="shin_${suffix}"/>
+      <!-- 假设膝盖绕 X 轴旋转，请根据实际模型调整 -->
+      <axis xyz="1 0 0"/>
+      <limit lower="-0.785" upper="0.785" effort="5.0" velocity="1.0"/>
+      <dynamics damping="0.05" friction="0.0"/>
+    </joint>
+
+  </xacro:macro>
+
+</robot>

@@ -1,0 +1,149 @@
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz
+
+    # 定义所有可用的控制器
+    controllers:
+      # 必需：发布所有关节状态
+      joint_state_broadcaster:
+        type: joint_state_broadcaster/JointStateBroadcaster
+
+      # 大腿位置控制器（四个独立）
+      lap_rf_position_controller:
+        type: position_controllers/JointPositionController
+      lap_lf_position_controller:
+        type: position_controllers/JointPositionController
+      lap_rr_position_controller:
+        type: position_controllers/JointPositionController
+      lap_lr_position_controller:
+        type: position_controllers/JointPositionController
+
+      # 小腿位置控制器（四个独立）
+      shin_rf_position_controller:
+        type: position_controllers/JointPositionController
+      shin_lf_position_controller:
+        type: position_controllers/JointPositionController
+      shin_rr_position_controller:
+        type: position_controllers/JointPositionController
+      shin_lr_position_controller:
+        type: position_controllers/JointPositionController
+
+      # 转向位置控制器（四个独立）
+      motor_rf_position_controller:
+        type: position_controllers/JointPositionController
+      motor_lf_position_controller:
+        type: position_controllers/JointPositionController
+      motor_rr_position_controller:
+        type: position_controllers/JointPositionController
+      motor_lr_position_controller:
+        type: position_controllers/JointPositionController
+
+      # 轮子速度控制器（四个独立，轮子宜用速度控制）
+      wheel_rf_velocity_controller:
+        type: velocity_controllers/JointVelocityController
+      wheel_lf_velocity_controller:
+        type: velocity_controllers/JointVelocityController
+      wheel_rr_velocity_controller:
+        type: velocity_controllers/JointVelocityController
+      wheel_lr_velocity_controller:
+        type: velocity_controllers/JointVelocityController
+
+# ========== 关节状态广播器 ==========
+joint_state_broadcaster:
+  ros__parameters:
+    publish_rate: 100.0
+    joints:
+      - lap_body_joint_rf
+      - lap_body_joint_lf
+      - lap_body_joint_rr
+      - lap_body_joint_lr
+      - shin_lap_rf_joint_rf
+      - shin_lap_lf_joint_lf
+      - shin_lap_rr_joint_rr
+      - shin_lap_lr_joint_lr
+      - motor_shin_rf_joint_rf
+      - motor_shin_lf_joint_lf
+      - motor_shin_rr_joint_rr
+      - motor_shin_lr_joint_lr
+      - wheel_motor_rf_joint_rf
+      - wheel_motor_lf_joint_lf
+      - wheel_motor_rr_joint_rr
+      - wheel_motor_lr_joint_lr
+
+# ========== 定义公共 PID 参数锚点 ==========
+.lap_pid: &lap_pid  { p: 100.0, i: 0.01, d: 10.0 }
+.shin_pid: &shin_pid { p: 80.0,  i: 0.01, d: 8.0 }
+.motor_pid: &motor_pid { p: 60.0, i: 0.005, d: 5.0 }
+.wheel_pid: &wheel_pid { p: 10.0, i: 0.1, d: 0.0 }
+
+# ========== 大腿控制器（复用锚点） ==========
+lap_rf_position_controller:
+  ros__parameters:
+    joint: lap_body_joint_rf
+    pid: *lap_pid
+lap_lf_position_controller:
+  ros__parameters:
+    joint: lap_body_joint_lf
+    pid: *lap_pid
+lap_rr_position_controller:
+  ros__parameters:
+    joint: lap_body_joint_rr
+    pid: *lap_pid
+lap_lr_position_controller:
+  ros__parameters:
+    joint: lap_body_joint_lr
+    pid: *lap_pid
+
+# ========== 小腿控制器 ==========
+shin_rf_position_controller:
+  ros__parameters:
+    joint: shin_lap_rf_joint_rf
+    pid: *shin_pid
+shin_lf_position_controller:
+  ros__parameters:
+    joint: shin_lap_lf_joint_lf
+    pid: *shin_pid
+shin_rr_position_controller:
+  ros__parameters:
+    joint: shin_lap_rr_joint_rr
+    pid: *shin_pid
+shin_lr_position_controller:
+  ros__parameters:
+    joint: shin_lap_lr_joint_lr
+    pid: *shin_pid
+
+# ========== 转向控制器 ==========
+motor_rf_position_controller:
+  ros__parameters:
+    joint: motor_shin_rf_joint_rf
+    pid: *motor_pid
+motor_lf_position_controller:
+  ros__parameters:
+    joint: motor_shin_lf_joint_lf
+    pid: *motor_pid
+motor_rr_position_controller:
+  ros__parameters:
+    joint: motor_shin_rr_joint_rr
+    pid: *motor_pid
+motor_lr_position_controller:
+  ros__parameters:
+    joint: motor_shin_lr_joint_lr
+    pid: *motor_pid
+
+# ========== 轮子控制器 ==========
+wheel_rf_velocity_controller:
+  ros__parameters:
+    joint: wheel_motor_rf_joint_rf
+    pid: *wheel_pid
+wheel_lf_velocity_controller:
+  ros__parameters:
+    joint: wheel_motor_lf_joint_lf
+    pid: *wheel_pid
+wheel_rr_velocity_controller:
+  ros__parameters:
+    joint: wheel_motor_rr_joint_rr
+    pid: *wheel_pid
+wheel_lr_velocity_controller:
+  ros__parameters:
+    joint: wheel_motor_lr_joint_lr
+    pid: *wheel_pid

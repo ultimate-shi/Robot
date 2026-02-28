@@ -1,0 +1,85 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="lap_module">
+
+  <!-- 大腿模块的XACRO宏定义 -->
+  <xacro:macro name="lap" 
+               params="suffix parent_link 
+                       xyz:='0 0 0' 
+                       rpy:='0 0 0'
+                       mesh_scale:='0.001 0.001 0.001'">
+
+    <!-- 大腿连杆 (link) -->
+    <link name="lap_${suffix}">
+      <!-- 视觉属性 -->
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://robot/meshes/lap-rf.obj"
+                scale="${mesh_scale}"/>
+        </geometry>
+        <xacro:get_material_by_name material_name="pla_yellow"/>
+      </visual>
+      
+      <!-- 碰撞属性 -->
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="package://robot/meshes/lap-rf.obj"
+                scale="${mesh_scale}"/>
+        </geometry>
+      </collision>
+      
+      <!-- 惯性属性 -->
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="1.0"/>
+        <inertia ixx="0.001" ixy="0.0" ixz="0.0"
+                 iyy="0.001" iyz="0.0"
+                 izz="0.001"/>
+      </inertial>
+    </link>
+    
+    <!-- 大腿与身体的连接关节 (joint)-->
+    <joint name="lap_${parent_link}_joint_${suffix}" type="revolute">
+      <!-- 关节原点相对于父链接的位置和方向 -->
+      <origin xyz="${xyz}" rpy="${rpy}"/>
+      <parent link="${parent_link}"/>
+      <child link="lap_${suffix}"/>
+      
+      <!-- 旋转轴定义 (绕X轴旋转) -->
+      <axis xyz="1 0 0"/>
+      
+      <!-- 
+        limit 标签：关节运动限制
+        - lower: 关节最小角度/位置 (弧度)
+        - upper: 关节最大角度/位置 (弧度)
+        - effort: 最大作用力/力矩 (牛顿或牛顿米)
+        - velocity: 最大速度 (弧度/秒 或 米/秒)
+        
+        对于旋转关节(revolute)：
+        - lower/upper: 最小/最大角度，单位：弧度
+          -1.57 ≈ -90度, 1.57 ≈ 90度
+        - effort: 最大扭矩，单位：牛顿米(N·m)
+        - velocity: 最大角速度，单位：弧度/秒(rad/s)
+      -->
+      <limit lower="${-pi/4}" upper="${pi/4}" effort="10.0" velocity="1.0"/>
+      
+      <!-- 
+        dynamics 标签：关节动态特性
+        - damping: 阻尼系数，模拟摩擦/阻力效应
+        - friction: 静摩擦系数
+        
+        单位说明：
+        - damping: 牛顿米秒每弧度 (N·m·s/rad) 对于旋转关节
+        - friction: 牛顿米 (N·m) 对于旋转关节
+        
+        物理意义：
+        - damping=0.1: 角速度与阻力矩成正比，系数0.1
+        - friction=0.0: 没有静摩擦力矩
+      -->
+      <dynamics damping="0.1" friction="0.0"/>
+    </joint>
+
+  </xacro:macro>
+
+</robot>
