@@ -1,0 +1,4 @@
+# controller_manager.yaml
+controller_manager:
+  ros__parameters:
+    update_rate: 100

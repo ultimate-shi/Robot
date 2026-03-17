@@ -7,6 +7,14 @@
   <xacro:include filename="shin.xacro"/>
   <xacro:include filename="motor.xacro"/>
   <xacro:include filename="wheel.xacro"/>
+  <xacro:include filename="radar-front.xacro"/>
+  <xacro:include filename="radar-side.xacro"/>
+  <xacro:include filename="imu.xacro"/>
+
+  <!-- 新增：动态获取robot包的绝对路径（核心！） -->
+  <xacro:property name="pkg_path" value="$(find robot)"/>
+  <!-- 定义mesh文件夹路径 -->
+  <xacro:property name="mesh_path" value="${pkg_path}/meshes"/>
 
   <!-- 基础连杆（作为机器人根节点） -->
   <link name="base_link">
@@ -16,9 +24,7 @@
       <geometry>
         <box size="0 0 0"/> <!-- 小方块作为base_link可视化 -->
       </geometry>
-      <material name="red">
-        <diffuse>1 0 0 1</diffuse>
-      </material>
+      <xacro:get_material_by_name material_name="pla_gray_light"/>
     </visual>
   </link>
 
@@ -28,7 +34,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://robot/meshes/body.obj"
+        <mesh filename="${mesh_path}/body.obj"
               scale="0.001 0.001 0.001"/>
       </geometry>
       <xacro:get_material_by_name material_name="pla_gray_light"/>
@@ -38,7 +44,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="package://robot/meshes/body.obj"
+        <mesh filename="${mesh_path}/body.obj"
               scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
@@ -62,14 +68,14 @@
   
   <!-- 大腿部分（保留所有lap宏调用，确保关节可被GUI控制） -->
   <!-- 右前大腿 - 原样 -->
-  <xacro:lap suffix="rf" 
+  <xacro:lap suffix="fr" 
              parent_link="body"
              xyz="-0.091 -0.072 0.158"
              rpy="0 0 0"
              mesh_scale="0.001 0.001 0.001"/>
   
   <!-- 左前大腿 - Y轴镜像 -->
-  <xacro:lap suffix="lf" 
+  <xacro:lap suffix="fl" 
              parent_link="body"
              xyz="0.091 -0.072 0.158"
              rpy="0 0 0"
@@ -83,7 +89,7 @@
              mesh_scale="0.001 -0.001 0.001"/> <!-- X轴镜像 -->
   
   <!-- 左后大腿 - X和Y轴都镜像 -->
-  <xacro:lap suffix="lr" 
+  <xacro:lap suffix="rl" 
              parent_link="body"
              xyz="0.091 0.072 0.158"
              rpy="0 0 0"
@@ -92,15 +98,15 @@
 
   <!-- 小腿部分 -->
   <!-- 右前小腿 -->
-  <xacro:shin suffix="rf" 
-              parent_link="lap_rf"
+  <xacro:shin suffix="fr" 
+              parent_link="lap_fr"
               xyz="-0.017 -0.060 0"
               rpy="0 0 0"
               mesh_scale="0.001 0.001 0.001"/>
 
   <!-- 左前小腿（Y轴镜像） -->
-  <xacro:shin suffix="lf" 
-              parent_link="lap_lf"
+  <xacro:shin suffix="fl" 
+              parent_link="lap_fl"
               xyz="0.017 -0.060 0"
               rpy="0 0 0"
               mesh_scale="-0.001 0.001 0.001"/>
@@ -113,62 +119,120 @@
               mesh_scale="0.001 -0.001 0.001"/>
 
   <!-- 左后小腿（X和Y轴镜像） -->
-  <xacro:shin suffix="lr" 
-              parent_link="lap_lr"
+  <xacro:shin suffix="rl" 
+              parent_link="lap_rl"
               xyz="0.017 0.060 0"
               rpy="0 0 0"
               mesh_scale="-0.001 -0.001 0.001"/>
 
   <!-- 转向部分 -->
-  <xacro:motor suffix="rf" 
-              parent_link="shin_rf"
+  <xacro:motor suffix="fr" 
+              parent_link="shin_fr"
+              joint_position="front_right"
               xyz="-0.008 0 -0.069"                   
               rpy="0 0 0"
               mesh_scale="0.001 0.001 0.001"/>
-  <xacro:motor suffix="lf" 
-              parent_link="shin_lf"
+  <xacro:motor suffix="fl" 
+              parent_link="shin_fl"
+              joint_position="front_left"
               xyz="0.008 0 -0.069"                   
               rpy="0 0 0"
               mesh_scale="-0.001 0.001 0.001"/>
   <xacro:motor suffix="rr" 
               parent_link="shin_rr"
+              joint_position="rear_right"
               xyz="-0.008 0 -0.069"                   
               rpy="0 0 0"
               mesh_scale="0.001 -0.001 0.001"/>
-  <xacro:motor suffix="lr" 
-              parent_link="shin_lr"
+  <xacro:motor suffix="rl" 
+              parent_link="shin_rl"
+              joint_position="rear_left"
               xyz="0.008 0 -0.069"                   
               rpy="0 0 0"
               mesh_scale="-0.001 -0.001 0.001"/>
 
 
   <!-- 轮胎部分-->
-  <xacro:wheel suffix="rf"
-             parent_link="motor_rf"
+  <xacro:wheel suffix="fr"
+             parent_link="motor_fr"
+             joint_position="front_right"
              xyz="0.015 0 -0.085"
              rpy="0 0 0"
              mesh_scale="0.001 0.001 0.001"/>
-  <xacro:wheel suffix="lf"
-             parent_link="motor_lf"
+  <xacro:wheel suffix="fl"
+             parent_link="motor_fl"
+             joint_position="front_left"
              xyz="-0.015 0 -0.085"
              rpy="0 0 0"
              mesh_scale="-0.001 0.001 0.001"/>
   <xacro:wheel suffix="rr"
              parent_link="motor_rr"
+             joint_position="rear_right"
              xyz="0.015 0 -0.085"
              rpy="0 0 0"
              mesh_scale="0.001 -0.001 0.001"/>
-  <xacro:wheel suffix="lr"
-             parent_link="motor_lr"
+  <xacro:wheel suffix="rl"
+             parent_link="motor_rl"
+             joint_position="rear_left"
              xyz="-0.015 0 -0.085"
              rpy="0 0 0"
              mesh_scale="-0.001 -0.001 0.001"/>
-             
+
+  <!-- 前超声波传感器-->
+  <xacro:radar-front suffix="fr"
+              parent_link="motor_fr"
+              xyz="0 -0.037 -0.011"
+              rpy="0 0 0"
+              mesh_scale="0.001 0.001 0.001"/>
+  <xacro:radar-front suffix="fl"
+              parent_link="motor_fl"
+              xyz="0 -0.037 -0.011"
+              rpy="0 0 0"
+              mesh_scale="-0.001 0.001 0.001"/>
+  <xacro:radar-front suffix="rr"
+              parent_link="motor_rr"
+              xyz="0 0.037 -0.011"
+              rpy="0 0 0"
+              mesh_scale="0.001 -0.001 0.001"/>
+  <xacro:radar-front suffix="rl"
+              parent_link="motor_rl"
+              xyz="0 0.037 -0.011"
+              rpy="0 0 0"
+              mesh_scale="-0.001 -0.001 0.001"/>
+
+  <!-- 侧超声波传感器-->
+  <xacro:radar-side suffix="fr"
+              parent_link="shin_fr"
+              xyz="-0.026 -0.009 -0.035"
+              rpy="0 0 0"
+              mesh_scale="0.001 0.001 0.001"/>
+  <xacro:radar-side suffix="fl"
+              parent_link="shin_fl"
+              xyz="0.026 -0.009 -0.035"
+              rpy="0 0 0"
+              mesh_scale="-0.001 0.001 0.001"/>
+  <xacro:radar-side suffix="rr"
+              parent_link="shin_rr"
+              xyz="-0.026 0.009 -0.035"
+              rpy="0 0 0"
+              mesh_scale="0.001 -0.001 0.001"/>
+  <xacro:radar-side suffix="rl"
+              parent_link="shin_rl"
+              xyz="0.026 0.009 -0.035"
+              rpy="0 0 0"
+              mesh_scale="-0.001 -0.001 0.001"/>
+
+  <!--  插入 IMU（修改安装位置即可） -->
+  <xacro:imu
+    parent_link="body"   
+    x="0.0"                        
+    y="0.0"                        
+    z="0.15"                       
+    roll="0"
+    pitch="0"
+    yaw="0"
+  />
               
   <xacro:include filename="hardware.xacro"/>
-  <!-- 移除所有ros2_control和Gazebo相关配置 -->
-  <!-- 1. 移除ros2_control硬件接口配置 -->
-  <!-- 2. 移除gazebo插件配置 -->
-  <!-- 3. 移除所有gazebo标签下的材质/物理属性配置 -->
 
 </robot>

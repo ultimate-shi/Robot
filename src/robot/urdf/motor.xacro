@@ -11,7 +11,7 @@
     - mesh_scale : OBJ 网格缩放比例，用于左右/前后镜像 (默认 "0.001 0.001 0.001")
   -->
   <xacro:macro name="motor" 
-               params="suffix parent_link 
+               params="suffix parent_link joint_position
                        xyz:='0 0 0' 
                        rpy:='0 0 0'
                        mesh_scale:='0.001 0.001 0.001'">
@@ -21,7 +21,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://robot/meshes/motor-rf.obj"
+          <mesh filename="${mesh_path}/motor-rf.obj"
                 scale="${mesh_scale}"/>
         </geometry>
         <!-- 使用蓝色材质，需确保材质文件已包含 -->
@@ -31,7 +31,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="package://robot/meshes/motor-rf.obj"
+          <mesh filename="${mesh_path}/motor-rf.obj"
                 scale="${mesh_scale}"/>
         </geometry>
       </collision>
@@ -46,7 +46,7 @@
     </link>
     
     <!-- 转向关节（绕 Z 轴旋转，左右各 90 度） -->
-    <joint name="motor_${parent_link}_joint_${suffix}" type="revolute">
+    <joint name="${joint_position}_steer_joint" type="revolute">
       <origin xyz="${xyz}" rpy="${rpy}"/>
       <parent link="${parent_link}"/>
       <child link="motor_${suffix}"/>

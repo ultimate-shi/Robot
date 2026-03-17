@@ -24,6 +24,8 @@ setup(
             glob(os.path.join('config', '*.rviz'))),
         (os.path.join('share', package_name, 'meshes'), 
             glob(os.path.join('meshes', '*.obj'))),
+        (os.path.join('share', package_name, 'world'), 
+            glob(os.path.join('world', '*.sdf'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -34,8 +36,10 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'talker = robot.talker:main',
-            'listener = robot.listener:main',
+            'command_forwarder_node = robot.command_forwarder_node:main',
+            'state_fusion_node = robot.state_fusion_node:main',
+            'joint_forwarder_node = joint_forwarder_node:main',
+            'four_wis_controller = robot.four_wis_controller_node:main',
         ],
     },
 )

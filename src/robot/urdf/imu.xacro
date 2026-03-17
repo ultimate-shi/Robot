@@ -1,0 +1,48 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <!-- ==============================================
+       GY25T IMU 宏定义 (独立文件，直接引用)
+       使用方法：
+       <xacro:imu parent_link="body" x="0.0" y="0.0" z="0.1" roll="0" pitch="0" yaw="0"/>
+  =============================================== -->
+  <xacro:macro name="imu" params="parent_link x:=0 y:=0 z:=0 roll:=0 pitch:=0 yaw:=0">
+
+    <!-- IMU 链路 -->
+    <link name="imu_link">
+      <!-- 惯性参数（小型模块，轻量化设置） -->
+      <inertial>
+        <mass value="0.01"/>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <inertia ixx="0.0001" ixy="0" ixz="0" iyy="0.0001" iyz="0" izz="0.0001"/>
+      </inertial>
+
+      <!-- 可视化外壳 -->
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.03 0.02 0.01"/>
+        </geometry>
+        <material name="blue">
+          <color rgba="0.2 0.3 0.8 0.8"/>
+        </material>
+      </visual>
+
+      <!-- 碰撞 -->
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <box size="0.03 0.02 0.01"/>
+        </geometry>
+      </collision>
+    </link>
+
+    <!-- IMU 安装关节 -->
+    <joint name="imu_joint" type="fixed">
+      <parent link="${parent_link}"/>
+      <child link="imu_link"/>
+      <origin xyz="${x} ${y} ${z}" rpy="${roll} ${pitch} ${yaw}"/>
+    </joint>
+
+  </xacro:macro>
+</robot>

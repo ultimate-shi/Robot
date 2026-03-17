@@ -1,0 +1,58 @@
+<?xml version="1.0"?>
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="radar-front_module">
+
+  <!-- 
+    传感器模块的XACRO宏定义
+    使用 radar-front-rf.obj 模型
+    参数说明：
+    - suffix     : 后缀，例如 "_front"
+    - parent_link: 父链接名称
+    - xyz        : 相对于父链接的安装位置 (默认 "0 0 0")
+    - rpy        : 相对于父链接的安装旋转 (默认 "0 0 0")
+    - mesh_scale : OBJ 网格缩放比例 (默认 "0.001 0.001 0.001")
+  -->
+  <xacro:macro name="radar-front" 
+               params="suffix parent_link 
+                       xyz:='0 0 0' 
+                       rpy:='0 0 0'
+                       mesh_scale:='0.001 0.001 0.001'">
+
+    <!-- 传感器连杆 -->
+    <link name="radar-front_${suffix}">
+      <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="${mesh_path}/radar-front-rf.obj"
+                scale="${mesh_scale}"/>
+        </geometry>
+        <!-- 灰色 -->
+        <xacro:get_material_by_name material_name="pla_gray_light"/>
+      </visual>
+      
+      <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+          <mesh filename="${mesh_path}/radar-front-rf.obj"
+                scale="${mesh_scale}"/>
+        </geometry>
+      </collision>
+      
+      <inertial>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <mass value="0.02"/>  <!-- 假设20克 -->
+        <inertia ixx="1e-6" ixy="0.0" ixz="0.0"
+                 iyy="1e-6" iyz="0.0"
+                 izz="1e-6"/>
+      </inertial>
+    </link>
+    
+    <!-- 固定关节连接到父链接 -->
+    <joint name="radar-front_${parent_link}_joint_${suffix}" type="fixed">
+      <origin xyz="${xyz}" rpy="${rpy}"/>
+      <parent link="${parent_link}"/>
+      <child link="radar-front_${suffix}"/>
+    </joint>
+
+  </xacro:macro>
+
+</robot>
