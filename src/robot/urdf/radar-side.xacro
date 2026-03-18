@@ -22,7 +22,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="${mesh_path}/radar-side-rf.obj"
+          <mesh filename="package://robot/meshes/radar-side-rf.obj"
                 scale="${mesh_scale}"/>
         </geometry>
         <!-- 灰色 -->
@@ -32,7 +32,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="${mesh_path}/radar-side-rf.obj"
+          <mesh filename="package://robot/meshes/radar-side-rf.obj"
                 scale="${mesh_scale}"/>
         </geometry>
       </collision>

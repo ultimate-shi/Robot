@@ -14,7 +14,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="${mesh_path}/lap-rf.obj"
+          <mesh filename="package://robot/meshes/lap-rf.obj"
                 scale="${mesh_scale}"/>
         </geometry>
         <xacro:get_material_by_name material_name="pla_yellow"/>
@@ -24,7 +24,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="${mesh_path}/lap-rf.obj"
+          <mesh filename="package://robot/meshes/lap-rf.obj"
                 scale="${mesh_scale}"/>
         </geometry>
       </collision>

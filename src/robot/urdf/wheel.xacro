@@ -21,7 +21,7 @@
       <visual>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="${mesh_path}/wheel-rf.obj"
+          <mesh filename="package://robot/meshes/wheel-rf.obj"
                 scale="${mesh_scale}"/>
         </geometry>
         <!-- 使用黑色橡胶材质，需确保材质文件已包含 -->
@@ -31,7 +31,7 @@
       <collision>
         <origin xyz="0 0 0" rpy="0 0 0"/>
         <geometry>
-          <mesh filename="${mesh_path}/wheel-rf.obj"
+          <mesh filename="package://robot/meshes/wheel-rf.obj"
                 scale="${mesh_scale}"/>
         </geometry>
       </collision>

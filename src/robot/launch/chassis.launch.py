@@ -29,6 +29,7 @@ def generate_launch_description():
         parameters=[robot_description],
         arguments=['--ros-args', '--log-level', 'warn']
     )
+    
 
     # ros2_control
     controller_manager = Node(
@@ -76,10 +77,24 @@ def generate_launch_description():
         arguments=['--ros-args', '--log-level', 'warn']
     )
 
+    rviz_config = os.path.join(pkg_share, 'config', 'view.rviz')
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        output='screen',
+        arguments=[
+            '-d', rviz_config,
+            '--ros-args', '--log-level', 'warn'
+        ],
+        parameters=[robot_description]
+    )
+
     ld = LaunchDescription([
         robot_state_publisher, 
         controller_manager, 
-        four_wis_controller_node
+        four_wis_controller_node,
+        rviz_node
     ])
     
     for spawner in spawners:

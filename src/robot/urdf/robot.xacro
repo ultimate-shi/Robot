@@ -13,8 +13,6 @@
 
   <!-- 新增：动态获取robot包的绝对路径（核心！） -->
   <xacro:property name="pkg_path" value="$(find robot)"/>
-  <!-- 定义mesh文件夹路径 -->
-  <xacro:property name="mesh_path" value="${pkg_path}/meshes"/>
 
   <!-- 基础连杆（作为机器人根节点） -->
   <link name="base_link">
@@ -34,7 +32,7 @@
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="${mesh_path}/body.obj"
+        <mesh filename="package://robot/meshes/body.obj"
               scale="0.001 0.001 0.001"/>
       </geometry>
       <xacro:get_material_by_name material_name="pla_gray_light"/>
@@ -44,7 +42,7 @@
     <collision>
       <origin xyz="0 0 0" rpy="0 0 0"/>
       <geometry>
-        <mesh filename="${mesh_path}/body.obj"
+        <mesh filename="package://robot/meshes/body.obj"
               scale="0.001 0.001 0.001"/>
       </geometry>
     </collision>
