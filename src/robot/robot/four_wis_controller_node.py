@@ -17,9 +17,9 @@ class FourWISController(Node):
         # ======================
         # 底盘参数
         # ======================
-        self.wheel_base = 0.6
-        self.wheel_track = 0.4
-        self.wheel_radius = 0.1
+        self.wheel_base = 0.4
+        self.wheel_track = 0.2
+        self.wheel_radius = 0.05
 
         self.Lx = self.wheel_base / 2.0
         self.Ly = self.wheel_track / 2.0
