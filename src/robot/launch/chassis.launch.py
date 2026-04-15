@@ -107,6 +107,16 @@ def generate_launch_description():
         executable='four_wis_controller',
         name='four_wis_controller',
         output='screen',
+        parameters=[{'wheelbase': 0.4, 'track': 0.2, 'radius': 0.05, 'use_sim_time': False, 'default_mode_on_shutdown': 'crab'}],
+        arguments=['--ros-args', '--log-level', 'info']
+    )
+
+    # Chassis 控制器
+    chassis_controller_node = Node(
+        package='robot',
+        executable='chassis_controller',
+        name='chassis_controller',
+        output='screen',
         parameters=[{'wheelbase': 0.4, 'track': 0.2, 'radius': 0.05, 'use_sim_time': False}],
         arguments=['--ros-args', '--log-level', 'info']
     )
@@ -116,6 +126,15 @@ def generate_launch_description():
         package='robot',
         executable='wheel_feedback_node',
         name='wheel_feedback_node',
+        output='screen',
+        arguments=['--ros-args', '--log-level', 'info']
+    )
+
+    # 反馈节点
+    chassis_feedback_node = Node(
+        package='robot',
+        executable='chassis_feedback_node',
+        name='chassis_feedback_node',
         output='screen',
         arguments=['--ros-args', '--log-level', 'info']
     )
@@ -137,8 +156,10 @@ def generate_launch_description():
         controller_manager,
         zero_commands,
         # 反馈节点 + 控制器 同时启动
-        wheel_feedback_node,
-        four_wis_controller_node,
+        # wheel_feedback_node,
+        chassis_feedback_node,
+        # four_wis_controller_node,
+        chassis_controller_node,
         rviz_node
     ])
     

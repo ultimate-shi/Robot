@@ -1,5 +1,5 @@
 # controller_manager.yaml
 controller_manager:
   ros__parameters:
-    update_rate: 20
+    update_rate: 10
     use_sim_time: false

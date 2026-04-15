@@ -30,8 +30,8 @@ class FourWISController(Node):
         self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         self.create_subscription(Float64MultiArray, '/wheel_states', self.wheel_state_callback, 10)
 
-        self.steer_pub = self.create_publisher(Float64MultiArray, '/steering_commands', 10)
-        self.speed_pub = self.create_publisher(Float64MultiArray, '/wheel_speed_commands', 10)
+        self.steer_pub = self.create_publisher(Float64MultiArray, '/steering_controller/commands', 10)
+        self.speed_pub = self.create_publisher(Float64MultiArray, '/wheel_controller/commands', 10)
 
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
         self.tf_broadcaster = TransformBroadcaster(self)

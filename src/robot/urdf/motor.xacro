@@ -51,7 +51,7 @@
       <parent link="${parent_link}"/>
       <child link="motor_${suffix}"/>
       <!-- 假设转向绕 Z 轴，根据实际模型可调整为其他轴 -->
-      <axis xyz="0 0 -1"/>
+      <axis xyz="0 0 1"/>
       <!-- 运动范围：-90° 到 90°（-1.57 到 1.57 弧度） -->
       <limit lower="-1.57" upper="1.57" effort="5.0" velocity="1.0"/>
       <dynamics damping="0.05" friction="0.0"/>

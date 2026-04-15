@@ -59,7 +59,7 @@
 
   <!-- 底盘与身体的固定关节（保留） -->
   <joint name="base_body_joint" type="fixed">
-    <origin xyz="0 0 0" rpy="0 0 0"/>
+    <origin xyz="0 0 0" rpy="0 0 ${pi/2}"/>
     <parent link="base_link"/>
     <child link="body"/>
   </joint>

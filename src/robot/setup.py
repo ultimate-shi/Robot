@@ -40,7 +40,9 @@ setup(
             'state_fusion_node = robot.state_fusion_node:main',
             'joint_forwarder_node = joint_forwarder_node:main',
             'four_wis_controller = robot.four_wis_controller_node:main',
+            'chassis_controller = robot.chassis_controller_node:main',
             'wheel_feedback_node = robot.wheel_feedback_node:main',
+            'chassis_feedback_node = robot.chassis_feedback_node:main',
         ],
     },
 )
