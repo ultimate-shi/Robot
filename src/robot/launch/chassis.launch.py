@@ -1,3 +1,11 @@
+# 底盘控制启动文件
+# 启动内容：
+#  1. 机器人状态发布器
+#  2. ros2_control
+#  3. 底盘控制器
+#  4. 反馈节点
+#  5. RVIZ
+
 import os
 from launch import LaunchDescription
 from launch_ros.actions import Node
@@ -98,19 +106,6 @@ def generate_launch_description():
     )
 
 
-    # 🔥 修复2：删除重复启动的 four_wis_controller + 延时指令（分离根源）
-    # 删除了 zero_wheel_cmd、zero_steer_cmd、zero_commands
-
-    # FourWIS 控制器（只启动这一次！）
-    four_wis_controller_node = Node(
-        package='robot',
-        executable='four_wis_controller',
-        name='four_wis_controller',
-        output='screen',
-        parameters=[{'wheelbase': 0.4, 'track': 0.2, 'radius': 0.05, 'use_sim_time': False, 'default_mode_on_shutdown': 'crab'}],
-        arguments=['--ros-args', '--log-level', 'info']
-    )
-
     # Chassis 控制器
     chassis_controller_node = Node(
         package='robot',
@@ -118,15 +113,6 @@ def generate_launch_description():
         name='chassis_controller',
         output='screen',
         parameters=[{'wheelbase': 0.4, 'track': 0.2, 'radius': 0.05, 'use_sim_time': False}],
-        arguments=['--ros-args', '--log-level', 'info']
-    )
-
-    # 反馈节点
-    wheel_feedback_node = Node(
-        package='robot',
-        executable='wheel_feedback_node',
-        name='wheel_feedback_node',
-        output='screen',
         arguments=['--ros-args', '--log-level', 'info']
     )
 
@@ -156,9 +142,7 @@ def generate_launch_description():
         controller_manager,
         zero_commands,
         # 反馈节点 + 控制器 同时启动
-        # wheel_feedback_node,
         chassis_feedback_node,
-        # four_wis_controller_node,
         chassis_controller_node,
         rviz_node
     ])

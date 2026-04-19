@@ -9,7 +9,8 @@ from std_msgs.msg import Float64MultiArray, String
 from tf2_ros import TransformBroadcaster
 from rcl_interfaces.msg import SetParametersResult
 
-
+# 底盘控制节点 输入：cmd_vel 线速度和角速度
+# 输出：steering_controller/commands, wheel_controller/commands
 class FourWISController(Node):
 
     def __init__(self):

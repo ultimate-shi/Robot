@@ -5,7 +5,7 @@ from rclpy.node import Node
 from std_msgs.msg import Float64MultiArray, String
 from sensor_msgs.msg import JointState
 
-
+# 底盘运动反馈节点
 class ChassisFeedback(Node):
 
     def __init__(self):
