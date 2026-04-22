@@ -256,7 +256,7 @@ class FourWISController(Node):
 
     def send_stop(self):
         ang, spd = self.stop_command()
-        self.get_logger().warn("⚠️ 超时触发 STOP")
+        # self.get_logger().warn("⚠️ 超时触发 STOP")
         self.steer_pub.publish(Float64MultiArray(data=ang))
         self.speed_pub.publish(Float64MultiArray(data=spd))
 
