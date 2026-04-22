@@ -24,7 +24,7 @@
           <mesh filename="package://robot/meshes/shin-rf.obj"
                 scale="${mesh_scale}"/>
         </geometry>
-        <xacro:get_material_by_name material_name="pla_green"/>
+        <xacro:get_material_by_name material_name="abs_green"/>
       </visual>
       
       <collision>

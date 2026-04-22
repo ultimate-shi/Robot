@@ -44,6 +44,26 @@
                  iyy="1e-6" iyz="0.0"
                  izz="1e-6"/>
       </inertial>
+
+      <sensor name="ultrasonic_${suffix}" type="ultrasonic">
+        <!-- 绑定超声波自身的连杆 -->
+        <parent_link name="radar-front_${suffix}"/>
+        <!-- 数据刷新频率（HC-SR04标准频率） -->
+        <update_rate>10</update_rate>
+        <!-- 超声波探测锥形区域 -->
+        <ray>
+          <!-- 水平视场角：HC-SR04 是 ±15°（总30°锥形） -->
+          <horizontal samples="1" min_angle="-0.2618" max_angle="0.2618"/>
+          <!-- 垂直视场角：和水平一致（超声波是圆锥探测） -->
+          <vertical samples="1" min_angle="-0.2618" max_angle="0.2618"/>
+        </ray>
+        <!-- HC-SR04 真实测距范围（核心！） -->
+        <range>
+          <min>0.02</min>    <!-- 最小测2厘米 -->
+          <max>4.0</max>     <!-- 最大测4米 -->
+          <resolution>0.01</resolution> <!-- 精度1厘米 -->
+        </range>
+      </sensor>
     </link>
     
     <!-- 固定关节连接到父链接 -->

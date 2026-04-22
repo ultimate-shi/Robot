@@ -1,4 +1,6 @@
 # Created by FreeCAD <https://www.freecad.org>
+mtllib radar-side-rf.mtl
+usemtl purple
 v -0.000000 22.750000 10.250000
 v -1.200000 22.750000 -10.250000
 v -1.200000 22.750000 10.250000

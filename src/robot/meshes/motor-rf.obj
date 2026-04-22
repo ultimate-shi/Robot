@@ -1,4 +1,6 @@
 # Created by FreeCAD <https://www.freecad.org>
+mtllib motor-rf.mtl
+usemtl yellow
 v 37.000000 -18.000000 -72.860001
 v 37.000000 -16.000000 -54.860001
 v 37.000000 -15.300000 -54.860001

@@ -1,4 +1,6 @@
 # Created by FreeCAD <https://www.freecad.org>
+mtllib lap-rf.mtl
+usemtl blue
 v 3.500000 -0.000000 20.000000
 v 3.500000 1.371273 19.952934
 v -6.100000 -0.000000 20.000000

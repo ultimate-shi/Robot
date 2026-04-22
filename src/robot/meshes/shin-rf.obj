@@ -1,4 +1,6 @@
 # Created by FreeCAD <https://www.freecad.org>
+mtllib shin-rf.mtl
+usemtl red
 v -7.800000 -15.512949 10.970343
 v -7.800000 -15.464264 11.038865
 v -19.199999 -15.512949 10.970343

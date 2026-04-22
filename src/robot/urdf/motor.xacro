@@ -25,7 +25,7 @@
                 scale="${mesh_scale}"/>
         </geometry>
         <!-- 使用蓝色材质，需确保材质文件已包含 -->
-        <xacro:get_material_by_name material_name="pla_blue"/>
+        <xacro:get_material_by_name material_name="abs_yellow"/>
       </visual>
       
       <collision>

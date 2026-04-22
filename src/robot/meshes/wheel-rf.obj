@@ -1,4 +1,6 @@
 # Created by FreeCAD <https://www.freecad.org>
+mtllib wheel-rf.mtl
+usemtl grey
 v 14.300000 8.082660 -1.253018
 v 14.300000 8.228505 -1.111598
 v 14.300000 11.189667 -4.334900

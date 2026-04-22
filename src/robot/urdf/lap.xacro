@@ -17,7 +17,7 @@
           <mesh filename="package://robot/meshes/lap-rf.obj"
                 scale="${mesh_scale}"/>
         </geometry>
-        <xacro:get_material_by_name material_name="pla_yellow"/>
+        <xacro:get_material_by_name material_name="abs_blue"/>
       </visual>
       
       <!-- 碰撞属性 -->

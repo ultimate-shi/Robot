@@ -1,7 +1,7 @@
 <?xml version="1.0"?>
 <robot name="robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <!-- 引入xacro文件（保留材质文件，移除gazebo相关依赖） -->
+  <!-- 引入xacro文件 -->
   <xacro:include filename="materials.xacro"/>
   <xacro:include filename="lap.xacro"/>
   <xacro:include filename="shin.xacro"/>
@@ -35,7 +35,7 @@
         <mesh filename="package://robot/meshes/body.obj"
               scale="0.001 0.001 0.001"/>
       </geometry>
-      <xacro:get_material_by_name material_name="pla_gray_light"/>
+      <xacro:get_material_by_name material_name="abs_red"/>
     </visual>
     
     <!-- 碰撞属性（保留，不影响可视化，仅为完整性） -->
