@@ -26,6 +26,8 @@ setup(
             glob(os.path.join('meshes', '*.*'))),
         (os.path.join('share', package_name, 'world'), 
             glob(os.path.join('world', '*.sdf'))),
+        (os.path.join('share', package_name, 'map'), 
+            glob(os.path.join('map', '*.*'))),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -36,13 +38,12 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'command_forwarder_node = robot.command_forwarder_node:main',
-            'state_fusion_node = robot.state_fusion_node:main',
-            'joint_forwarder_node = joint_forwarder_node:main',
             'chassis_controller = robot.chassis_controller_node:main',
             'chassis_feedback_node = robot.chassis_feedback_node:main',
             'teleop_joy = robot.teleop_joy_node:main',
             'publish_ply = robot.publish_ply:main',
+            'virtual_ultrasonic = robot.virtual_ultrasonic:main',
+            'ultrasonic_listener = robot.ultrasonic_listener:main',
         ],
     },
 )

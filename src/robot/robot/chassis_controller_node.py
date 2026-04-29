@@ -129,7 +129,7 @@ class FourWISController(Node):
         # 日志
         steer_str = f"转向={[f'{a:.2f}rad/{math.degrees(a):.0f}°' for a in opt_angles]}"
         speed_str = f"轮速={[f'{s:.2f}rad/s' for s in opt_speeds]}"
-        self.get_logger().info(f"📤 下发指令 | {steer_str} | {speed_str}")
+        self.get_logger().info(f"当前模式：{self.motion_mode} |📤 下发指令 | {steer_str} | {speed_str}")
 
         # 发布
         self.steer_pub.publish(Float64MultiArray(data=opt_angles))

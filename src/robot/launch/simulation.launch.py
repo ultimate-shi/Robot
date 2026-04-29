@@ -14,6 +14,7 @@ def generate_launch_description():
     MAP_YAML_PATH = "/home/shijiahao/Downloads/studyroom.yaml"
     # ✅ 已定义：你的虚拟环境Python路径
     VENV_PYTHON = "/home/shijiahao/ros2_pythonenv/bin/python3"
+    VENV = "/home/shijiahao/ros2_pythonenv"
 
     # ==================== 1. URDF 机器人描述 ====================
     xacro_file = os.path.join(pkg_share, 'urdf', 'robot.xacro')
@@ -74,15 +75,45 @@ def generate_launch_description():
     )
 
     # ✅ 终极修复：虚拟环境Python + 无ROS参数 + 路径正确
-    ply_publisher_node = Node(
+    publish_ply_node = Node(
         package='robot',
-        executable=VENV_PYTHON,
-        name='ply_publisher',
-        arguments=["/home/shijiahao/Downloads/ros2/robot_ws/src/robot/robot/publish_ply.py"],
+        executable='publish_ply',
+        name='publish_ply',
         output='screen',
-        parameters=[],
-        ros_arguments=[],
-        remappings=[],
+        additional_env={
+            "PATH": VENV + "/bin:" + os.environ["PATH"],
+            "PYTHONPATH":
+                VENV + "/lib/python3.12/site-packages:"
+                + os.environ.get("PYTHONPATH", "")
+        }
+    )
+
+    # ==================== ✅ 新增1：虚拟超声波模拟节点（8路传感器） ====================
+    virtual_ultrasonic_node = Node(
+        package='robot',
+        executable='virtual_ultrasonic',
+        name='virtual_ultrasonic',
+        output='screen',
+        additional_env={
+            "PATH": VENV + "/bin:" + os.environ["PATH"],
+            "PYTHONPATH":
+                VENV + "/lib/python3.12/site-packages:"
+                + os.environ.get("PYTHONPATH", "")
+        }
+    )
+
+    # ==================== ✅ 新增2：超声波数据打印节点 ====================
+    ultrasonic_listener_node = Node(
+        package='robot',
+        executable='ultrasonic_listener',
+        name='ultrasonic_listener',
+        output='screen',
+        additional_env={
+            "PATH": VENV + "/bin:" + os.environ["PATH"],
+            "PYTHONPATH":
+                VENV + "/lib/python3.12/site-packages:"
+                + os.environ.get("PYTHONPATH", "")
+        }
     )
 
     # ==================== ros2_control ====================
@@ -146,7 +177,9 @@ def generate_launch_description():
         map_server_node,
         map_lifecycle_manager,
         static_tf_map,
-        ply_publisher_node,
+        publish_ply_node,
+        virtual_ultrasonic_node,
+        ultrasonic_listener_node,
         controller_manager,
         zero_commands,
         chassis_feedback_node,

@@ -35,7 +35,7 @@
         <mesh filename="package://robot/meshes/body.obj"
               scale="0.001 0.001 0.001"/>
       </geometry>
-      <xacro:get_material_by_name material_name="abs_red"/>
+      <xacro:get_material_by_name material_name="pla_gray_light"/>
     </visual>
     
     <!-- 碰撞属性（保留，不影响可视化，仅为完整性） -->
