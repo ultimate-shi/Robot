@@ -80,7 +80,7 @@ def generate_launch_description():
         executable='publish_ply',
         name='publish_ply',
         output='screen',
-        additional_env={
+        additional_env={ # 使用虚拟环境启动py文件
             "PATH": VENV + "/bin:" + os.environ["PATH"],
             "PYTHONPATH":
                 VENV + "/lib/python3.12/site-packages:"
@@ -94,7 +94,7 @@ def generate_launch_description():
         executable='virtual_ultrasonic',
         name='virtual_ultrasonic',
         output='screen',
-        additional_env={
+        additional_env={ # 使用虚拟环境启动py文件
             "PATH": VENV + "/bin:" + os.environ["PATH"],
             "PYTHONPATH":
                 VENV + "/lib/python3.12/site-packages:"
@@ -108,7 +108,7 @@ def generate_launch_description():
         executable='ultrasonic_listener',
         name='ultrasonic_listener',
         output='screen',
-        additional_env={
+        additional_env={ # 使用虚拟环境启动py文件
             "PATH": VENV + "/bin:" + os.environ["PATH"],
             "PYTHONPATH":
                 VENV + "/lib/python3.12/site-packages:"

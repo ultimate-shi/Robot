@@ -17,7 +17,7 @@ class PLYPublisher(Node):
         self.timer = self.create_timer(0.5, self.publish_cloud)
         
         # 🔥 强制绝对路径（launch模式下100%找到文件）
-        self.ply_file = "/home/shijiahao/Downloads/studyroom.ply"
+        self.ply_file = "/home/shijiahao/Downloads/ros2/robot_ws/src/robot/map/studyroom.ply"
         self.points = None
         
         # 🔥 加异常捕获：加载失败直接打印错误
