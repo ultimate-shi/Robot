@@ -1,0 +1,37 @@
+teleop_joy:
+  ros__parameters:
+
+    # ===== 轴映射 =====
+    axes:
+      left_stick_y: 1
+      right_stick_x: 3
+      lt: 2          # 左扳机（注意有的手柄是 [-1,1]）
+      rt: 5
+
+    # ===== 按键映射 =====
+    buttons:
+      lb: 4
+      rb: 5
+      estop: 3
+
+    # ===== 模式 =====
+    modes:
+      list: ["crab", "four_ws", "ackermann"]
+
+    chassis:
+      node_name: "/chassis_controller"
+      param_name: "motion_mode"
+      mode_topic: "/chassis_mode"
+
+    # ===== 速度参数 =====
+    scale:
+      max_linear_x: 0.6        # m/s
+      max_angular_z: 1.2       # rad/s（行驶时）
+      max_spin_angular: 1.0    # rad/s（原地自转）
+
+    # ===== 阈值 =====
+    deadzone: 0.05
+    min_linear_threshold: 0.05   # 判断是否“静止”
+
+    # ===== 平滑 =====
+    smoothing_alpha: 0.2
