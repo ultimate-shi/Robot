@@ -8,6 +8,7 @@ from nav_msgs.msg import Odometry
 from std_msgs.msg import Float64MultiArray, String
 from tf2_ros import TransformBroadcaster
 from rcl_interfaces.msg import SetParametersResult
+from rclpy.executors import ExternalShutdownException
 
 # 底盘控制节点 输入：cmd_vel 线速度和角速度
 # 输出：steering_controller/commands, wheel_controller/commands
@@ -329,9 +330,15 @@ class FourWISController(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = FourWISController()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # 正常退出，不打印traceback
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()

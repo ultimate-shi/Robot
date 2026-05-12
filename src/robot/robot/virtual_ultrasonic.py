@@ -37,6 +37,7 @@ from sensor_msgs.msg import Range
 from nav_msgs.msg import Odometry
 
 import tf2_ros
+from rclpy.executors import ExternalShutdownException
 
 from scipy.spatial import cKDTree
 from plyfile import PlyData
@@ -286,7 +287,7 @@ class VirtualUltrasonic(Node):
     # =====================================================
     # 计算四元数旋转矩阵
     # =====================================================
-    def quat_to_rotmat(w, x, y, z):
+    def quat_to_rotmat(self, w, x, y, z):
         return np.array([
             [1 - 2*y*y - 2*z*z,   2*x*y - 2*z*w,     2*x*z + 2*y*w],
             [2*x*y + 2*z*w,       1 - 2*x*x - 2*z*z, 2*y*z - 2*x*w],
@@ -330,17 +331,15 @@ class VirtualUltrasonic(Node):
 def main(args=None):
 
     rclpy.init(args=args)
-
     node = VirtualUltrasonic()
-
     try:
         rclpy.spin(node)
-
-    except KeyboardInterrupt:
-        pass
-
-    node.destroy_node()
-    rclpy.shutdown()
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # 正常退出，不打印traceback
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == "__main__":

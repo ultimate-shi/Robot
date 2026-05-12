@@ -4,6 +4,7 @@ import numpy as np
 from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import Header
+from rclpy.executors import ExternalShutdownException
 try:
     from plyfile import PlyData
 except:
@@ -63,9 +64,14 @@ class PLYPublisher(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = PLYPublisher()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # 正常退出，不打印traceback
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

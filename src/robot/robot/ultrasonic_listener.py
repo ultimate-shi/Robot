@@ -1,6 +1,7 @@
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Range
+from rclpy.executors import ExternalShutdownException
 
 # 8个传感器配置
 SENSORS = [
@@ -54,11 +55,12 @@ def main(args=None):
     node = UltrasonicListenerNode()
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
-        node.get_logger().info('🛑 节点已停止')
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # 正常退出，不打印traceback
     finally:
         node.destroy_node()
-        rclpy.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 if __name__ == '__main__':
     main()

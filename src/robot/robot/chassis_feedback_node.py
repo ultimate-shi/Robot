@@ -4,6 +4,7 @@ from rclpy.node import Node
 
 from std_msgs.msg import Float64MultiArray, String
 from sensor_msgs.msg import JointState
+from rclpy.executors import ExternalShutdownException
 
 # 底盘运动反馈节点
 class ChassisFeedback(Node):
@@ -105,16 +106,20 @@ class ChassisFeedback(Node):
             speed_log += f"{wheel_names[i]}: {speed:.2f}rad/s | "
 
         # 输出日志
-        self.get_logger().info(f"当前状态: {self.current_mode} | {steer_log} | {speed_log}")
-        # self.get_logger().info(f"当前底盘模式: {self.current_mode}\n")
+        # self.get_logger().info(f"当前状态: {self.current_mode} | {steer_log} | {speed_log}")
 
 
 def main(args=None):
     rclpy.init(args=args)
     node = ChassisFeedback()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # 正常退出，不打印traceback
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 if __name__ == '__main__':

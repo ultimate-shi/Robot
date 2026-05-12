@@ -6,6 +6,7 @@ from std_msgs.msg import String
 
 from rclpy.parameter import Parameter
 from rcl_interfaces.srv import SetParameters
+from rclpy.executors import ExternalShutdownException
 
 
 class TeleopJoyNode(Node):
@@ -223,6 +224,11 @@ class TeleopJoyNode(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = TeleopJoyNode()
-    rclpy.spin(node)
-    node.destroy_node()
-    rclpy.shutdown()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass  # 正常退出，不打印traceback
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
