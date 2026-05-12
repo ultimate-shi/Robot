@@ -44,6 +44,9 @@ setup(
             'publish_ply = robot.publish_ply:main',
             'virtual_ultrasonic = robot.virtual_ultrasonic:main',
             'ultrasonic_listener = robot.ultrasonic_listener:main',
+            'chassis_controller_3d = robot.chassis_controller_3d:main',
+            'virtual_imu = robot.virtual_imu_node:main',
+            'obstacle_avoidance = robot.obstacle_avoidance_node:main',
         ],
     },
 )
