@@ -1,0 +1,41 @@
+# Terrain and 3D simulation parameters
+# Used by foxglove3d.launch.py
+
+chassis_controller:
+  ros__parameters:
+    # Original chassis parameters
+    wheelbase: 0.4
+    track: 0.2
+    radius: 0.05
+    motion_mode: "crab"
+
+    # Terrain heightmap
+    terrain_check_enabled: true
+    ply_path: ""                     # Empty = auto-detect from robot package
+    grid_resolution: 0.02            # 2cm grid
+    ground_tolerance: 0.05           # 5cm tolerance for ground detection
+    ground_to_base_height: 0.15      # Ground to base_link vertical offset
+
+    # Physical constraints
+    max_grade_deg: 35.0              # Max traversable slope (degrees)
+    step_threshold: 0.03             # Step blocking threshold (3cm)
+    dropoff_threshold: 0.05          # Drop-off blocking threshold (5cm)
+    look_ahead_distance: 0.10        # Look-ahead distance (10cm)
+    look_ahead_samples: 5            # Number of samples along look-ahead
+
+virtual_imu:
+  ros__parameters:
+    publish_rate: 20.0               # 20Hz IMU output
+    orientation_noise_std: 0.0087    # ~0.5 degree (GY25T spec)
+    angular_vel_noise_std: 0.005     # rad/s
+    linear_accel_noise_std: 0.02     # m/s^2
+    gravity: 9.81
+
+obstacle_avoidance:
+  ros__parameters:
+    front_stop_distance: 0.15        # Stop when front obstacle < 15cm
+    front_warn_distance: 0.40        # Decelerate when front obstacle < 40cm
+    side_stop_distance: 0.10         # Block turning when side < 10cm
+    side_warn_distance: 0.25         # Reduce turn rate when side < 25cm
+    terrain_traversability_min: 0.3  # Min traversability to proceed
+    update_rate: 20.0                # 20Hz avoidance check
