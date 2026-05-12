@@ -19,7 +19,8 @@ setup(
             glob('config/*.yaml')),
         # 若有urdf和config目录，也建议添加
         (os.path.join('share', package_name, 'urdf'), 
-            glob(os.path.join('urdf', '*.xacro'))),
+            glob(os.path.join('urdf', '*.xacro')) + 
+            glob(os.path.join('urdf', '*.urdf'))),  # 同时安装 xacro 和 urdf
         (os.path.join('share', package_name, 'config'), 
             glob(os.path.join('config', '*.rviz'))),
         (os.path.join('share', package_name, 'meshes'), 
