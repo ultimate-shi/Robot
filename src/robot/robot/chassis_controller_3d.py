@@ -299,7 +299,10 @@ class ChassisController3D(Node):
         a2 = math.atan2(math.sin(target_angle + math.pi), math.cos(target_angle + math.pi))
         s2 = -target_speed
 
-        if abs(a1) <= math.pi / 2:
+        d1 = abs(math.atan2(math.sin(a1 - prev_angle), math.cos(a1 - prev_angle)))
+        d2 = abs(math.atan2(math.sin(a2 - prev_angle), math.cos(a2 - prev_angle)))
+
+        if d1 <= d2:
             return a1, s1
         else:
             return a2, s2
@@ -314,6 +317,12 @@ class ChassisController3D(Node):
 
     # ==================== Odometry with terrain ====================
     def wheel_state_callback(self, msg):
+        if len(msg.data) < 8:
+            self.get_logger().warn(
+                f"Ignoring /wheel_states with {len(msg.data)} values; expected 8"
+            )
+            return
+
         current_time = self.get_clock().now()
         dt = (current_time - self.last_time).nanoseconds * 1e-9
         self.last_time = current_time

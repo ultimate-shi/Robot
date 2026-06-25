@@ -109,18 +109,6 @@ def generate_launch_description():
         output="screen",
     )
 
-    # 新增：odom → base_link（补齐TF链，核心！）
-    static_tf_odom = Node(
-        package='tf2_ros',
-        executable='static_transform_publisher',
-        name='static_tf_odom',
-        arguments=[
-            '--frame-id', 'odom',
-            '--child-frame-id', 'base_link'
-        ],
-        output="screen",
-    )
-
     # ==================== 4. Point Cloud Publisher ====================
     publish_ply_node = Node(
         package='robot',
@@ -259,7 +247,6 @@ def generate_launch_description():
         map_server_node,
         map_lifecycle_manager,
         static_tf_map,
-        static_tf_odom,
         publish_ply_node,
         virtual_ultrasonic_node,
         controller_manager,
