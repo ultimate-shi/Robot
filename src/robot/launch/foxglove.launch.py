@@ -87,7 +87,8 @@ def generate_launch_description():
             '0', '0', '0',    # x y z
             '0', '0', '0', '1',  # qx qy qz qw
             'map', 'odom'     # frame_id child_frame_id
-        ]
+        ],
+        output="screen",
     )
 
     # ✅ 终极修复：虚拟环境Python + 无ROS参数 + 路径正确
@@ -197,7 +198,7 @@ def generate_launch_description():
             'address': '0.0.0.0',  # 允许外部连接，关键
             'send_buffer_limit': 10000000,
             'asset_uri_allowlist': [
-            '^package://robot/.*'  # 允许Foxglove访问robot包下所有文件
+            'package://robot/.*'  # 允许Foxglove访问robot包下所有文件
             ],
         }],
         output='screen'

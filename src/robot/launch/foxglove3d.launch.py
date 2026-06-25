@@ -55,7 +55,6 @@ def generate_launch_description():
     }
 
     # ==================== 1. URDF Robot Description ====================
-    xacro_file = os.path.join(pkg_share, 'urdf', 'robot.xacro')
     robot_description_content = Command(f'ros2 run xacro xacro {xacro_file}')
     robot_description = {
         'robot_description': ParameterValue(robot_description_content, value_type=str)
@@ -105,10 +104,21 @@ def generate_launch_description():
         name='static_tf_map',
         arguments=[
             '--frame-id', 'map',
-            '--child-frame-id', 'odom',
-            '--translation', '0', '0', '0',
-            '--rotation', '0', '0', '0', '1'
-        ]
+            '--child-frame-id', 'odom'
+        ],
+        output="screen",
+    )
+
+    # 新增：odom → base_link（补齐TF链，核心！）
+    static_tf_odom = Node(
+        package='tf2_ros',
+        executable='static_transform_publisher',
+        name='static_tf_odom',
+        arguments=[
+            '--frame-id', 'odom',
+            '--child-frame-id', 'base_link'
+        ],
+        output="screen",
     )
 
     # ==================== 4. Point Cloud Publisher ====================
@@ -213,6 +223,17 @@ def generate_launch_description():
         parameters=[TERRAIN_PARAMS, {'use_sim_time': False}]
     )
 
+    # RVIZ
+    rviz_config = os.path.join(pkg_share, 'config', 'view.rviz')
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        arguments=['-d', rviz_config],
+        parameters=[{'use_sim_time': False}],
+        output='screen'
+    )
+
     # ==================== 11. Foxglove Bridge ====================
     foxglove_bridge = Node(
         package='foxglove_bridge',
@@ -221,8 +242,13 @@ def generate_launch_description():
         parameters=[{
             'port': 8765,
             'address': '0.0.0.0',
-            'send_buffer_limit': 10000000,
-            'asset_uri_allowlist': ['^package://robot/.*'],
+            'asset_uri_allowlist': ['package://robot/.*'],
+            # ✅ 关键：降低负载，防止虚拟网卡崩溃
+            'allow_file_transfer': True,
+            'send_buffer_limit': 1000000,   # 缩小缓冲区（原来50M太大了！）
+            'max_packet_messages': 100,
+            'client_timeout_ms': 300000,
+            'keep_alive_interval_ms': 5000
         }],
         output='screen'
     )
@@ -233,6 +259,7 @@ def generate_launch_description():
         map_server_node,
         map_lifecycle_manager,
         static_tf_map,
+        static_tf_odom,
         publish_ply_node,
         virtual_ultrasonic_node,
         controller_manager,
@@ -241,6 +268,7 @@ def generate_launch_description():
         chassis_controller_3d_node,
         virtual_imu_node,
         obstacle_avoidance_node,
+        # rviz_node,
         foxglove_bridge,
     ])
 
