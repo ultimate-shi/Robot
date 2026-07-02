@@ -1,5 +1,5 @@
 """
-foxglove3d 使用说明：
+robot.launch 使用说明：
 本文件是当前项目的主启动入口，用户明确要求以后重点关注该 launch。
 它把机器人模型、地图、点云、虚拟超声波、点云过滤、Nav2、底盘控制、IMU、
 安全避障和 Foxglove Bridge 组合到同一个 ROS 2 系统中。
@@ -12,7 +12,7 @@ foxglove3d 使用说明：
 - virtual_ultrasonic 订阅 /perception/points 并结合 TF，发布 8 路 /ultrasonic/* 虚拟超声波距离。
 - range_to_scan 把 8 路超声波拼成稀疏 /scan，主要用于调试或兼容 LaserScan 显示。
 - obstacle_avoidance 把 /cmd_vel 过滤为 /cmd_vel_safe，底盘控制器只消费安全速度。
-- chassis_controller_3d 根据 /cmd_vel_safe 输出转向/轮速控制，并发布 /odom、odom->base_link TF。
+- chassis_controller_node 根据 /cmd_vel_safe 输出转向/轮速控制，并发布 /odom、odom->base_link TF。
 - virtual_imu 根据 /odom 生成 /imu/data。
 - foxglove_bridge 对外提供 Mac Foxglove 前端连接。
 
@@ -205,10 +205,10 @@ def generate_launch_description():
         output='screen'
     )
 
-    # ==================== 8. Chassis Controller 3D (NEW - replaces original) ====================
-    chassis_controller_3d_node = Node(
+    # ==================== 8. Chassis Controller Node ====================
+    chassis_controller_node = Node(
         package='robot',
-        executable='chassis_controller_3d',
+        executable='chassis_controller_node',
         name='chassis_controller',  # Same node name for compatibility
         output='screen',
         parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
@@ -331,7 +331,7 @@ def generate_launch_description():
         controller_manager,
         zero_commands,
         chassis_feedback_node,
-        chassis_controller_3d_node,
+        chassis_controller_node,
         virtual_imu_node,
         obstacle_avoidance_node,
         # rviz_node,

@@ -1,5 +1,5 @@
-# foxglove3d 使用说明：
-# 本文件由 foxglove3d.launch.py IncludeLaunchDescription(nav2_bringup/navigation_launch.py) 传入 Nav2。
+# robot.launch 使用说明：
+# 本文件由 robot.launch.py IncludeLaunchDescription(nav2_bringup/navigation_launch.py) 传入 Nav2。
 # global_costmap 使用 /map 静态 2D 地图做全局规划。
 # local_costmap 使用 VoxelLayer 订阅 /nav/obstacle_points 点云做局部避障。
 # /nav/obstacle_points 来自 pointcloud_obstacle_filter，是仿真 PLY 或现实双目点云的统一障碍物接口。

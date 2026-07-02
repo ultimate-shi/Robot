@@ -1,4 +1,4 @@
-# foxglove3d 使用说明：
+# robot.launch 使用说明：
 # 本文件由 nav2_map_server 读取，用来发布 /map 这个 2D OccupancyGrid。
 # image 指向 studyroom.pgm；resolution 表示每个像素对应 0.05m；origin 是地图原点在 map 坐标系中的位置。
 # /map 主要供 Nav2 global_costmap 做全局路径规划，不包含高度、斜坡和台阶信息。

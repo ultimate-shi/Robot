@@ -1,5 +1,5 @@
-# foxglove3d 使用说明：
-# 本文件由 foxglove3d.launch.py 传给 controller_manager/ros2_control_node。
+# robot.launch 使用说明：
+# 本文件由 robot.launch.py 传给 controller_manager/ros2_control_node。
 # 作用是设置 ros2_control 控制管理器自身参数。
 # update_rate=10 表示控制管理器按 10Hz 更新控制器。
 # use_sim_time=false 表示当前工作区使用系统时间，不使用仿真 /clock。

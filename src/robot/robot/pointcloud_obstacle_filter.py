@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-foxglove3d 使用说明：
-本节点由 foxglove3d.launch.py 以 executable='pointcloud_obstacle_filter' 启动。
+robot.launch 使用说明：
+本节点由 robot.launch.py 以 executable='pointcloud_obstacle_filter' 启动。
 它是仿真 PLY 点云和现实双目相机点云复用 Nav2 的关键转换层。
 
 输入：

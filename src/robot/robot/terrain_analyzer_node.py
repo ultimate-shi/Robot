@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-foxglove3d 使用说明：
-本节点由 foxglove3d.launch.py 启动，负责把统一点云输入转换为统一地形状态输出。
+robot.launch 使用说明：
+本节点由 robot.launch.py 启动，负责把统一点云输入转换为统一地形状态输出。
 它让仿真 PLY 点云和现实双目点云都走同一个接口：
 /perception/points -> /terrain_status。
 

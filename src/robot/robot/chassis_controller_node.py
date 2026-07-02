@@ -1,6 +1,6 @@
 """
-foxglove3d 使用说明：
-本节点由 foxglove3d.launch.py 以 executable='chassis_controller_3d' 启动，节点名为 chassis_controller。
+robot.launch 使用说明：
+本节点由 robot.launch.py 以 executable='chassis_controller_node' 启动，节点名为 chassis_controller。
 它是当前仿真底盘的主控制节点，接收安全速度并输出 ros2_control 控制命令。
 
 输入：

@@ -1,8 +1,8 @@
 #!/home/shijiahao/ros2_pythonenv/bin/python
 # -*- coding: utf-8 -*-
 """
-foxglove3d 使用说明：
-本节点由 foxglove3d.launch.py 启动，用统一点云输入模拟 8 路超声波。
+robot.launch 使用说明：
+本节点由 robot.launch.py 启动，用统一点云输入模拟 8 路超声波。
 它不再直接读取 PLY 文件，而是订阅 /perception/points：
 - 仿真时 /perception/points 来自 publish_ply 读取的 studyroom.ply。
 - 现实中 /perception/points 可以来自双目摄像头或深度相机。

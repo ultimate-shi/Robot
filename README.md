@@ -3,10 +3,10 @@
 机器人小车 ROS 2 仿真与导航工作区。当前主入口是：
 
 ```bash
-ros2 launch robot foxglove3d.launch.py
+ros2 launch robot robot.launch.py
 ```
 
-本 README 以 `src/robot/launch/foxglove3d.launch.py` 为准，说明当前仍在使用的文件、功能链路和测试方法。后续删除文件时，应优先保留本文件列出的依赖。
+本 README 以 `src/robot/launch/robot.launch.py` 为准，说明当前仍在使用的文件、功能链路和测试方法。后续删除文件时，应优先保留本文件列出的依赖。
 
 ## 项目目标
 
@@ -22,7 +22,7 @@ ros2 launch robot foxglove3d.launch.py
 ## 当前主启动链路
 
 ```text
-foxglove3d.launch.py
+robot.launch.py
   -> robot_state_publisher
   -> nav2_map_server
   -> publish_ply
@@ -33,7 +33,7 @@ foxglove3d.launch.py
   -> ros2_control_node + controllers
   -> chassis_feedback_node
   -> obstacle_avoidance
-  -> chassis_controller_3d
+  -> chassis_controller_node
   -> virtual_imu
   -> Nav2 navigation_launch.py
   -> foxglove_bridge
@@ -53,7 +53,7 @@ studyroom.ply
 /cmd_vel
   -> obstacle_avoidance
   -> /cmd_vel_safe
-  -> chassis_controller_3d
+  -> chassis_controller_node
   -> /steering_controller/commands + /wheel_controller/commands
 ```
 
@@ -61,15 +61,15 @@ studyroom.ply
 /joint_states
   -> chassis_feedback_node
   -> /wheel_states
-  -> chassis_controller_3d
+  -> chassis_controller_node
   -> /odom + odom->base_link TF
 ```
 
-## foxglove3d 使用文件清单
+## robot.launch 使用文件清单
 
 ### 启动与安装
 
-- `src/robot/launch/foxglove3d.launch.py`
+- `src/robot/launch/robot.launch.py`
   - 当前主 launch 文件。
   - 负责组合地图、模型、点云、超声波、Nav2、底盘控制、IMU、Foxglove Bridge。
   - 删除风险：整个当前仿真入口失效。
@@ -113,7 +113,7 @@ studyroom.ply
   - 根据前后左右超声波、地形状态和命令超时过滤速度。
   - 不根据运动模式切换策略；只要 `linear.x/y` 或 `angular.z` 有速度分量，就执行对应方向避障。
 
-- `src/robot/robot/chassis_controller_3d.py`
+- `src/robot/robot/chassis_controller_node.py`
   - 当前主底盘控制器。
   - 订阅 `/cmd_vel_safe` 和 `/wheel_states`。
   - 支持 `crab`、`four_ws`、`ackermann` 三种运动方式。
@@ -121,7 +121,7 @@ studyroom.ply
 
 - `src/robot/robot/chassis_feedback_node.py`
   - 从 `/joint_states` 提取四轮转角和轮速。
-  - 发布 `/wheel_states` 给 `chassis_controller_3d.py` 计算里程计。
+  - 发布 `/wheel_states` 给 `chassis_controller_node.py` 计算里程计。
 
 - `src/robot/robot/virtual_imu_node.py`
   - 根据 `/odom` 生成 `/imu/data`。
@@ -130,12 +130,12 @@ studyroom.ply
 ### Python 支撑模块
 
 - `src/robot/robot/terrain_heightmap.py`
-  - 被 `chassis_controller_3d.py` import。
-  - 把 PLY 点云构造成高度栅格。
+  - 被 `terrain_analyzer_node.py` import。
+  - 把 `/perception/points` 解析出的点云数组构造成高度栅格。
   - 提供四轮高度、车体高度、roll/pitch 和前方地形查询。
 
 - `src/robot/robot/terrain_physics.py`
-  - 被 `chassis_controller_3d.py` import。
+  - 被 `terrain_analyzer_node.py` import。
   - 根据高度图判断坡度、台阶、坑洼、打滑和可通行性。
   - 输出结果最终进入 `/terrain_status`。
 
@@ -150,7 +150,7 @@ studyroom.ply
   - joint 名称必须和 URDF/hardware 配置一致。
 
 - `src/robot/config/terrain_params.yaml`
-  - 给 `chassis_controller_3d`、`virtual_imu`、`obstacle_avoidance`、`pointcloud_obstacle_filter`、`terrain_analyzer`、`virtual_ultrasonic` 使用。
+  - 给 `chassis_controller_node`、`virtual_imu`、`obstacle_avoidance`、`pointcloud_obstacle_filter`、`terrain_analyzer`、`virtual_ultrasonic` 使用。
   - 集中管理底盘尺寸、地形阈值、IMU 噪声、避障距离、点云过滤参数。
 
 - `src/robot/config/nav2_params.yaml`
@@ -177,7 +177,7 @@ studyroom.ply
 ### 机器人模型资源
 
 - `src/robot/urdf/robot.xacro`
-  - `foxglove3d.launch.py` 的 robot_description 来源。
+  - `robot.launch.py` 的 robot_description 来源。
   - 通过 xacro 展开成 URDF。
 
 - `src/robot/urdf/*.xacro`
@@ -259,7 +259,7 @@ studyroom.ply -> publish_ply -> /perception/points
 
 ### 5. 底盘三种运动模式
 
-`chassis_controller_3d.py` 支持：
+`chassis_controller_node.py` 支持：
 
 - `crab`：四轮同向，支持 `linear.x` 和 `linear.y` 平移。
 - `four_ws`：四轮转向，主要使用 `linear.x + angular.z`。
@@ -272,7 +272,7 @@ studyroom.ply -> publish_ply -> /perception/points
 - `terrain_heightmap.py` 从 `/perception/points` 解析出的点数组建高度图。
 - `terrain_physics.py` 判断坡度、台阶、坑洼和打滑。
 - `terrain_analyzer_node.py` 发布 `/terrain_status`。
-- `chassis_controller_3d.py` 订阅 `/terrain_status` 并发布 `/odom` 和 odom->base_link TF。
+- `chassis_controller_node.py` 订阅 `/terrain_status` 并发布 `/odom` 和 odom->base_link TF。
 - `/terrain_status` 同时被避障节点作为额外安全约束。
 
 ### 7. 虚拟 IMU
@@ -284,7 +284,7 @@ studyroom.ply -> publish_ply -> /perception/points
 
 - `controller_manager.yaml` 配置控制管理器。
 - `controllers.yaml` 配置关节状态广播器、转向控制器、轮速控制器和腿部位置控制器。
-- `chassis_controller_3d.py` 发布控制命令到：
+- `chassis_controller_node.py` 发布控制命令到：
 
 ```text
 /steering_controller/commands
@@ -296,7 +296,7 @@ studyroom.ply -> publish_ply -> /perception/points
 ```bash
 colcon build --packages-select robot
 source install/setup.bash
-ros2 launch robot foxglove3d.launch.py
+ros2 launch robot robot.launch.py
 ```
 
 ## 手动速度测试
@@ -374,7 +374,7 @@ ros2 topic echo /ultrasonic/side_rr
 
 可以优先考虑删除或归档的文件：
 
-- 没有被 `foxglove3d.launch.py` 引用。
+- 没有被 `robot.launch.py` 引用。
 - 没有被 `setup.py` 中当前 launch 使用的 executable 引用。
 - 没有被当前节点 import。
 - 没有被 `robot.xacro` include 或 mesh 引用。
@@ -382,7 +382,7 @@ ros2 topic echo /ultrasonic/side_rr
 
 不建议删除的文件：
 
-- 本 README “foxglove3d 使用文件清单”中列出的文件。
+- 本 README “robot.launch 使用文件清单”中列出的文件。
 - URDF include 链路中的 xacro 文件。
 - URDF 引用的 mesh OBJ/MTL 文件。
 - 当前 Nav2、ros2_control、地形、点云、超声波和底盘控制配置。

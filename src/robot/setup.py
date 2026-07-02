@@ -1,7 +1,7 @@
 """
-foxglove3d 使用说明：
+robot.launch 使用说明：
 这是 robot 包的 Python 安装配置文件，colcon build 时会读取它。
-foxglove3d.launch.py 中 package='robot'、executable='xxx' 的所有自定义节点，
+robot.launch.py 中 package='robot'、executable='xxx' 的所有自定义节点，
 都必须在 entry_points['console_scripts'] 中注册，否则 ros2 launch 找不到可执行入口。
 
 本文件还负责把 launch、config、urdf、meshes、world、map 等资源安装到 share/robot，
@@ -52,7 +52,7 @@ setup(
             'chassis_feedback_node = robot.chassis_feedback_node:main',
             'publish_ply = robot.publish_ply:main',
             'virtual_ultrasonic = robot.virtual_ultrasonic:main',
-            'chassis_controller_3d = robot.chassis_controller_3d:main',
+            'chassis_controller_node = robot.chassis_controller_node:main',
             'virtual_imu = robot.virtual_imu_node:main',
             'obstacle_avoidance = robot.obstacle_avoidance_node:main',
             'range_to_scan = robot.range_to_scan_node:main',

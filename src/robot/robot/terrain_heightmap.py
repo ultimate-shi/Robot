@@ -1,5 +1,5 @@
 """
-foxglove3d 使用说明：
+robot.launch 使用说明：
 本模块不会被 launch 直接启动，而是被 terrain_analyzer_node.py import 使用。
 它不再直接读取 PLY 文件，而是接收已经转换好的 PointCloud2 点数组。
 

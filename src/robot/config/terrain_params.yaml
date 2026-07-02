@@ -1,11 +1,11 @@
-# foxglove3d 使用说明：
-# 本文件由 foxglove3d.launch.py 同时传给 chassis_controller_3d、virtual_imu、obstacle_avoidance、
+# robot.launch 使用说明：
+# 本文件由 robot.launch.py 同时传给 chassis_controller_node、virtual_imu、obstacle_avoidance、
 # pointcloud_obstacle_filter 等节点。
 # 它集中管理底盘尺寸、地形分析阈值、IMU 噪声、超声波安全距离、cmd_vel 超时和点云过滤参数。
 # 删除风险：多个节点会退回默认参数，导致数字孪生模型、避障距离和点云过滤行为不可控。
 
 # Terrain and 3D simulation parameters
-# Used by foxglove3d.launch.py
+# Used by robot.launch.py
 
 chassis_controller:
   ros__parameters:

@@ -1,6 +1,6 @@
 """
-foxglove3d 使用说明：
-本模块不会被 launch 直接启动，而是被 chassis_controller_3d.py import 使用。
+robot.launch 使用说明：
+本模块不会被 launch 直接启动，而是被 chassis_controller_node.py import 使用。
 它基于 TerrainHeightmap 的查询结果判断地形是否可通行。
 
 输入：
@@ -9,7 +9,7 @@ foxglove3d 使用说明：
 
 输出：
 - TerrainConstraint：包含 is_blocked、block_reason、slip_factor、traversability、body_z、roll、pitch。
-- chassis_controller_3d 会把结果发布成 /terrain_status，并据此降低速度或阻止运动。
+- chassis_controller_node 会把结果发布成 /terrain_status，并据此降低速度或阻止运动。
 
 为什么不能删除：
 删除后地形坡度、台阶、坑洼和打滑判断会失效。

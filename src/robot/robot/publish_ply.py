@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-foxglove3d 使用说明：
-本节点由 foxglove3d.launch.py 以 executable='publish_ply' 启动。
+robot.launch 使用说明：
+本节点由 robot.launch.py 以 executable='publish_ply' 启动。
 作用是把离线 iPhone 扫描得到的 PLY 点云文件转换成 ROS 2 的 PointCloud2 话题。
 
 输入：

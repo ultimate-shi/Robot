@@ -1,6 +1,6 @@
 """
-foxglove3d 使用说明：
-本节点由 foxglove3d.launch.py 以 executable='obstacle_avoidance' 启动。
+robot.launch 使用说明：
+本节点由 robot.launch.py 以 executable='obstacle_avoidance' 启动。
 它是底盘控制前的安全过滤层，不负责路径规划，只负责把危险速度降速或置零。
 
 输入：
@@ -9,7 +9,7 @@ foxglove3d 使用说明：
 - /ultrasonic/front_rl、/ultrasonic/front_rr：后向避障。
 - /ultrasonic/side_fl、/ultrasonic/side_rl：左侧避障。
 - /ultrasonic/side_fr、/ultrasonic/side_rr：右侧避障。
-- /terrain_status：chassis_controller_3d 发布的地形阻挡/打滑状态。
+- /terrain_status：chassis_controller_node 发布的地形阻挡/打滑状态。
 
 输出：
 - /cmd_vel：在 launch 中被 remap 到 /cmd_vel_safe，底盘控制器实际消费这个安全速度。
