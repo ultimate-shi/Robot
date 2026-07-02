@@ -1,8 +1,18 @@
 """
-TerrainPhysics - Physical constraint engine for terrain traversal.
+foxglove3d 使用说明：
+本模块不会被 launch 直接启动，而是被 chassis_controller_3d.py import 使用。
+它基于 TerrainHeightmap 的查询结果判断地形是否可通行。
 
-Evaluates slope, step, and drop-off constraints to determine
-if the robot can safely traverse terrain at a given position.
+输入：
+- TerrainHeightmap 查询出的轮子高度、车体姿态、前向地形变化。
+- terrain_params.yaml 中的 max_grade_deg、step_threshold、dropoff_threshold 等阈值。
+
+输出：
+- TerrainConstraint：包含 is_blocked、block_reason、slip_factor、traversability、body_z、roll、pitch。
+- chassis_controller_3d 会把结果发布成 /terrain_status，并据此降低速度或阻止运动。
+
+为什么不能删除：
+删除后地形坡度、台阶、坑洼和打滑判断会失效。
 """
 
 import math

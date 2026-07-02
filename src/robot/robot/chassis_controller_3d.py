@@ -1,19 +1,32 @@
 """
-Chassis Controller 3D - Enhanced 6DOF chassis controller with terrain awareness.
+foxglove3d 使用说明：
+本节点由 foxglove3d.launch.py 以 executable='chassis_controller_3d' 启动，节点名为 chassis_controller。
+它是当前仿真底盘的主控制节点，接收安全速度并输出 ros2_control 控制命令。
 
-Replicates all functionality from chassis_controller_node.py (crab/four_ws/ackermann
-modes, minimum steering optimization, low-pass filtering, odometry integration)
-and adds:
-- Terrain height map query for Z/roll/pitch
-- Physical constraints (slope slip, step blocking, drop-off blocking)
-- 6DOF odometry and TF publishing
-- Terrain status diagnostics
+输入：
+- /cmd_vel：在 launch 中被 remap 到 /cmd_vel_safe，因此只接收 obstacle_avoidance 过滤后的速度。
+- /wheel_states：chassis_feedback_node 从 /joint_states 解析出的四轮转向角和轮速。
+- terrain_params.yaml：轮距、轴距、轮半径和 terrain_status 使能等参数。
+
+输出：
+- /steering_controller/commands：四个转向关节的位置命令。
+- /wheel_controller/commands：四个轮子的速度命令。
+- /odom：积分出的 6DOF 里程计，供 TF、IMU、Nav2 使用。
+- odom -> base_link TF：机器人位姿变换。
+- /terrain_status：由 terrain_analyzer_node 发布，本节点订阅后用于 z/roll/pitch、打滑和阻挡处理。
+- /chassis_mode：当前运动模式，供调试显示。
+
+支持的三种运动模式：
+- crab：四轮同向，支持 linear.x 和 linear.y 平移。
+- four_ws：四轮转向，使用 linear.x + angular.z。
+- ackermann：近似阿克曼转向，使用 linear.x + angular.z。
+
+为什么不能删除：
+删除后 /cmd_vel_safe 无法转成轮速/转角，小车不会运动，也不会发布 /odom 和 TF。
 """
 
-import math
 import json
-import os
-
+import math
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -24,10 +37,6 @@ from nav_msgs.msg import Odometry
 from std_msgs.msg import Float64MultiArray, String
 from tf2_ros import TransformBroadcaster
 from rcl_interfaces.msg import SetParametersResult
-from ament_index_python.packages import get_package_share_directory
-
-from robot.terrain_heightmap import TerrainHeightmap
-from robot.terrain_physics import TerrainPhysics
 
 
 class ChassisController3D(Node):
@@ -50,7 +59,6 @@ class ChassisController3D(Node):
         self.declare_parameter("dropoff_threshold", 0.05)
         self.declare_parameter("look_ahead_distance", 0.10)
         self.declare_parameter("look_ahead_samples", 5)
-        self.declare_parameter("ply_path", "")
 
         self.wheel_base = self.get_parameter("wheelbase").value
         self.wheel_track = self.get_parameter("track").value
@@ -71,12 +79,12 @@ class ChassisController3D(Node):
         # ==================== ROS interfaces ====================
         self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         self.create_subscription(Float64MultiArray, '/wheel_states', self.wheel_state_callback, 10)
+        self.create_subscription(String, '/terrain_status', self.terrain_status_callback, 10)
 
         self.steer_pub = self.create_publisher(Float64MultiArray, '/steering_controller/commands', 10)
         self.speed_pub = self.create_publisher(Float64MultiArray, '/wheel_controller/commands', 10)
         self.mode_pub = self.create_publisher(String, '/chassis_mode', 10)
         self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
-        self.terrain_status_pub = self.create_publisher(String, '/terrain_status', 10)
         self.tf_broadcaster = TransformBroadcaster(self)
 
         # 10Hz control loop
@@ -112,67 +120,12 @@ class ChassisController3D(Node):
         self.prev_x = 0.0
         self.prev_y = 0.0
 
-        # ==================== Initialize terrain ====================
-        self.heightmap = None
-        self.physics = None
-
-        if self.terrain_enabled:
-            self._init_terrain()
-
         # Publish initial mode
         self.mode_pub.publish(String(data=self.motion_mode))
         self.get_logger().info(
             f"ChassisController3D started | mode: {self.motion_mode} | "
-            f"terrain: {'ON' if self.heightmap else 'OFF'}"
+            f"terrain_status_subscription: {'ON' if self.terrain_enabled else 'OFF'}"
         )
-
-    def _init_terrain(self):
-        """Initialize terrain heightmap and physics engine."""
-        ply_path = self.get_parameter("ply_path").value
-
-        if not ply_path:
-            # Auto-detect from robot package
-            try:
-                pkg_path = get_package_share_directory("robot")
-                ply_path = os.path.join(pkg_path, "map", "studyroom.ply")
-            except Exception:
-                # Fallback to source path
-                ply_path = os.path.join(
-                    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                    "map", "studyroom.ply"
-                )
-
-        if not os.path.exists(ply_path):
-            self.get_logger().warn(f"PLY not found: {ply_path}, terrain disabled")
-            self.terrain_enabled = False
-            return
-
-        try:
-            self.get_logger().info(f"Loading terrain from: {ply_path}")
-            self.heightmap = TerrainHeightmap(
-                ply_path=ply_path,
-                resolution=self.get_parameter("grid_resolution").value,
-                ground_tolerance=self.get_parameter("ground_tolerance").value
-            )
-            self.physics = TerrainPhysics(
-                max_grade_deg=self.get_parameter("max_grade_deg").value,
-                step_threshold=self.get_parameter("step_threshold").value,
-                dropoff_threshold=self.get_parameter("dropoff_threshold").value,
-                look_ahead_distance=self.get_parameter("look_ahead_distance").value,
-                look_ahead_samples=self.get_parameter("look_ahead_samples").value,
-                ground_to_base_height=self.get_parameter("ground_to_base_height").value,
-                wheelbase=self.wheel_base,
-                track=self.wheel_track
-            )
-            self.get_logger().info(
-                f"Terrain loaded: grid {self.heightmap.grid_w}x{self.heightmap.grid_h}, "
-                f"ground_z={self.heightmap.ground_z_base:.3f}"
-            )
-        except Exception as e:
-            self.get_logger().error(f"Terrain init failed: {e}")
-            self.heightmap = None
-            self.physics = None
-            self.terrain_enabled = False
 
     # ==================== Parameter callback ====================
     def parameter_callback(self, params):
@@ -188,6 +141,21 @@ class ChassisController3D(Node):
         self.latest_cmd_vel = msg
         self.has_received_cmd = True
         self.last_cmd_vel_time = self.get_clock().now()
+
+    def terrain_status_callback(self, msg):
+        """Apply terrain state published by terrain_analyzer_node."""
+        if not self.terrain_enabled:
+            return
+        try:
+            status = json.loads(msg.data)
+        except Exception:
+            return
+        self.terrain_blocked = bool(status.get('is_blocked', False))
+        self.block_reason = status.get('block_reason', '')
+        self.slip_factor = float(status.get('slip_factor', 1.0))
+        self.z = float(status.get('body_z', self.z))
+        self.roll = float(status.get('roll', self.roll))
+        self.pitch = float(status.get('pitch', self.pitch))
 
     # ==================== 10Hz control loop ====================
     def control_loop(self):
@@ -372,34 +340,14 @@ class ChassisController3D(Node):
         self.x += dx
         self.y += dy
 
-        # ==================== Terrain query ====================
-        if self.terrain_enabled and self.heightmap and self.physics:
-            constraint = self.physics.evaluate(
-                self.heightmap, self.x, self.y, self.yaw, self.vx_filtered
-            )
-
-            # Update terrain state
-            self.terrain_blocked = constraint.is_blocked
-            self.block_reason = constraint.block_reason
-            self.slip_factor = constraint.slip_factor
-
-            # Smooth slip factor
+        # ==================== Terrain status application ====================
+        if self.terrain_enabled:
             slip_alpha = 0.3
             self.slip_factor_filtered = (slip_alpha * self.slip_factor +
                                          (1 - slip_alpha) * self.slip_factor_filtered)
-
-            # If blocked, rollback position
-            if constraint.is_blocked:
+            if self.terrain_blocked:
                 self.x = self.prev_x
                 self.y = self.prev_y
-
-            # Update 3D pose from terrain
-            self.z = constraint.body_z
-            self.roll = constraint.roll
-            self.pitch = constraint.pitch
-
-            # Publish terrain status
-            self._publish_terrain_status(constraint)
         else:
             self.z = 0.0
             self.roll = 0.0
@@ -407,23 +355,6 @@ class ChassisController3D(Node):
 
         # Publish 6DOF odometry and TF
         self.publish_odom(current_time)
-
-    def _publish_terrain_status(self, constraint):
-        """Publish terrain status as JSON string."""
-        status = {
-            "is_blocked": constraint.is_blocked,
-            "block_reason": constraint.block_reason,
-            "slip_factor": round(constraint.slip_factor, 3),
-            "traversability": round(constraint.traversability, 3),
-            "body_z": round(constraint.body_z, 4),
-            "roll_deg": round(math.degrees(constraint.roll), 2),
-            "pitch_deg": round(math.degrees(constraint.pitch), 2),
-            "step_blocked": constraint.block_reason == "step",
-            "dropoff_blocked": constraint.block_reason == "dropoff",
-        }
-        msg = String()
-        msg.data = json.dumps(status)
-        self.terrain_status_pub.publish(msg)
 
     # ==================== 6DOF Odometry publishing ====================
     def publish_odom(self, time):

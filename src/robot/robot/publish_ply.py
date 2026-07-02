@@ -1,4 +1,21 @@
 #!/usr/bin/env python3
+"""
+foxglove3d 使用说明：
+本节点由 foxglove3d.launch.py 以 executable='publish_ply' 启动。
+作用是把离线 iPhone 扫描得到的 PLY 点云文件转换成 ROS 2 的 PointCloud2 话题。
+
+输入：
+- 参数 ply_file，默认指向 robot 包 share 目录下的 map/studyroom.ply。
+- 参数 frame_id，默认 map，表示点云坐标已经在地图坐标系下。
+
+输出：
+- /pointcloud：给 Foxglove/RViz 显示完整房间点云。
+- /perception/points：仿真和现实复用的统一点云输入接口；现实双目相机也应输出到这个话题。
+
+为什么不能删除：
+Nav2 点云避障链路依赖 /perception/points，前端显示依赖 /pointcloud。
+如果换成真实双目相机，可以保留接口但用相机驱动替代本节点的数据来源。
+"""
 
 import os
 

@@ -1,15 +1,27 @@
 """
-Obstacle Avoidance Node - Filters velocity commands for safe traversal.
+foxglove3d 使用说明：
+本节点由 foxglove3d.launch.py 以 executable='obstacle_avoidance' 启动。
+它是底盘控制前的安全过滤层，不负责路径规划，只负责把危险速度降速或置零。
 
-Sits between teleop (/cmd_vel_raw) and chassis controller (/cmd_vel).
-Uses ultrasonic sensor data and terrain status to prevent collisions.
+输入：
+- /cmd_vel_raw：在 launch 中被 remap 到 /cmd_vel，因此 Foxglove、Nav2 或命令行发布的 /cmd_vel 都会进入这里。
+- /ultrasonic/front_fl、/ultrasonic/front_fr：前向避障。
+- /ultrasonic/front_rl、/ultrasonic/front_rr：后向避障。
+- /ultrasonic/side_fl、/ultrasonic/side_rl：左侧避障。
+- /ultrasonic/side_fr、/ultrasonic/side_rr：右侧避障。
+- /terrain_status：chassis_controller_3d 发布的地形阻挡/打滑状态。
 
-Logic:
-- Front wall: ultrasonic < stop_distance → stop
-- Front approach: ultrasonic < warn_distance → decelerate
-- Side wall: limit lateral motion and turning toward wall
-- Terrain blocked (step/dropoff/slope): stop forward motion
-- Terrain slip: reduce speed proportionally
+输出：
+- /cmd_vel：在 launch 中被 remap 到 /cmd_vel_safe，底盘控制器实际消费这个安全速度。
+- /obstacle_warning：发布 FRONT_WALL、LEFT_SIDE_WALL 等告警字符串，便于 Foxglove 调试。
+
+避障策略：
+- 不根据 crab/four_ws/ackermann 模式切换；只看 cmd_vel 中是否有 x/y/z 速度分量。
+- linear.x 负责前后，linear.y 负责左右，angular.z 负责朝墙方向转向限制。
+- cmd_vel_timeout 防止停止发布 /cmd_vel 后继续沿用最后一条非零速度。
+
+为什么不能删除：
+这是最后一层安全保护。即使 Nav2 local_costmap 正常工作，也需要它在近距离时拦截危险速度。
 """
 
 import json

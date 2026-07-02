@@ -1,3 +1,20 @@
+"""
+foxglove3d 使用说明：
+本节点由 foxglove3d.launch.py 以 executable='chassis_feedback_node' 启动。
+它把 ros2_control 发布的 /joint_states 转换成底盘控制器更容易使用的 /wheel_states。
+
+输入：
+- /joint_states：joint_state_broadcaster 发布，包含所有关节的位置和速度。
+- /chassis_mode：当前底盘模式，仅用于状态缓存和调试日志。
+
+输出：
+- /wheel_states：Float64MultiArray，前 4 个值是四轮转向角，后 4 个值是四轮轮速。
+
+为什么不能删除：
+chassis_controller_3d 依赖 /wheel_states 计算 /odom 和 odom->base_link TF。
+如果删除，机器人位姿、虚拟传感器 TF、Nav2 定位都会受到影响。
+"""
+
 import rclpy
 import math
 from rclpy.node import Node

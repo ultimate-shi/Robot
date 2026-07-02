@@ -1,12 +1,24 @@
 """
-foxglove3d.launch.py - 3D terrain-aware simulation launch file.
+foxglove3d 使用说明：
+本文件是当前项目的主启动入口，用户明确要求以后重点关注该 launch。
+它把机器人模型、地图、点云、虚拟超声波、点云过滤、Nav2、底盘控制、IMU、
+安全避障和 Foxglove Bridge 组合到同一个 ROS 2 系统中。
 
-Based on foxglove.launch.py with these changes:
-- Replaces chassis_controller with chassis_controller_3d (6DOF + terrain)
-- Adds virtual_imu node (20Hz)
-- Adds obstacle_avoidance node (filters cmd_vel)
-- Remaps teleop output to /cmd_vel_raw (obstacle_avoidance publishes /cmd_vel)
-- Loads terrain_params.yaml for all new nodes
+启动后主要链路：
+- robot_state_publisher 发布 /robot_description 和 URDF 产生的 TF。
+- nav2_map_server 根据 map/studyroom.yaml 发布 /map。
+- publish_ply 把 map/studyroom.ply 发布为 /pointcloud 和 /perception/points。
+- pointcloud_obstacle_filter 把 /perception/points 过滤为 /nav/obstacle_points，供 Nav2 local_costmap 使用。
+- virtual_ultrasonic 订阅 /perception/points 并结合 TF，发布 8 路 /ultrasonic/* 虚拟超声波距离。
+- range_to_scan 把 8 路超声波拼成稀疏 /scan，主要用于调试或兼容 LaserScan 显示。
+- obstacle_avoidance 把 /cmd_vel 过滤为 /cmd_vel_safe，底盘控制器只消费安全速度。
+- chassis_controller_3d 根据 /cmd_vel_safe 输出转向/轮速控制，并发布 /odom、odom->base_link TF。
+- virtual_imu 根据 /odom 生成 /imu/data。
+- foxglove_bridge 对外提供 Mac Foxglove 前端连接。
+
+删除文件时的判断：
+只要某个节点、配置、地图或模型资源在本文件中被引用，或被本文件启动的节点直接读取，
+就不能简单删除；README 中有完整清单。
 """
 
 import os
@@ -134,6 +146,7 @@ def generate_launch_description():
         executable='virtual_ultrasonic',
         name='virtual_ultrasonic',
         output='screen',
+        parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
         additional_env=venv_env
     )
 
@@ -250,6 +263,16 @@ def generate_launch_description():
     )
 
 
+
+    terrain_analyzer_node = Node(
+        package='robot',
+        executable='terrain_analyzer',
+        name='terrain_analyzer',
+        output='screen',
+        parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
+        additional_env=venv_env
+    )
+
     range_to_scan_node = Node(
         package='robot',
         executable='range_to_scan',
@@ -304,6 +327,7 @@ def generate_launch_description():
         virtual_ultrasonic_node,
         range_to_scan_node,
         pointcloud_obstacle_filter_node,
+        terrain_analyzer_node,
         controller_manager,
         zero_commands,
         chassis_feedback_node,

@@ -1,3 +1,10 @@
+# foxglove3d 使用说明：
+# 本文件由 foxglove3d.launch.py 中的 spawner 传给各 ros2_control 控制器。
+# 它定义了 joint_state_broadcaster、四个大腿位置控制器、四个小腿位置控制器、
+# steering_controller 和 wheel_controller。
+# joint 名称必须与 robot.xacro/hardware.xacro 中的关节完全一致。
+# 删除风险：控制器无法启动，/joint_states、/steering_controller/commands、/wheel_controller/commands 会失效。
+
 # 关节状态广播器
 joint_state_broadcaster:
   ros__parameters:

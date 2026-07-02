@@ -27,4 +27,6 @@
 ## 代码规范
 写代码同时用中文写注释
 
+完成代码修改后同时加上说明，并且要修改README.md文件
+
 新增 ROS 节点时，应在 `src/robot/robot/` 中实现，并在 `src/robot/setup.py` 的 `console_scripts` 中声明入口。配置项优先放入 `src/robot/config/*.yaml` 或 launch 参数中，不要把设备路径、控制参数、网络地址等机器相关内容硬编码到节点代码里。

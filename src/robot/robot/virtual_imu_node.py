@@ -1,13 +1,18 @@
 """
-Virtual IMU Node - Simulates IMU sensor data from odometry.
+foxglove3d 使用说明：
+本节点由 foxglove3d.launch.py 以 executable='virtual_imu' 启动。
+它根据 chassis_controller_3d 发布的 /odom 生成模拟 IMU 数据，用于数字孪生传感器链路。
 
-Subscribes to /odom (6DOF) and generates realistic sensor_msgs/Imu
-messages at 20Hz with GY25T-matching noise characteristics.
+输入：
+- /odom：包含 base_link 的位置、姿态和速度。
+- terrain_params.yaml 中 virtual_imu 参数：发布频率、姿态噪声、角速度噪声、线加速度噪声、重力常数。
 
-Computes:
-- Orientation: directly from odom quaternion + noise
-- Angular velocity: numerical differentiation of orientation + noise
-- Linear acceleration: velocity differentiation + gravity rotation + noise
+输出：
+- /imu/data：sensor_msgs/Imu，frame_id 为 imu_link。
+
+为什么不能删除：
+如果后续导航、状态估计或前端显示需要 IMU，本节点提供仿真 IMU 数据；
+如果确认系统完全不使用 /imu/data，才可以考虑删除或从 launch 中移除。
 """
 
 import math

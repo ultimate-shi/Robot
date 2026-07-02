@@ -1,4 +1,26 @@
 #!/usr/bin/env python3
+"""
+foxglove3d 使用说明：
+本节点由 foxglove3d.launch.py 以 executable='pointcloud_obstacle_filter' 启动。
+它是仿真 PLY 点云和现实双目相机点云复用 Nav2 的关键转换层。
+
+输入：
+- /perception/points：统一点云输入，仿真来自 publish_ply，现实可来自双目摄像头。
+- TF：读取 robot_base_frame 在点云坐标系中的位置，只保留机器人附近 local_radius 范围内的点。
+
+处理：
+- 解析 PointCloud2 的 x/y/z 字段。
+- 按高度 min_obstacle_height/max_obstacle_height 去掉地面或过高点。
+- 按 local_radius 裁剪局部范围，降低 Nav2 costmap 压力。
+- 按 voxel_size 体素降采样，限制 max_points 数量。
+
+输出：
+- /nav/obstacle_points：过滤后的障碍物点云，供 Nav2 VoxelLayer 标记/清除局部障碍。
+- /pointcloud_obstacle_status：输出过滤后的点数，用于调试点云是否进入 Nav2。
+
+为什么不能删除：
+nav2_params.yaml 的 local_costmap 直接订阅 /nav/obstacle_points；删除会导致 Nav2 点云避障失效。
+"""
 
 import math
 import struct

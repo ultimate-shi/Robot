@@ -1,3 +1,13 @@
+"""
+foxglove3d 使用说明：
+这是 robot 包的 Python 安装配置文件，colcon build 时会读取它。
+foxglove3d.launch.py 中 package='robot'、executable='xxx' 的所有自定义节点，
+都必须在 entry_points['console_scripts'] 中注册，否则 ros2 launch 找不到可执行入口。
+
+本文件还负责把 launch、config、urdf、meshes、world、map 等资源安装到 share/robot，
+因此 get_package_share_directory('robot') 才能在运行时找到 robot.xacro、nav2_params.yaml、studyroom.ply 等资源。
+"""
+
 from setuptools import find_packages, setup
 import os  # 关键：确保此行存在且无注释
 from glob import glob
@@ -50,6 +60,7 @@ setup(
             'obstacle_avoidance = robot.obstacle_avoidance_node:main',
             'range_to_scan = robot.range_to_scan_node:main',
             'pointcloud_obstacle_filter = robot.pointcloud_obstacle_filter:main',
+            'terrain_analyzer = robot.terrain_analyzer_node:main',
         ],
     },
 )

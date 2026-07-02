@@ -1,4 +1,20 @@
 #!/usr/bin/env python3
+"""
+foxglove3d 使用说明：
+本节点由 foxglove3d.launch.py 以 executable='range_to_scan' 启动。
+它把 8 路超声波 Range 数据合成为一个稀疏 LaserScan，主要用于 Foxglove/RViz 调试和兼容。
+
+输入：
+- /ultrasonic/front_fl、front_fr、front_rl、front_rr。
+- /ultrasonic/side_fl、side_fr、side_rl、side_rr。
+
+输出：
+- /scan：sensor_msgs/LaserScan，frame_id 为 base_link，角度范围 -pi 到 pi，5 度一个采样。
+
+注意：
+/scan 只是 8 路超声波展开后的稀疏扫描，不等价于真实 360 度激光雷达。
+当前 Nav2 local_costmap 主要使用 /nav/obstacle_points，/scan 保留用于调试。
+"""
 
 import math
 

@@ -1,346 +1,198 @@
 #!/home/shijiahao/ros2_pythonenv/bin/python
 # -*- coding: utf-8 -*-
-
 """
-ROS2 Jazzy 虚拟超声波传感器模拟节点（最终版）
----------------------------------------------------
-功能：
-1. 读取 PLY 点云地图（真实环境）
-2. 使用 scipy cKDTree 做高速邻域搜索
-3. 根据 TF 获取 8 个超声波传感器在 map 下位置姿态
-4. 实时计算距离
-5. 发布标准 sensor_msgs/Range 消息
-6. 支持 RViz / Foxglove / Nav2 联调
+foxglove3d 使用说明：
+本节点由 foxglove3d.launch.py 启动，用统一点云输入模拟 8 路超声波。
+它不再直接读取 PLY 文件，而是订阅 /perception/points：
+- 仿真时 /perception/points 来自 publish_ply 读取的 studyroom.ply。
+- 现实中 /perception/points 可以来自双目摄像头或深度相机。
 
-依赖安装：
-pip install scipy plyfile numpy transforms3d
+输入：
+- /perception/points：PointCloud2 点云。
+- TF map -> radar-*：由机器人模型、关节状态和 odom 共同提供。
 
-运行：
-ros2 run robot virtual_ultrasonic.py
-
----------------------------------------------------
-你只需修改：
-1. PLY_PATH
-2. 8个传感器名字（如果和URDF不一致）
+输出：
+- /ultrasonic/front_fl、front_fr、front_rl、front_rr。
+- /ultrasonic/side_fl、side_fr、side_rl、side_rr。
 """
 
 import math
+import struct
+
 import numpy as np
-
 import rclpy
-from rclpy.node import Node
 from rclpy.duration import Duration
-import os
-from ament_index_python.packages import get_package_share_directory
-
-from sensor_msgs.msg import Range
-from nav_msgs.msg import Odometry
-
-import tf2_ros
 from rclpy.executors import ExternalShutdownException
-
+from rclpy.node import Node
 from scipy.spatial import cKDTree
-from plyfile import PlyData
+from sensor_msgs.msg import PointCloud2, Range
+import tf2_ros
 
 
-# =========================================================
-# 8个超声波传感器配置（与你URDF一致）
-# =========================================================
 SENSORS = [
-    {"link": "radar-front_fl", "topic": "/ultrasonic/front_fl"},
-    {"link": "radar-front_fr", "topic": "/ultrasonic/front_fr"},
-    {"link": "radar-front_rl", "topic": "/ultrasonic/front_rl"},
-    {"link": "radar-front_rr", "topic": "/ultrasonic/front_rr"},
-    {"link": "radar-side_fl",  "topic": "/ultrasonic/side_fl"},
-    {"link": "radar-side_fr",  "topic": "/ultrasonic/side_fr"},
-    {"link": "radar-side_rl",  "topic": "/ultrasonic/side_rl"},
-    {"link": "radar-side_rr",  "topic": "/ultrasonic/side_rr"},
+    {'link': 'radar-front_fl', 'topic': '/ultrasonic/front_fl'},
+    {'link': 'radar-front_fr', 'topic': '/ultrasonic/front_fr'},
+    {'link': 'radar-front_rl', 'topic': '/ultrasonic/front_rl'},
+    {'link': 'radar-front_rr', 'topic': '/ultrasonic/front_rr'},
+    {'link': 'radar-side_fl', 'topic': '/ultrasonic/side_fl'},
+    {'link': 'radar-side_fr', 'topic': '/ultrasonic/side_fr'},
+    {'link': 'radar-side_rl', 'topic': '/ultrasonic/side_rl'},
+    {'link': 'radar-side_rr', 'topic': '/ultrasonic/side_rr'},
 ]
 
 
-# =========================================================
-# 主节点
-# =========================================================
 class VirtualUltrasonic(Node):
+    """Compute virtual ultrasonic ranges from /perception/points and TF."""
 
     def __init__(self):
-        super().__init__("virtual_ultrasonic")
+        super().__init__('virtual_ultrasonic')
 
-        # =================================================
-        # 参数
-        # =================================================
-        pkg_path = get_package_share_directory("robot")
+        self.declare_parameter('input_topic', '/perception/points')
+        self.declare_parameter('max_range', 4.0)
+        self.declare_parameter('min_range', 0.02)
+        self.declare_parameter('fov_half_deg', 15.0)
+        self.declare_parameter('min_height', 0.03)
+        self.declare_parameter('max_height', 0.60)
+        self.declare_parameter('voxel_size', 0.03)
+        self.declare_parameter('publish_period', 0.2)
 
-        self.PLY_PATH = os.path.join(
-            pkg_path,
-            "map",
-            "studyroom.ply"
-        )
+        input_topic = self.get_parameter('input_topic').value
+        self.MAX_RANGE = self.get_parameter('max_range').value
+        self.MIN_RANGE = self.get_parameter('min_range').value
+        self.FOV_HALF = math.radians(self.get_parameter('fov_half_deg').value)
+        self.MIN_HEIGHT = self.get_parameter('min_height').value
+        self.MAX_HEIGHT = self.get_parameter('max_height').value
+        self.voxel_size = self.get_parameter('voxel_size').value
 
-        self.PLY_PATH = os.path.abspath(self.PLY_PATH)
+        self.points = np.empty((0, 3), dtype=np.float32)
+        self.kdtree = None
 
-        self.MAX_RANGE = 4.0
-        self.MIN_RANGE = 0.02
+        self.tf_buffer = tf2_ros.Buffer(cache_time=Duration(seconds=10.0))
+        self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
 
-        # 超声波水平半角（15°）
-        self.FOV_HALF = math.radians(15.0)
+        self.create_subscription(PointCloud2, input_topic, self.cloud_callback, 10)
+        self.sensor_publishers = {
+            sensor['link']: self.create_publisher(Range, sensor['topic'], 10)
+            for sensor in SENSORS
+        }
+        self.create_timer(self.get_parameter('publish_period').value, self.publish_all)
+        self.get_logger().info(f'VirtualUltrasonic listening to {input_topic}')
 
-        # 检测高度范围（地面以上）
-        self.MIN_HEIGHT = 0.03
-        self.MAX_HEIGHT = 0.60
-
-        # 发布频率
-        self.TIMER_PERIOD = 0.2   # 10Hz
-
-        # =================================================
-        # 加载点云
-        # =================================================
-        self.load_point_cloud()
-
-        # =================================================
-        # TF
-        # =================================================
-        self.tf_buffer = tf2_ros.Buffer(
-            cache_time=Duration(seconds=10.0)
-        )
-        self.tf_listener = tf2_ros.TransformListener(
-            self.tf_buffer,
-            self
-        )
-
-        # =================================================
-        # 发布器
-        # =================================================
-        self.sensor_publishers = {}
-
-        for sensor in SENSORS:
-            pub = self.create_publisher(
-                Range,
-                sensor["topic"],
-                10
-            )
-            self.sensor_publishers[sensor["link"]] = pub
-
-        self.get_logger().info("8路超声波发布器已创建")
-
-        # =================================================
-        # 定时器
-        # =================================================
-        self.create_timer(
-            self.TIMER_PERIOD,
-            self.publish_all
-        )
-
-        self.get_logger().info("Virtual Ultrasonic Node Started")
-
-    # =====================================================
-    # 加载PLY地图
-    # =====================================================
-    def load_point_cloud(self):
-
-        self.get_logger().info(f"读取PLY地图: {self.PLY_PATH}")
-
-        ply = PlyData.read(self.PLY_PATH)
-        vertex = ply["vertex"]
-
-        self.points = np.vstack([
-            vertex["x"],
-            vertex["y"],
-            vertex["z"]
-        ]).T.astype(np.float32)
-
-        self.get_logger().info(
-            f"原始点数: {len(self.points)}"
-        )
-
-        # -------------------------------------------------
-        # 简单降采样（体素化）
-        # -------------------------------------------------
-        voxel = 0.03  # 3cm
-
-        grid = np.floor(self.points / voxel).astype(np.int32)
-
-        _, idx = np.unique(grid, axis=0, return_index=True)
-
-        self.points = self.points[idx]
-
-        self.get_logger().info(
-            f"降采样后点数: {len(self.points)}"
-        )
-
-        # KDTree
+    def cloud_callback(self, msg: PointCloud2):
+        """Update KDTree from the latest shared perception cloud."""
+        points = self._cloud_to_xyz_array(msg)
+        if len(points) == 0:
+            return
+        if self.voxel_size > 0.0:
+            grid = np.floor(points / self.voxel_size).astype(np.int32)
+            _, idx = np.unique(grid, axis=0, return_index=True)
+            points = points[idx]
+        self.points = points.astype(np.float32)
         self.kdtree = cKDTree(self.points)
 
-        self.get_logger().info("KDTree建立完成")
-
-
-    # =====================================================
-    # 获取单个传感器距离
-    # =====================================================
     def get_sensor_distance(self, link_name):
+        """Return nearest point distance in the sensor cone."""
+        if self.kdtree is None:
+            return self.MAX_RANGE
 
         try:
-            tf = self.tf_buffer.lookup_transform(
-                "map",
-                link_name,
-                rclpy.time.Time()
-            )
-
+            tf = self.tf_buffer.lookup_transform('map', link_name, rclpy.time.Time())
         except Exception:
             return self.MAX_RANGE
 
-        # -------------------------------------------------
-        # 传感器位置
-        # -------------------------------------------------
         sx = tf.transform.translation.x
         sy = tf.transform.translation.y
         sz = tf.transform.translation.z
-
         sensor_pos = np.array([sx, sy, sz])
 
-        # -------------------------------------------------
-        # 四元数 -> 朝向
-        # transforms3d顺序是 [w x y z]
-        # -------------------------------------------------
         qx = tf.transform.rotation.x
         qy = tf.transform.rotation.y
         qz = tf.transform.rotation.z
         qw = tf.transform.rotation.w
-
         rot = self.quat_to_rotmat(qw, qx, qy, qz)
-
-        # 本体x轴 = 前方方向
-        front = rot[:, 0]
-
-        fx = front[0]
-        fy = front[1]
-
-        front_2d = np.array([fx, fy])
-
+        front_2d = rot[:, 0][:2]
         norm = np.linalg.norm(front_2d)
-
         if norm < 1e-6:
             return self.MAX_RANGE
-
         front_2d /= norm
 
-        # -------------------------------------------------
-        # 搜索半径内点
-        # -------------------------------------------------
-        ids = self.kdtree.query_ball_point(
-            sensor_pos,
-            self.MAX_RANGE
-        )
-
-        if len(ids) == 0:
+        ids = self.kdtree.query_ball_point(sensor_pos, self.MAX_RANGE)
+        if not ids:
             return self.MAX_RANGE
 
-        near_points = self.points[ids]
-
         min_dist = self.MAX_RANGE
-
-        # -------------------------------------------------
-        # 遍历候选点
-        # -------------------------------------------------
-        for p in near_points:
-
+        for p in self.points[ids]:
             px, py, pz = p
-
-            # 高度过滤
             if pz < self.MIN_HEIGHT or pz > self.MAX_HEIGHT:
                 continue
-
             dx = px - sx
             dy = py - sy
-
             horizontal_dist = math.sqrt(dx * dx + dy * dy)
-
-            if horizontal_dist < self.MIN_RANGE:
+            if horizontal_dist < self.MIN_RANGE or horizontal_dist > self.MAX_RANGE:
                 continue
-
-            if horizontal_dist > self.MAX_RANGE:
-                continue
-
-            # 方向角判断
             vec = np.array([dx, dy])
-
             vnorm = np.linalg.norm(vec)
-
             if vnorm < 1e-6:
                 continue
-
             vec /= vnorm
-
-            dot = np.dot(front_2d, vec)
-            dot = np.clip(dot, -1.0, 1.0)
-
-            angle = math.acos(dot)
-
-            if angle > self.FOV_HALF:
-                continue
-
-            if horizontal_dist < min_dist:
-                min_dist = horizontal_dist
+            angle = math.acos(float(np.clip(np.dot(front_2d, vec), -1.0, 1.0)))
+            if angle <= self.FOV_HALF:
+                min_dist = min(min_dist, horizontal_dist)
 
         return round(min_dist, 3)
 
-    # =====================================================
-    # 计算四元数旋转矩阵
-    # =====================================================
     def quat_to_rotmat(self, w, x, y, z):
+        """Convert quaternion to rotation matrix."""
         return np.array([
-            [1 - 2*y*y - 2*z*z,   2*x*y - 2*z*w,     2*x*z + 2*y*w],
-            [2*x*y + 2*z*w,       1 - 2*x*x - 2*z*z, 2*y*z - 2*x*w],
-            [2*x*z - 2*y*w,       2*y*z + 2*x*w,     1 - 2*x*x - 2*y*y]
+            [1 - 2 * y * y - 2 * z * z, 2 * x * y - 2 * z * w, 2 * x * z + 2 * y * w],
+            [2 * x * y + 2 * z * w, 1 - 2 * x * x - 2 * z * z, 2 * y * z - 2 * x * w],
+            [2 * x * z - 2 * y * w, 2 * y * z + 2 * x * w, 1 - 2 * x * x - 2 * y * y],
         ], dtype=np.float64)
-    
 
-    # =====================================================
-    # 发布所有传感器
-    # =====================================================
     def publish_all(self):
-
+        """Publish all eight Range messages."""
         stamp = self.get_clock().now().to_msg()
-
         for sensor in SENSORS:
-
-            link = sensor["link"]
-
-            dist = self.get_sensor_distance(link)
-
+            link = sensor['link']
             msg = Range()
-
             msg.header.stamp = stamp
             msg.header.frame_id = link
-
             msg.radiation_type = Range.ULTRASOUND
-
             msg.field_of_view = self.FOV_HALF * 2.0
-
             msg.min_range = self.MIN_RANGE
             msg.max_range = self.MAX_RANGE
-
-            msg.range = dist
-
+            msg.range = self.get_sensor_distance(link)
             self.sensor_publishers[link].publish(msg)
 
+    def _cloud_to_xyz_array(self, msg: PointCloud2) -> np.ndarray:
+        offsets = {field.name: field.offset for field in msg.fields}
+        if not {'x', 'y', 'z'}.issubset(offsets):
+            return np.empty((0, 3), dtype=np.float32)
+        point_count = msg.width * msg.height
+        points = np.empty((point_count, 3), dtype=np.float32)
+        data = memoryview(msg.data)
+        endian = '>' if msg.is_bigendian else '<'
+        fmt = endian + 'f'
+        for i in range(point_count):
+            base = i * msg.point_step
+            points[i, 0] = struct.unpack_from(fmt, data, base + offsets['x'])[0]
+            points[i, 1] = struct.unpack_from(fmt, data, base + offsets['y'])[0]
+            points[i, 2] = struct.unpack_from(fmt, data, base + offsets['z'])[0]
+        return points[np.isfinite(points).all(axis=1)]
 
-# =========================================================
-# main
-# =========================================================
+
 def main(args=None):
-
     rclpy.init(args=args)
     node = VirtualUltrasonic()
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
-        pass  # 正常退出，不打印traceback
+        pass
     finally:
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
