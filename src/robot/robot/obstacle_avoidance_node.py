@@ -7,13 +7,12 @@ Uses ultrasonic sensor data and terrain status to prevent collisions.
 Logic:
 - Front wall: ultrasonic < stop_distance → stop
 - Front approach: ultrasonic < warn_distance → decelerate
-- Side wall: limit turning toward wall
+- Side wall: limit lateral motion and turning toward wall
 - Terrain blocked (step/dropoff/slope): stop forward motion
 - Terrain slip: reduce speed proportionally
 """
 
 import json
-import math
 
 import rclpy
 from rclpy.node import Node
@@ -36,6 +35,7 @@ class ObstacleAvoidanceNode(Node):
         self.declare_parameter("side_warn_distance", 0.25)
         self.declare_parameter("terrain_traversability_min", 0.3)
         self.declare_parameter("update_rate", 20.0)
+        self.declare_parameter("cmd_vel_timeout", 0.3)
 
         self.front_stop = self.get_parameter("front_stop_distance").value
         self.front_warn = self.get_parameter("front_warn_distance").value
@@ -43,6 +43,7 @@ class ObstacleAvoidanceNode(Node):
         self.side_warn = self.get_parameter("side_warn_distance").value
         self.traversability_min = self.get_parameter("terrain_traversability_min").value
         update_rate = self.get_parameter("update_rate").value
+        self.cmd_vel_timeout = self.get_parameter("cmd_vel_timeout").value
 
         # Subscribers
         self.create_subscription(Twist, '/cmd_vel_raw', self.cmd_vel_raw_callback, 10)
@@ -74,6 +75,7 @@ class ObstacleAvoidanceNode(Node):
 
         # State
         self.latest_cmd_vel_raw = Twist()
+        self.last_cmd_vel_raw_time = self.get_clock().now()
         self.terrain_status = {}
 
         self.get_logger().info(
@@ -84,6 +86,7 @@ class ObstacleAvoidanceNode(Node):
     def cmd_vel_raw_callback(self, msg: Twist):
         """Cache raw velocity command from teleop."""
         self.latest_cmd_vel_raw = msg
+        self.last_cmd_vel_raw_time = self.get_clock().now()
 
     def terrain_status_callback(self, msg: String):
         """Parse terrain status JSON."""
@@ -102,9 +105,11 @@ class ObstacleAvoidanceNode(Node):
     def timer_callback(self):
         """Main avoidance logic - filter cmd_vel_raw and publish safe cmd_vel."""
         cmd = Twist()
-        cmd.linear.x = self.latest_cmd_vel_raw.linear.x
-        cmd.linear.y = self.latest_cmd_vel_raw.linear.y
-        cmd.angular.z = self.latest_cmd_vel_raw.angular.z
+        elapsed = (self.get_clock().now() - self.last_cmd_vel_raw_time).nanoseconds * 1e-9
+        if elapsed <= self.cmd_vel_timeout:
+            cmd.linear.x = self.latest_cmd_vel_raw.linear.x
+            cmd.linear.y = self.latest_cmd_vel_raw.linear.y
+            cmd.angular.z = self.latest_cmd_vel_raw.angular.z
 
         warnings = []
 
@@ -134,9 +139,27 @@ class ObstacleAvoidanceNode(Node):
                 scale = max(0.0, min(1.0, scale))
                 cmd.linear.x *= scale
 
-        # === Side obstacle check (limit turning) ===
+        # === Side obstacle check (limit lateral motion and turning) ===
         left_min = self._get_left_min_distance()
         right_min = self._get_right_min_distance()
+
+        # Positive linear.y = move left in ROS base_link convention.
+        if cmd.linear.y > 0.001 and left_min < self.side_stop:
+            cmd.linear.y = 0.0
+            warnings.append(f"LEFT_SIDE_WALL:{left_min:.2f}m")
+        elif cmd.linear.y > 0.001 and left_min < self.side_warn:
+            scale = (left_min - self.side_stop) / (self.side_warn - self.side_stop)
+            cmd.linear.y *= max(0.0, min(1.0, scale))
+            warnings.append(f"LEFT_SIDE_APPROACH:{left_min:.2f}m")
+
+        # Negative linear.y = move right.
+        if cmd.linear.y < -0.001 and right_min < self.side_stop:
+            cmd.linear.y = 0.0
+            warnings.append(f"RIGHT_SIDE_WALL:{right_min:.2f}m")
+        elif cmd.linear.y < -0.001 and right_min < self.side_warn:
+            scale = (right_min - self.side_stop) / (self.side_warn - self.side_stop)
+            cmd.linear.y *= max(0.0, min(1.0, scale))
+            warnings.append(f"RIGHT_SIDE_APPROACH:{right_min:.2f}m")
 
         # Positive angular.z = turn left (CCW in ROS convention)
         if cmd.angular.z > 0.001 and left_min < self.side_stop:

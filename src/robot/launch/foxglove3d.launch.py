@@ -17,6 +17,8 @@ from launch.substitutions import Command, PathJoinSubstitution
 from launch_ros.parameter_descriptions import ParameterValue
 from launch.actions import TimerAction, ExecuteProcess
 import subprocess
+from launch.actions import IncludeLaunchDescription
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 
 subprocess.run(['pkill', '-f', 'foxglove_bridge'], capture_output=True)
 subprocess.run(['sleep', '1'], capture_output=True)
@@ -28,6 +30,14 @@ os.environ['ROS_USE_SIM_TIME'] = '0'
 pkg_share = get_package_share_directory('robot')
 xacro_file = os.path.join(pkg_share, 'urdf', 'robot.xacro')
 urdf_file = os.path.join(pkg_share, 'urdf', 'robot.urdf')
+nav2_share = get_package_share_directory(
+    'nav2_bringup'
+)
+NAV2_PARAMS = os.path.join(
+    pkg_share,
+    'config',
+    'nav2_params.yaml'
+)
 
 result = subprocess.run(
     ['ros2', 'run', 'xacro', 'xacro', xacro_file, '-o', urdf_file],
@@ -189,6 +199,9 @@ def generate_launch_description():
         name='chassis_controller',  # Same node name for compatibility
         output='screen',
         parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
+        remappings=[
+            ('/cmd_vel', '/cmd_vel_safe'),
+        ],
         additional_env=venv_env
     )
 
@@ -208,7 +221,11 @@ def generate_launch_description():
         executable='obstacle_avoidance',
         name='obstacle_avoidance',
         output='screen',
-        parameters=[TERRAIN_PARAMS, {'use_sim_time': False}]
+        parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
+        remappings=[
+            ('/cmd_vel_raw', '/cmd_vel'),
+            ('/cmd_vel', '/cmd_vel_safe'),
+        ]
     )
 
     # RVIZ
@@ -220,6 +237,42 @@ def generate_launch_description():
         arguments=['-d', rviz_config],
         parameters=[{'use_sim_time': False}],
         output='screen'
+    )
+
+
+    pointcloud_obstacle_filter_node = Node(
+        package='robot',
+        executable='pointcloud_obstacle_filter',
+        name='pointcloud_obstacle_filter',
+        output='screen',
+        parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
+        additional_env=venv_env
+    )
+
+
+    range_to_scan_node = Node(
+        package='robot',
+        executable='range_to_scan',
+        name='range_to_scan',
+        output='screen',
+        parameters=[{'use_sim_time': False}]
+    )
+
+
+
+    nav2_launch = IncludeLaunchDescription(
+        PythonLaunchDescriptionSource(
+            os.path.join(
+                nav2_share,
+                'launch',
+                'navigation_launch.py'
+            )
+        ),
+        launch_arguments={
+            'map': MAP_YAML_PATH,
+            'params_file': NAV2_PARAMS,
+            'use_sim_time': 'false'
+        }.items()
     )
 
     # ==================== 11. Foxglove Bridge ====================
@@ -249,6 +302,8 @@ def generate_launch_description():
         static_tf_map,
         publish_ply_node,
         virtual_ultrasonic_node,
+        range_to_scan_node,
+        pointcloud_obstacle_filter_node,
         controller_manager,
         zero_commands,
         chassis_feedback_node,
@@ -257,6 +312,7 @@ def generate_launch_description():
         obstacle_avoidance_node,
         # rviz_node,
         foxglove_bridge,
+        nav2_launch,
     ])
 
     for spawner in spawners:

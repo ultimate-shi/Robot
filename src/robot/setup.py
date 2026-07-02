@@ -48,6 +48,8 @@ setup(
             'chassis_controller_3d = robot.chassis_controller_3d:main',
             'virtual_imu = robot.virtual_imu_node:main',
             'obstacle_avoidance = robot.obstacle_avoidance_node:main',
+            'range_to_scan = robot.range_to_scan_node:main',
+            'pointcloud_obstacle_filter = robot.pointcloud_obstacle_filter:main',
         ],
     },
 )

@@ -39,3 +39,16 @@ obstacle_avoidance:
     side_warn_distance: 0.25         # Reduce turn rate when side < 25cm
     terrain_traversability_min: 0.3  # Min traversability to proceed
     update_rate: 20.0                # 20Hz avoidance check
+    cmd_vel_timeout: 0.3           # Stop if no new cmd_vel arrives for 300ms
+
+pointcloud_obstacle_filter:
+  ros__parameters:
+    input_topic: /perception/points
+    output_topic: /nav/obstacle_points
+    target_frame: map
+    robot_base_frame: base_link
+    min_obstacle_height: 0.05
+    max_obstacle_height: 0.80
+    local_radius: 4.0
+    voxel_size: 0.05
+    max_points: 20000

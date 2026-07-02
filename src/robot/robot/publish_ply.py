@@ -1,65 +1,91 @@
 #!/usr/bin/env python3
-import rclpy
+
+import os
+
+from ament_index_python.packages import get_package_share_directory
 import numpy as np
+import rclpy
+from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import Header
-from rclpy.executors import ExternalShutdownException
+
 try:
     from plyfile import PlyData
-except:
-    print("❌ 未安装plyfile，请运行：pip install plyfile")
+except ImportError:
+    PlyData = None
+
 
 class PLYPublisher(Node):
+    """Publish an offline PLY map as reusable PointCloud2 topics."""
+
     def __init__(self):
         super().__init__('ply_publisher')
-        
-        self.pub = self.create_publisher(PointCloud2, '/pointcloud', 10)
-        self.timer = self.create_timer(0.5, self.publish_cloud)
-        
-        # 🔥 强制绝对路径（launch模式下100%找到文件）
-        self.ply_file = "/home/shijiahao/Downloads/ros2/robot_ws/src/robot/map/studyroom.ply"
-        self.points = None
-        
-        # 🔥 加异常捕获：加载失败直接打印错误
-        try:
-            self.load_ply()
-            self.get_logger().info(f"✅ 成功加载点云：{len(self.points)} 个点")
-        except Exception as e:
-            self.get_logger().error(f"❌ 加载PLY失败：{str(e)}")
-            # 加载失败时，发布测试点（和simple_pc一样，保证能显示）
-            self.points = np.array([[0,0,0], [0.1,0.1,0.1]], dtype=np.float32)
 
-    def load_ply(self):
-        plydata = PlyData.read(self.ply_file)
-        x = plydata['vertex']['x']
-        y = plydata['vertex']['y']
-        z = plydata['vertex']['z']
-        self.points = np.column_stack((x, y, z)).astype(np.float32)
+        pkg_share = get_package_share_directory('robot')
+        default_ply = os.path.join(pkg_share, 'map', 'studyroom.ply')
+
+        self.declare_parameter('ply_file', default_ply)
+        self.declare_parameter('frame_id', 'map')
+        self.declare_parameter('publish_period', 0.5)
+        self.declare_parameter('display_topic', '/pointcloud')
+        self.declare_parameter('perception_topic', '/perception/points')
+
+        self.ply_file = self.get_parameter('ply_file').value
+        self.frame_id = self.get_parameter('frame_id').value
+        period = self.get_parameter('publish_period').value
+        display_topic = self.get_parameter('display_topic').value
+        perception_topic = self.get_parameter('perception_topic').value
+
+        self.display_pub = self.create_publisher(PointCloud2, display_topic, 10)
+        self.perception_pub = self.create_publisher(PointCloud2, perception_topic, 10)
+        self.points = self._load_points()
+
+        self.timer = self.create_timer(period, self.publish_cloud)
+        self.get_logger().info(
+            f'PLYPublisher loaded {len(self.points)} points from {self.ply_file}; '
+            f'publishing {display_topic} and {perception_topic}'
+        )
+
+    def _load_points(self):
+        if PlyData is None:
+            self.get_logger().error('plyfile is not installed; publishing fallback test cloud')
+            return np.array([[0.0, 0.0, 0.0], [0.1, 0.1, 0.1]], dtype=np.float32)
+
+        try:
+            plydata = PlyData.read(self.ply_file)
+            vertex = plydata['vertex']
+            return np.column_stack((vertex['x'], vertex['y'], vertex['z'])).astype(np.float32)
+        except Exception as exc:
+            self.get_logger().error(f'Failed to load PLY: {exc}')
+            return np.array([[0.0, 0.0, 0.0], [0.1, 0.1, 0.1]], dtype=np.float32)
 
     def publish_cloud(self):
+        cloud = self._make_cloud()
+        self.display_pub.publish(cloud)
+        self.perception_pub.publish(cloud)
+
+    def _make_cloud(self):
         header = Header()
         header.stamp = self.get_clock().now().to_msg()
-        header.frame_id = "map"  # 必须和地图一致
+        header.frame_id = self.frame_id
 
-        # 字段格式和simple_pc完全一致
-        fields = [
+        cloud = PointCloud2()
+        cloud.header = header
+        cloud.height = 1
+        cloud.width = len(self.points)
+        cloud.fields = [
             PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
             PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
             PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
         ]
-
-        cloud = PointCloud2()
-        cloud.header = header
-        cloud.width = len(self.points)
-        cloud.height = 1
-        cloud.fields = fields
+        cloud.is_bigendian = False
         cloud.point_step = 12
-        cloud.row_step = cloud.width * 12
+        cloud.row_step = cloud.width * cloud.point_step
         cloud.data = self.points.tobytes()
         cloud.is_dense = True
+        return cloud
 
-        self.pub.publish(cloud)
 
 def main(args=None):
     rclpy.init(args=args)
@@ -67,11 +93,12 @@ def main(args=None):
     try:
         rclpy.spin(node)
     except (KeyboardInterrupt, ExternalShutdownException):
-        pass  # 正常退出，不打印traceback
+        pass
     finally:
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
+
 
 if __name__ == '__main__':
     main()
