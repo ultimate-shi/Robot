@@ -20,6 +20,7 @@ import math
 
 import rclpy
 from rclpy.node import Node
+from rclpy.duration import Duration
 
 from sensor_msgs.msg import Range
 from sensor_msgs.msg import LaserScan
@@ -141,8 +142,10 @@ class RangeToScan(Node):
 
         scan = LaserScan()
 
-        scan.header.stamp = \
-            self.get_clock().now().to_msg()
+        # 使用略早于当前时刻的时间戳，避免 collision_monitor 查询 TF 时请求到未来。
+        scan.header.stamp = (
+            self.get_clock().now() - Duration(seconds=0.05)
+        ).to_msg()
 
         scan.header.frame_id = "base_link"
 

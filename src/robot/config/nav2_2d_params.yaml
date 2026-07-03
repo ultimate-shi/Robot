@@ -3,8 +3,8 @@
 # 本配置基于 ROS 2 Jazzy nav2_bringup 默认参数补全，避免 bt_navigator、controller_server 等
 # lifecycle 节点因缺少插件参数停在 unconfigured。
 # global_costmap 使用 /map 静态 2D 地图做全局规划。
-# local_costmap 使用 VoxelLayer 订阅 /nav/obstacle_points 点云做局部避障。
-# /nav/obstacle_points 来自 pointcloud_obstacle_filter，是仿真 PLY 或现实双目点云的统一障碍物接口。
+# local_costmap 默认只保留膨胀层，不订阅 /nav/obstacle_points。
+# 这个文件用于先验证 Foxglove 目标点 -> Nav2 -> /cmd_vel -> 底盘控制链路能让车动起来。
 # 删除风险：Nav2 会缺少导航服务器和代价地图配置，/navigate_to_pose action 不会可用。
 
 bt_navigator:
@@ -28,7 +28,7 @@ bt_navigator:
 controller_server:
   ros__parameters:
     controller_frequency: 10.0
-    costmap_update_timeout: 0.30
+    costmap_update_timeout: 2.0
     min_x_velocity_threshold: 0.001
     min_y_velocity_threshold: 0.5
     min_theta_velocity_threshold: 0.001
@@ -57,7 +57,7 @@ controller_server:
       max_lookahead_dist: 0.60
       lookahead_time: 1.5
       rotate_to_heading_angular_vel: 0.5
-      transform_tolerance: 0.2
+      transform_tolerance: 0.5
       use_velocity_scaled_lookahead_dist: false
       min_approach_linear_velocity: 0.03
       approach_velocity_scaling_dist: 0.50
@@ -87,33 +87,10 @@ local_costmap:
       resolution: 0.05
       robot_radius: 0.25
       plugins:
-        - voxel_layer
         - inflation_layer
       always_send_full_costmap: true
 
-      voxel_layer:
-        plugin: "nav2_costmap_2d::VoxelLayer"
-        enabled: true
-        publish_voxel_map: true
-        origin_z: 0.0
-        z_resolution: 0.05
-        z_voxels: 16
-        max_obstacle_height: 0.80
-        mark_threshold: 0
-        observation_sources: obstacle_points
-
-        obstacle_points:
-          topic: /nav/obstacle_points
-          data_type: "PointCloud2"
-          marking: true
-          clearing: true
-          obstacle_max_range: 3.0
-          obstacle_min_range: 0.0
-          raytrace_max_range: 4.0
-          raytrace_min_range: 0.0
-          min_obstacle_height: 0.05
-          max_obstacle_height: 0.80
-
+      # 2D 调试模式不接入点云障碍物，避免 /nav/obstacle_points 或 /scan 缺失时阻塞控制输出。
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"
         cost_scaling_factor: 3.0
@@ -206,7 +183,7 @@ route_server:
     boundary_radius_to_achieve_node: 1.0
     radius_to_achieve_node: 2.0
     smooth_corners: true
-    operations: ["AdjustSpeedLimit", "ReroutingService", "CollisionMonitor"]
+    operations: ["AdjustSpeedLimit", "ReroutingService"]
     ReroutingService:
       plugin: "nav2_route::ReroutingService"
     AdjustSpeedLimit:
@@ -246,24 +223,23 @@ collision_monitor:
     source_timeout: 2.0
     base_shift_correction: false
     stop_pub_timeout: 2.0
-    polygons: ["FootprintApproach"]
-    FootprintApproach:
+    # 2D 调试模式先禁用 collision_monitor 的传感器拦截，避免没有 /scan 时把速度置零。
+    polygons: ["PolygonStop"]
+    PolygonStop:
       type: "polygon"
-      action_type: "approach"
-      footprint_topic: /local_costmap/published_footprint
-      time_before_collision: 1.2
-      simulation_time_step: 0.1
-      min_points: 3
-      max_points: 3
+      points: "[[0.30, 0.25], [0.30, -0.25], [-0.25, -0.25], [-0.25, 0.25]]"
+      action_type: "stop"
+      min_points: 4
+      max_points: 4
       visualize: false
-      enabled: true
+      enabled: false
     observation_sources: ["scan"]
     scan:
       type: "scan"
       topic: /scan
       min_height: 0.05
       max_height: 0.80
-      enabled: true
+      enabled: false
 
 docking_server:
   ros__parameters:

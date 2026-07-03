@@ -49,6 +49,8 @@ class ChassisController3D(Node):
         self.declare_parameter("track", 0.2)
         self.declare_parameter("radius", 0.05)
         self.declare_parameter("motion_mode", "crab")
+        self.declare_parameter("steering_limit", 1.57)
+        self.declare_parameter("ackermann_min_turning_speed", 0.04)
         # Terrain parameters
         self.declare_parameter("terrain_check_enabled", True)
         self.declare_parameter("grid_resolution", 0.02)
@@ -63,7 +65,19 @@ class ChassisController3D(Node):
         self.wheel_base = self.get_parameter("wheelbase").value
         self.wheel_track = self.get_parameter("track").value
         self.wheel_radius = self.get_parameter("radius").value
-        self.motion_mode = self.get_parameter("motion_mode").value
+        self.valid_motion_modes = {"crab", "four_ws", "ackermann"}
+        configured_mode = str(self.get_parameter("motion_mode").value).strip()
+        if configured_mode not in self.valid_motion_modes:
+            self.get_logger().error(
+                f"Invalid motion_mode '{configured_mode}'. "
+                "Valid values: crab, four_ws, ackermann. Fallback to four_ws."
+            )
+            configured_mode = "four_ws"
+        self.motion_mode = configured_mode
+        self.steering_limit = float(self.get_parameter("steering_limit").value)
+        self.ackermann_min_turning_speed = float(
+            self.get_parameter("ackermann_min_turning_speed").value
+        )
         self.terrain_enabled = self.get_parameter("terrain_check_enabled").value
 
         self.Lx = self.wheel_base / 2.0
@@ -127,13 +141,37 @@ class ChassisController3D(Node):
             f"terrain_status_subscription: {'ON' if self.terrain_enabled else 'OFF'}"
         )
 
+    def validate_motion_mode(self, mode):
+        """检查运动模式名称，拼写错误时给出明确提示，不自动改成其他模式。"""
+        mode_name = str(mode).strip()
+        if mode_name in self.valid_motion_modes:
+            return mode_name, ""
+        reason = (
+            f"Invalid motion_mode '{mode_name}'. "
+            "Valid values: crab, four_ws, ackermann."
+        )
+        return None, reason
+
     # ==================== Parameter callback ====================
     def parameter_callback(self, params):
         for param in params:
             if param.name == "motion_mode":
-                self.motion_mode = param.value
+                mode_name, reason = self.validate_motion_mode(param.value)
+                if mode_name is None:
+                    self.get_logger().error(reason)
+                    return SetParametersResult(successful=False, reason=reason)
+                self.motion_mode = mode_name
+                self.prev_angles = [0.0, 0.0, 0.0, 0.0]
                 self.get_logger().info(f"Mode changed: {self.motion_mode}")
                 self.mode_pub.publish(String(data=self.motion_mode))
+            elif param.name == "steering_limit":
+                self.steering_limit = float(param.value)
+                self.get_logger().info(f"Steering limit changed: {self.steering_limit:.3f} rad")
+            elif param.name == "ackermann_min_turning_speed":
+                self.ackermann_min_turning_speed = float(param.value)
+                self.get_logger().info(
+                    f"Ackermann min turning speed changed: {self.ackermann_min_turning_speed:.3f} m/s"
+                )
         return SetParametersResult(successful=True)
 
     # ==================== cmd_vel callback ====================
@@ -173,7 +211,7 @@ class ChassisController3D(Node):
 
         # Mode kinematics
         if self.motion_mode == "crab":
-            angles, speeds = self.mode_crab(vx, vy)
+            angles, speeds = self.mode_crab(vx, vy, w)
         elif self.motion_mode == "four_ws":
             angles, speeds = self.mode_four_ws(vx, w)
         elif self.motion_mode == "ackermann":
@@ -181,7 +219,7 @@ class ChassisController3D(Node):
         else:
             angles, speeds = self.stop_command()
 
-        # Minimum steering angle optimization
+        # 三种运动模式统一经过转向限幅，保证不超过 URDF 中的 ±90° 机械范围。
         opt_angles = []
         opt_speeds = []
         for i in range(4):
@@ -203,9 +241,13 @@ class ChassisController3D(Node):
         self.speed_pub.publish(Float64MultiArray(data=opt_speeds))
 
     # ==================== Motion modes ====================
-    def mode_crab(self, vx, vy):
-        if abs(vx) < 1e-3 and abs(vy) < 1e-3:
+    def mode_crab(self, vx, vy, w):
+        if abs(vx) < 1e-3 and abs(vy) < 1e-3 and abs(w) < 1e-3:
             return self.stop_command()
+        if abs(w) > 1e-3 and abs(vy) < 1e-3:
+            # Nav2 会输出 angular.z 调整朝向；crab 模式保留平移能力，
+            # 但遇到转向命令时复用四轮转向刚体运动学，否则导航会原地不动。
+            return self.mode_four_ws(vx, w)
         angle = math.atan2(vy, vx)
         speed = math.hypot(vx, vy) / self.wheel_radius
         return [angle] * 4, [speed] * 4
@@ -213,44 +255,50 @@ class ChassisController3D(Node):
     def mode_four_ws(self, vx, w):
         if abs(vx) < 1e-3 and abs(w) < 1e-3:
             return self.stop_command()
-        if abs(w) < 1e-5:
-            return [0.0] * 4, [vx / self.wheel_radius] * 4
 
-        R = vx / w
-        delta_fl = math.atan2(self.wheel_base / 2, R - self.wheel_track / 2)
-        delta_fr = math.atan2(self.wheel_base / 2, R + self.wheel_track / 2)
-        delta_rl = -math.atan2(self.wheel_base / 2, R - self.wheel_track / 2)
-        delta_rr = -math.atan2(self.wheel_base / 2, R + self.wheel_track / 2)
-
-        v_fl = abs(w) * math.hypot(R - self.wheel_track / 2, self.wheel_base / 2)
-        v_fr = abs(w) * math.hypot(R + self.wheel_track / 2, self.wheel_base / 2)
-        v_rl = abs(w) * math.hypot(R - self.wheel_track / 2, self.wheel_base / 2)
-        v_rr = abs(w) * math.hypot(R + self.wheel_track / 2, self.wheel_base / 2)
-
-        sign = 1.0 if vx >= 0 else -1.0
-        angles = [delta_fl, delta_fr, delta_rl, delta_rr]
-        speeds = [
-            (v_fl * sign) / self.wheel_radius,
-            (v_fr * sign) / self.wheel_radius,
-            (v_rl * sign) / self.wheel_radius,
-            (v_rr * sign) / self.wheel_radius
+        # Nav2 输出的是 base_link 下的线速度 vx 和角速度 w。
+        # 四轮独立转向按刚体速度场计算每个轮心的目标速度，
+        # 这样原地旋转时四个轮子的方向和速度符号会与里程计公式一致。
+        wheel_positions = [
+            (self.Lx, self.Ly),    # front_left
+            (self.Lx, -self.Ly),   # front_right
+            (-self.Lx, self.Ly),   # rear_left
+            (-self.Lx, -self.Ly),  # rear_right
         ]
+
+        angles = []
+        speeds = []
+        for x_i, y_i in wheel_positions:
+            wheel_vx = vx - w * y_i
+            wheel_vy = w * x_i
+            if abs(wheel_vx) < 1e-6 and abs(wheel_vy) < 1e-6:
+                angles.append(0.0)
+                speeds.append(0.0)
+                continue
+            angles.append(math.atan2(wheel_vy, wheel_vx))
+            speeds.append(math.hypot(wheel_vx, wheel_vy) / self.wheel_radius)
         return angles, speeds
 
     def mode_ackermann(self, vx, w):
         if abs(vx) < 1e-3 and abs(w) < 1e-3:
             return self.stop_command()
+        if abs(vx) < 1e-3:
+            # Ackermann 结构不能原地旋转。Nav2 若请求原地调整朝向，
+            # 给一个很小的前进速度让车以最小半径缓慢转向，避免完全不动。
+            vx = math.copysign(self.ackermann_min_turning_speed, w)
         if abs(w) < 1e-3:
-            return [0, 0, 0, 0], [vx / self.wheel_radius] * 4
+            return [0.0, 0.0, 0.0, 0.0], [vx / self.wheel_radius] * 4
 
         R_icr = vx / w
-        delta_l = math.atan(self.wheel_base / (R_icr - self.wheel_track / 2))
-        delta_r = math.atan(self.wheel_base / (R_icr + self.wheel_track / 2))
+        left_radius = R_icr - self.wheel_track / 2.0
+        right_radius = R_icr + self.wheel_track / 2.0
+        delta_l = math.atan2(self.wheel_base, left_radius)
+        delta_r = math.atan2(self.wheel_base, right_radius)
 
-        v_fl = w * math.hypot(R_icr - self.wheel_track / 2, self.wheel_base)
-        v_fr = w * math.hypot(R_icr + self.wheel_track / 2, self.wheel_base)
-        v_rl = w * (R_icr - self.wheel_track / 2)
-        v_rr = w * (R_icr + self.wheel_track / 2)
+        v_fl = w * math.hypot(left_radius, self.wheel_base)
+        v_fr = w * math.hypot(right_radius, self.wheel_base)
+        v_rl = w * left_radius
+        v_rr = w * right_radius
 
         angles = [delta_l, delta_r, 0.0, 0.0]
         speeds = [
@@ -262,24 +310,30 @@ class ChassisController3D(Node):
         return angles, speeds
 
     def optimize_steering(self, target_angle, target_speed, prev_angle):
-        a1 = math.atan2(math.sin(target_angle), math.cos(target_angle))
-        s1 = target_speed
-        a2 = math.atan2(math.sin(target_angle + math.pi), math.cos(target_angle + math.pi))
-        s2 = -target_speed
+        del prev_angle
+        if abs(target_speed) < 1e-6:
+            return 0.0, 0.0
 
-        d1 = abs(math.atan2(math.sin(a1 - prev_angle), math.cos(a1 - prev_angle)))
-        d2 = abs(math.atan2(math.sin(a2 - prev_angle), math.cos(a2 - prev_angle)))
+        # 转向电机在 URDF 中限制为 ±90°。超过范围的目标角不能直接发布，
+        # 等价转换为反向轮速 + 限幅内舵角，避免前进时轮子转到 180°。
+        angle = math.atan2(math.sin(target_angle), math.cos(target_angle))
+        speed = target_speed
+        if angle > math.pi / 2.0:
+            angle -= math.pi
+            speed = -speed
+        elif angle < -math.pi / 2.0:
+            angle += math.pi
+            speed = -speed
 
-        if d1 <= d2:
-            return a1, s1
-        else:
-            return a2, s2
+        angle = max(-self.steering_limit, min(self.steering_limit, angle))
+        return angle, speed
 
     def stop_command(self):
         return [0.0] * 4, [0.0] * 4
 
     def send_stop(self):
         ang, spd = self.stop_command()
+        self.prev_angles = ang
         self.steer_pub.publish(Float64MultiArray(data=ang))
         self.speed_pub.publish(Float64MultiArray(data=spd))
 

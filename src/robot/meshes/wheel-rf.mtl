@@ -1,5 +1,5 @@
-newmtl black
-Kd 0.2 0.2 0.2
+newmtl grey
+Kd 0.62 0.62 0.62
 Ns 250
 d 1.0
 illum 2

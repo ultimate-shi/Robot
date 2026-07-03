@@ -10,10 +10,13 @@
 chassis_controller:
   ros__parameters:
     # Original chassis parameters
+    # Nav2 默认输出 linear.x + angular.z，four_ws 能响应原地/转向角速度。
     wheelbase: 0.4
     track: 0.2
     radius: 0.05
-    motion_mode: "crab"
+    motion_mode: "four_ws"
+    steering_limit: 1.57              # Match URDF steer joint limit: -90deg to +90deg
+    ackermann_min_turning_speed: 0.04  # Small forward speed when Nav2 asks Ackermann to rotate in place
 
     # Terrain status integration
     terrain_check_enabled: true

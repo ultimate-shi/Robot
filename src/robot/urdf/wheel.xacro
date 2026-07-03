@@ -24,8 +24,8 @@
           <mesh filename="package://robot/meshes/wheel-rf.obj"
                 scale="${mesh_scale}"/>
         </geometry>
-        <!-- 使用黑色橡胶材质，需确保材质文件已包含 -->
-        <xacro:get_material_by_name material_name="tire_black"/>
+        <!-- 使用浅灰色轮胎材质，便于 Foxglove/RViz 观察轮子姿态。 -->
+        <xacro:get_material_by_name material_name="tire_gray"/>
       </visual>
       
       <collision>

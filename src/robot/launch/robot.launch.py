@@ -25,12 +25,13 @@ import os
 from launch import LaunchDescription
 from launch_ros.actions import Node, LifecycleNode
 from ament_index_python.packages import get_package_share_directory
-from launch.substitutions import Command, PathJoinSubstitution
+from launch.substitutions import Command, PathJoinSubstitution, LaunchConfiguration, PythonExpression
 from launch_ros.parameter_descriptions import ParameterValue
-from launch.actions import TimerAction, ExecuteProcess
+from launch.actions import TimerAction, ExecuteProcess, DeclareLaunchArgument
 import subprocess
 from launch.actions import IncludeLaunchDescription
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.conditions import IfCondition, UnlessCondition
 
 subprocess.run(['pkill', '-f', 'foxglove_bridge'], capture_output=True)
 subprocess.run(['sleep', '1'], capture_output=True)
@@ -49,6 +50,16 @@ NAV2_PARAMS = os.path.join(
     pkg_share,
     'config',
     'nav2_params.yaml'
+)
+NAV2_2D_PARAMS = os.path.join(
+    pkg_share,
+    'config',
+    'nav2_2d_params.yaml'
+)
+BLANK_MAP_YAML = os.path.join(
+    pkg_share,
+    'map',
+    'blank.yaml'
 )
 
 result = subprocess.run(
@@ -76,6 +87,47 @@ def generate_launch_description():
             + os.environ.get("PYTHONPATH", "")
     }
 
+    # 初始位姿只设置 map->odom 的平面偏移。
+    # 高度、横滚和俯仰由 /perception/points 生成的 /terrain_status 动态写入 /odom，
+    # 不在静态 TF 中写死 z，避免和凹凸地形点云冲突。
+    initial_x = LaunchConfiguration('initial_x')
+    initial_y = LaunchConfiguration('initial_y')
+    initial_yaw = LaunchConfiguration('initial_yaw')
+    use_pointcloud_map = LaunchConfiguration('use_pointcloud_map')
+    nav2_params_file = LaunchConfiguration('nav2_params_file')
+    # 一个参数同时控制真实地图和点云链路：false 用空白 map，true 用 studyroom map + PLY 点云。
+    map_yaml_file = PythonExpression([
+        '"', MAP_YAML_PATH, '" if "', use_pointcloud_map, '" == "true" else "',
+        BLANK_MAP_YAML, '"'
+    ])
+
+    declare_initial_x = DeclareLaunchArgument(
+        'initial_x',
+        default_value='0.0',
+        description='Initial robot x position in the map frame'
+    )
+    declare_initial_y = DeclareLaunchArgument(
+        'initial_y',
+        default_value='0.0',
+        description='Initial robot y position in the map frame'
+    )
+    declare_initial_yaw = DeclareLaunchArgument(
+        'initial_yaw',
+        default_value='0.0',
+        description='Initial robot yaw in radians in the map frame'
+    )
+    # 默认先不启动点云/地形链路，便于只用 2D map 验证 Nav2 能否驱动车体。
+    declare_use_pointcloud_map = DeclareLaunchArgument(
+        'use_pointcloud_map',
+        default_value='false',
+        description='Start PLY point cloud, terrain, ultrasonic and point cloud obstacle nodes'
+    )
+    declare_nav2_params_file = DeclareLaunchArgument(
+        'nav2_params_file',
+        default_value=NAV2_2D_PARAMS,
+        description='Nav2 parameter file. Default uses 2D map only without point cloud local obstacles'
+    )
+
     # ==================== 1. URDF Robot Description ====================
     robot_description_content = Command(f'ros2 run xacro xacro {xacro_file}')
     robot_description = {
@@ -102,7 +154,7 @@ def generate_launch_description():
         namespace='',
         output='screen',
         parameters=[
-            {'yaml_filename': MAP_YAML_PATH},
+            {'yaml_filename': map_yaml_file},
             {'use_sim_time': False}
         ]
     )
@@ -120,11 +172,18 @@ def generate_launch_description():
     )
 
     # Static TF: map -> odom
+    # 通过移动 odom 原点设置小车在 map 中的初始平面位置。
     static_tf_map = Node(
         package='tf2_ros',
         executable='static_transform_publisher',
         name='static_tf_map',
         arguments=[
+            '--x', initial_x,
+            '--y', initial_y,
+            '--z', '0.0',
+            '--yaw', initial_yaw,
+            '--pitch', '0.0',
+            '--roll', '0.0',
             '--frame-id', 'map',
             '--child-frame-id', 'odom'
         ],
@@ -137,7 +196,8 @@ def generate_launch_description():
         executable='publish_ply',
         name='publish_ply',
         output='screen',
-        additional_env=venv_env
+        additional_env=venv_env,
+        condition=IfCondition(use_pointcloud_map)
     )
 
     # ==================== 5. Virtual Ultrasonic (original, 8 sensors) ====================
@@ -147,7 +207,8 @@ def generate_launch_description():
         name='virtual_ultrasonic',
         output='screen',
         parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
-        additional_env=venv_env
+        additional_env=venv_env,
+        condition=IfCondition(use_pointcloud_map)
     )
 
     # ==================== 6. ros2_control ====================
@@ -206,7 +267,19 @@ def generate_launch_description():
     )
 
     # ==================== 8. Chassis Controller Node ====================
-    chassis_controller_node = Node(
+    # 空白地图调试模式下，底盘直接订阅 /cmd_vel，避免安全层持续发布零速度干扰底盘排查。
+    chassis_controller_direct_node = Node(
+        package='robot',
+        executable='chassis_controller_node',
+        name='chassis_controller',  # Same node name for compatibility
+        output='screen',
+        parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
+        additional_env=venv_env,
+        condition=UnlessCondition(use_pointcloud_map)
+    )
+
+    # 点云模式下保留 /cmd_vel -> obstacle_avoidance -> /cmd_vel_safe -> chassis 的安全链路。
+    chassis_controller_safe_node = Node(
         package='robot',
         executable='chassis_controller_node',
         name='chassis_controller',  # Same node name for compatibility
@@ -215,7 +288,8 @@ def generate_launch_description():
         remappings=[
             ('/cmd_vel', '/cmd_vel_safe'),
         ],
-        additional_env=venv_env
+        additional_env=venv_env,
+        condition=IfCondition(use_pointcloud_map)
     )
 
     # ==================== 9. Virtual IMU (NEW) ====================
@@ -238,7 +312,8 @@ def generate_launch_description():
         remappings=[
             ('/cmd_vel_raw', '/cmd_vel'),
             ('/cmd_vel', '/cmd_vel_safe'),
-        ]
+        ],
+        condition=IfCondition(use_pointcloud_map)
     )
 
     # RVIZ
@@ -259,7 +334,8 @@ def generate_launch_description():
         name='pointcloud_obstacle_filter',
         output='screen',
         parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
-        additional_env=venv_env
+        additional_env=venv_env,
+        condition=IfCondition(use_pointcloud_map)
     )
 
 
@@ -270,7 +346,8 @@ def generate_launch_description():
         name='terrain_analyzer',
         output='screen',
         parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
-        additional_env=venv_env
+        additional_env=venv_env,
+        condition=IfCondition(use_pointcloud_map)
     )
 
     range_to_scan_node = Node(
@@ -278,7 +355,8 @@ def generate_launch_description():
         executable='range_to_scan',
         name='range_to_scan',
         output='screen',
-        parameters=[{'use_sim_time': False}]
+        parameters=[{'use_sim_time': False}],
+        condition=IfCondition(use_pointcloud_map)
     )
 
 
@@ -292,8 +370,8 @@ def generate_launch_description():
             )
         ),
         launch_arguments={
-            'map': MAP_YAML_PATH,
-            'params_file': NAV2_PARAMS,
+            'map': map_yaml_file,
+            'params_file': nav2_params_file,
             'use_sim_time': 'false'
         }.items()
     )
@@ -319,6 +397,11 @@ def generate_launch_description():
 
     # ==================== Assemble Launch ====================
     ld = LaunchDescription([
+        declare_initial_x,
+        declare_initial_y,
+        declare_initial_yaw,
+        declare_use_pointcloud_map,
+        declare_nav2_params_file,
         robot_state_publisher,
         map_server_node,
         map_lifecycle_manager,
@@ -331,7 +414,8 @@ def generate_launch_description():
         controller_manager,
         zero_commands,
         chassis_feedback_node,
-        chassis_controller_node,
+        chassis_controller_direct_node,
+        chassis_controller_safe_node,
         virtual_imu_node,
         obstacle_avoidance_node,
         # rviz_node,
