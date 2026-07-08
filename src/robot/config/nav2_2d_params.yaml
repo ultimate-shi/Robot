@@ -4,7 +4,7 @@
 # lifecycle 节点因缺少插件参数停在 unconfigured。
 # global_costmap 使用 /map 静态 2D 地图做全局规划。
 # local_costmap 默认只保留膨胀层，不订阅 /nav/obstacle_points。
-# 这个文件用于先验证 Foxglove 目标点 -> Nav2 -> /cmd_vel -> 底盘控制链路能让车动起来。
+# 这个文件用于先验证 Foxglove 目标点 -> Nav2 -> /cmd_vel_nav -> nav_controller_node -> /cmd_vel -> 底盘控制链路能让车动起来。
 # 删除风险：Nav2 会缺少导航服务器和代价地图配置，/navigate_to_pose action 不会可用。
 
 bt_navigator:
@@ -217,7 +217,7 @@ collision_monitor:
     base_frame_id: base_link
     odom_frame_id: odom
     cmd_vel_in_topic: cmd_vel_smoothed
-    cmd_vel_out_topic: cmd_vel
+    cmd_vel_out_topic: cmd_vel_nav
     state_topic: collision_monitor_state
     transform_tolerance: 0.5
     source_timeout: 2.0

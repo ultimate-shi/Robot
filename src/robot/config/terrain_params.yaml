@@ -49,6 +49,35 @@ obstacle_avoidance:
     update_rate: 20.0                # 20Hz avoidance check
     cmd_vel_timeout: 0.3           # Stop if no new cmd_vel arrives for 300ms
 
+reverse_node:
+  ros__parameters:
+    reverse_distance: 0.8          # 每次自动原路回退的目标距离，单位 m
+    reverse_speed: -0.06           # 回退线速度，负值表示倒车，单位 m/s
+    max_angular_speed: 0.35        # 回退时最大角速度，单位 rad/s
+    history_distance: 5.0          # 最多保留最近 5m 轨迹用于原路回退
+    history_timeout: 60.0          # 最多保留最近 60s 轨迹
+    sample_distance: 0.03          # /odom 轨迹抽样间隔，单位 m
+    rear_stop_distance: 0.15       # 后向超声波小于该距离时立即停止回退
+    safe_ultrasonic_distance: 0.25 # 后向障碍进入该距离后主动降低回退速度
+    control_rate: 20.0             # 回退控制频率，单位 Hz
+    lookahead_distance: 0.12       # 沿历史轨迹反向跟踪的前瞻距离，单位 m
+    angular_gain: 1.6             # 倒车沿历史轨迹修正方向的角速度增益
+
+nav_controller_node:
+  ros__parameters:
+    update_rate: 20.0              # 速度仲裁循环频率，单位 Hz
+    stuck_timeout: 2.5             # Nav2 有速度但该时间内位移不足则判定卡住
+    stuck_distance: 0.03           # stuck_timeout 内最小期望位移，单位 m
+    nav_cmd_active_threshold: 0.02 # 判断 /cmd_vel_nav 为运动命令的阈值
+    safe_cmd_zero_threshold: 0.01  # 判断 /cmd_vel_safe 接近 0 的阈值
+    safe_block_timeout: 1.5        # 安全层持续拦停达到该时间后触发回退
+    cmd_vel_timeout: 0.5           # 上游速度命令超时时间，单位 s
+    reverse_distance: 0.8          # 请求 reverse_node 回退的距离，单位 m
+    max_recovery_attempts: 3       # 同一目标最多自动回退 3 次，第 4 次卡住取消目标
+    goal_idle_reset_time: 3.0      # Nav2 停止输出后清零恢复次数的空闲时间
+    reverse_retry_cooldown: 3.0    # 回退失败后暂停自动再次请求回退的时间，避免反复发布零速度
+
+
 pointcloud_obstacle_filter:
   ros__parameters:
     input_topic: /perception/points

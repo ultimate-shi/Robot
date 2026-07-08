@@ -42,13 +42,14 @@ class PLYPublisher(Node):
         pkg_share = get_package_share_directory('robot')
         default_ply = os.path.join(pkg_share, 'map', 'studyroom.ply')
 
-        self.declare_parameter('ply_file', default_ply)
+        self.declare_parameter('ply_file', '')
         self.declare_parameter('frame_id', 'map')
         self.declare_parameter('publish_period', 0.5)
         self.declare_parameter('display_topic', '/pointcloud')
         self.declare_parameter('perception_topic', '/perception/points')
 
-        self.ply_file = self.get_parameter('ply_file').value
+        requested_ply = str(self.get_parameter('ply_file').value).strip()
+        self.ply_file = requested_ply if requested_ply else default_ply
         self.frame_id = self.get_parameter('frame_id').value
         period = self.get_parameter('publish_period').value
         display_topic = self.get_parameter('display_topic').value

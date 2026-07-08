@@ -12,7 +12,7 @@ ros2 launch robot robot.launch.py
 
 `robot.launch.py` 现在支持两种模式，由 `use_pointcloud_map` 一个参数控制。
 
-### 默认 2D 调试模式
+### 默认点云地图模式
 
 ```bash
 ros2 launch robot robot.launch.py
@@ -21,59 +21,63 @@ ros2 launch robot robot.launch.py
 等价于：
 
 ```bash
-ros2 launch robot robot.launch.py use_pointcloud_map:=false
+ros2 launch robot robot.launch.py use_pointcloud_map:=true
 ```
 
-默认模式用于先确认 Foxglove 目标点、Nav2 和底盘控制链路能让小车动起来。它会使用空白 2D 地图 `blank.yaml`，不启动 PLY 点云、点云过滤、虚拟超声波、地形分析、`range_to_scan` 和 `obstacle_avoidance`。
+默认模式使用 `studyroom.yaml` 作为 2D 地图，同时启动 `studyroom.ply` 点云、点云障碍物过滤、虚拟超声波、地形分析、`range_to_scan` 和 `obstacle_avoidance`。超声波避障会把 nav_controller_node 输出的 `/cmd_vel` 过滤成 `/cmd_vel_safe`，底盘只执行安全速度，避免贴近障碍物时继续前进或转向撞墙。
 
 默认模式速度链路：
 
 ```text
-Nav2 -> /cmd_vel -> chassis_controller_node -> /steering_controller/commands
-                                     -> /wheel_controller/commands
+Nav2 -> /cmd_vel_nav -> nav_controller_node -> /cmd_vel -> obstacle_avoidance -> /cmd_vel_safe -> chassis_controller_node
+                                                     -> /steering_controller/commands
+                                                     -> /wheel_controller/commands
 ```
 
-在这个模式下不要用 `/cmd_vel_safe` 判断底盘是否收到速度，因为安全避障节点没有启动。
+如果小车不动，需要同时检查 `/cmd_vel_nav`、`/cmd_vel` 和 `/cmd_vel_safe`。如果 `/cmd_vel_nav` 有速度但 `/cmd_vel_safe` 是 0，说明安全层、超声波或地形状态正在拦截速度。
 
-### 点云地图模式
+### 空白 2D 调试模式
 
 ```bash
 ros2 launch robot robot.launch.py \
-  use_pointcloud_map:=true \
-  nav2_params_file:=/home/shijiahao/Downloads/ros2/robot_ws/install/robot/share/robot/config/nav2_params.yaml
+  use_pointcloud_map:=false \
+  map_yaml_file:=/home/shijiahao/Downloads/ros2/robot_ws/install/robot/share/robot/map/blank.yaml \
+  nav2_params_file:=/home/shijiahao/Downloads/ros2/robot_ws/install/robot/share/robot/config/nav2_2d_params.yaml
 ```
 
 如果刚修改源码还没有重新 `colcon build`，可以临时使用源码路径：
 
 ```bash
 ros2 launch robot robot.launch.py \
-  use_pointcloud_map:=true \
-  nav2_params_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot/config/nav2_params.yaml
+  use_pointcloud_map:=false \
+  map_yaml_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot/map/blank.yaml \
+  nav2_params_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot/config/nav2_2d_params.yaml
 ```
 
-点云模式会使用 `studyroom.yaml` 作为 2D 地图，同时启动 `studyroom.ply` 点云、点云障碍物过滤、虚拟超声波、地形分析、`range_to_scan` 和 `obstacle_avoidance`。
+空白模式用于回退确认 Foxglove 目标点、Nav2 和底盘控制链路能让小车动起来。它会使用空白 2D 地图 `blank.yaml`，不启动 PLY 点云、点云过滤、虚拟超声波、地形分析、`range_to_scan` 和 `obstacle_avoidance`。
 
-点云模式速度链路：
+空白模式速度链路：
 
 ```text
-Nav2 -> /cmd_vel -> obstacle_avoidance -> /cmd_vel_safe -> chassis_controller_node
-                                                     -> /steering_controller/commands
-                                                     -> /wheel_controller/commands
+Nav2 -> /cmd_vel_nav -> nav_controller_node -> /cmd_vel -> chassis_controller_node -> /steering_controller/commands
+                                     -> /wheel_controller/commands
 ```
 
-在这个模式下如果小车不动，需要同时检查 `/cmd_vel` 和 `/cmd_vel_safe`。如果 `/cmd_vel` 有速度但 `/cmd_vel_safe` 是 0，说明安全层、超声波或地形状态正在拦截速度。
+在空白模式下不要用 `/cmd_vel_safe` 判断底盘是否收到速度，因为安全避障节点没有启动；应检查 `/cmd_vel_nav` 和 `/cmd_vel`。
 
 ## 启动参数
 
-`robot.launch.py` 当前只声明下面 5 个启动参数。这里的“启动参数”指 `ros2 launch robot robot.launch.py 参数名:=参数值` 这种参数；节点内部 YAML 参数在后面的参数文件章节说明。
+`robot.launch.py` 当前声明下面 7 个启动参数。这里的“启动参数”指 `ros2 launch robot robot.launch.py 参数名:=参数值` 这种参数；节点内部 YAML 参数在后面的参数文件章节说明。
 
 | 参数 | 默认值 | 作用 |
 | --- | --- | --- |
 | `initial_x` | `0.0` | 设置静态 TF `map -> odom` 的 x 平移，单位 m。用于把小车初始位置放到地图中的指定 x 坐标。 |
 | `initial_y` | `0.0` | 设置静态 TF `map -> odom` 的 y 平移，单位 m。用于把小车初始位置放到地图中的指定 y 坐标。 |
 | `initial_yaw` | `0.0` | 设置静态 TF `map -> odom` 的 yaw，单位 rad。用于设置小车在地图中的初始朝向。 |
-| `use_pointcloud_map` | `false` | `false` 使用空白 2D 地图并关闭点云/超声波/地形/避障链路；`true` 使用 `studyroom.yaml` 和 `studyroom.ply`，并启动点云、超声波、地形和安全避障链路。 |
-| `nav2_params_file` | `install/robot/share/robot/config/nav2_2d_params.yaml` | 传给 `nav2_bringup/navigation_launch.py` 的 Nav2 参数文件。默认文件适合空白 2D 调试；点云模式应显式传入 `nav2_params.yaml`。 |
+| `use_pointcloud_map` | `true` | `true` 使用 `studyroom.yaml` 和 `studyroom.ply`，并启动点云、超声波、地形和安全避障链路；`false` 使用空白 2D 地图并关闭点云/超声波/地形/避障链路。 |
+| `nav2_params_file` | `install/robot/share/robot/config/nav2_params.yaml` | 传给 `nav2_bringup/navigation_launch.py` 的 Nav2 参数文件。默认文件适合 PLY 点云地图和局部点云避障；空白调试模式应显式传入 `nav2_2d_params.yaml`。 |
+| `map_yaml_file` | `install/robot/share/robot/map/studyroom.yaml` | 传给 `map_server` 和 Nav2 的 2D 地图 YAML。空白调试或障碍物测试时必须显式传入对应 YAML。 |
+| `ply_file` | `install/robot/share/robot/map/studyroom.ply` | 点云模式下传给 `publish_ply` 的 PLY 文件，可改为 `obstacle_test.ply` 做避障和回退测试。 |
 
 示例：把小车初始放到地图中的 `(0.0, -0.5)`，朝向 0 rad：
 
@@ -117,10 +121,12 @@ ws://<虚拟机IP>:8765
 ### 两种模式都会启动
 
 - `robot_state_publisher`：发布 `/robot_description`，根据 URDF 发布机器人模型相关 TF。
-- `map_server`：发布 `/map`。默认模式读取 `blank.yaml`，点云模式读取 `studyroom.yaml`。
+- `map_server`：发布 `/map`。默认点云模式读取 `studyroom.yaml`，空白调试模式读取 `blank.yaml`。
 - `static_transform_publisher`：发布 `map -> odom`，使用 `initial_x`、`initial_y`、`initial_yaw`。
 - `ros2_control_node` 和 controller spawner：加载转向、轮速、腿部和 joint state 控制器。
 - `chassis_feedback_node`：从 `/joint_states` 提取轮子转角和轮速，发布 `/wheel_states`。
+- `reverse_node`：记录 `/odom` 历史轨迹，收到回退请求后发布 `/cmd_vel_reverse`。
+- `nav_controller_node`：接收 `/cmd_vel_nav`、`/cmd_vel_reverse` 和状态反馈，仲裁后发布 `/cmd_vel`，卡住超过次数后取消 Nav2 目标。
 - `chassis_controller_node`：接收速度，输出转向和轮速命令，发布 `/odom` 和 `odom -> base_link` TF。
 - `virtual_imu`：根据 `/odom` 发布 `/imu/data`。
 - Nav2：由 `nav2_bringup/navigation_launch.py` 启动，提供 `/navigate_to_pose`。
@@ -133,13 +139,13 @@ ws://<虚拟机IP>:8765
 - `virtual_ultrasonic`：基于 `/perception/points` 和 TF 发布 8 路 `/ultrasonic/*`。
 - `range_to_scan`：把 8 路超声波转换为稀疏 `/scan`。
 - `terrain_analyzer`：基于点云和 `/odom` 发布 `/terrain_status`。
-- `obstacle_avoidance`：根据超声波和地形状态把 `/cmd_vel` 过滤成 `/cmd_vel_safe`。
+- `obstacle_avoidance`：根据超声波和地形状态把 nav_controller_node 输出的 `/cmd_vel` 过滤成 `/cmd_vel_safe`。
 
 ## 地图和 Nav2 参数
 
 ### 空白 2D 调试地图
 
-默认模式使用：
+空白调试模式使用：
 
 ```text
 src/robot/map/blank.yaml
@@ -210,6 +216,34 @@ studyroom.ply -> publish_ply -> /perception/points
 
 `nav2_params.yaml` 用于真实 2D map + PLY 点云局部避障。打开 `use_pointcloud_map:=true` 时应使用它，否则点云障碍物不会按预期进入 local costmap。
 
+## 简单障碍物测试环境
+
+修改障碍物时，2D PGM 和 PLY 点云必须一起更新；PGM 给 Nav2 全局规划，PLY 给点云过滤、虚拟超声波、避障和回退使用。
+
+源码路径启动：
+
+```bash
+ros2 launch robot robot.launch.py \
+  use_pointcloud_map:=true \
+  map_yaml_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot/map/obstacle_test.yaml \
+  ply_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot/map/obstacle_test.ply \
+  nav2_params_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot/config/nav2_params.yaml
+```
+
+安装路径启动：
+
+```bash
+ros2 launch robot robot.launch.py \
+  use_pointcloud_map:=true \
+  map_yaml_file:=/home/shijiahao/Downloads/ros2/robot_ws/install/robot/share/robot/map/obstacle_test.yaml \
+  ply_file:=/home/shijiahao/Downloads/ros2/robot_ws/install/robot/share/robot/map/obstacle_test.ply \
+  nav2_params_file:=/home/shijiahao/Downloads/ros2/robot_ws/install/robot/share/robot/config/nav2_params.yaml
+```
+
+测试环境文件：src/robot/map/obstacle_test.yaml、src/robot/map/obstacle_test.pgm、src/robot/map/obstacle_test.ply。
+`obstacle_test.pgm` 使用 `255` 表示自由区、`0` 表示占用障碍；map_server 发布到 `/map` 后，自由区对应 OccupancyGrid 的 `0`，障碍对应 `100`。如果 Foxglove/RViz 没有看到白色自由区，先检查 `/map` 数据里是否有大量 `0`，再检查显示面板是否把 free cell 显示为透明或与背景同色。
+说明：publish_ply 的 ply_file 参数由 robot.launch.py 传入；节点内部 default_ply 只在 ply_file 为空时作为 fallback，不会覆盖启动参数。
+
 ## 底盘控制参数
 
 底盘参数在 `src/robot/config/terrain_params.yaml` 的 `chassis_controller.ros__parameters` 下。
@@ -267,6 +301,53 @@ Nav2 导航推荐使用 `four_ws`。`crab` 更适合手动横移测试；`ackerm
 | `terrain_traversability_min` | `0.3` | 最低地形可通行评分，低于该值会限制运动。 |
 | `update_rate` | `20.0` | 避障循环频率，单位 Hz。 |
 | `cmd_vel_timeout` | `0.3` | 超过该时间没有新速度命令就输出零速度，单位 s。 |
+
+### `reverse_node`
+
+两种模式都会启动。只负责原路回退，不负责 Nav2 策略。
+
+| 参数 | 当前值 | 作用 |
+| --- | --- | --- |
+| `reverse_distance` | `0.8` | 每次回退目标距离，单位 m。 |
+| `reverse_speed` | `-0.06` | 回退线速度，单位 m/s。 |
+| `max_angular_speed` | `0.35` | 回退角速度上限，单位 rad/s。 |
+| `history_distance` | `5.0` | 保留最近轨迹长度，单位 m。 |
+| `history_timeout` | `60.0` | 保留最近轨迹时间，单位 s。 |
+| `sample_distance` | `0.03` | 轨迹采样间隔，单位 m。 |
+| `rear_stop_distance` | `0.15` | 后方超声波小于该距离时停止回退。 |
+| `safe_ultrasonic_distance` | `0.25` | 后方接近障碍时提前降速。 |
+
+### `nav_controller_node`
+
+两种模式都会启动。负责 Nav2 速度仲裁、卡住检测、请求 `reverse_node` 回退，以及超过恢复次数后取消当前 Nav2 目标。
+
+| 参数 | 当前值 | 作用 |
+| --- | --- | --- |
+| `stuck_timeout` | `2.5` | Nav2 持续输出运动命令但位移不足的检测窗口，单位 s。 |
+| `stuck_distance` | `0.03` | 检测窗口内最小期望位移，单位 m。 |
+| `safe_block_timeout` | `1.5` | `/cmd_vel_safe` 长时间接近 0 且有障碍告警时触发回退。 |
+| `reverse_distance` | `0.8` | 请求回退距离，单位 m。 |
+| `max_recovery_attempts` | `3` | 同一目标最多回退 3 次，第 4 次卡住取消 Nav2 目标。 |
+| `goal_idle_reset_time` | `3.0` | Nav2 停止输出后清零恢复次数的空闲时间。 |
+
+手动触发和取消回退：
+
+```bash
+ros2 service call /nav_controller/start_reverse std_srvs/srv/Trigger {}
+ros2 service call /nav_controller/cancel_reverse std_srvs/srv/Trigger {}
+ros2 service call /nav_controller/reset_attempts std_srvs/srv/Trigger {}
+```
+
+说明：reverse_node 启动回退时会冻结一份历史轨迹，回退期间不会把新的 /odom 倒车轨迹写回历史；angular_gain 用于调整倒车跟踪冻结轨迹时的角速度修正。nav_controller_node 在回退失败后有 reverse_retry_cooldown 冷却，避免反复请求导致 /cmd_vel_reverse 连续刷零。
+
+观察回退状态：
+
+```bash
+ros2 topic echo /reverse_control/status
+ros2 topic echo /nav_controller/status
+ros2 topic echo /cmd_vel_reverse
+```
+
 
 ### `pointcloud_obstacle_filter`
 
@@ -341,6 +422,7 @@ ros2 action send_goal /navigate_to_pose nav2_msgs/action/NavigateToPose "{pose: 
 默认 2D 模式检查：
 
 ```bash
+ros2 topic echo /cmd_vel_nav --once
 ros2 topic echo /cmd_vel --once
 ros2 topic echo /wheel_controller/commands --once
 ros2 topic echo /steering_controller/commands --once
@@ -350,6 +432,7 @@ ros2 run tf2_ros tf2_echo map base_link
 点云模式检查：
 
 ```bash
+ros2 topic echo /cmd_vel_nav --once
 ros2 topic echo /cmd_vel --once
 ros2 topic echo /cmd_vel_safe --once
 ros2 topic echo /terrain_status --once
@@ -359,23 +442,23 @@ ros2 run tf2_ros tf2_echo map base_link
 
 ## 手动速度测试
 
-默认 2D 模式下直接发布 `/cmd_vel`：
+手动速度测试建议发布到 `/cmd_vel_nav`，让速度同样经过 nav_controller_node：
 
 ```bash
-ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.05}, angular: {z: 0.0}}" --rate 10
+ros2 topic pub /cmd_vel_nav geometry_msgs/msg/Twist "{linear: {x: 0.05}, angular: {z: 0.0}}" --rate 10
 ```
 
 原地转向：
 
 ```bash
-ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {x: 0.0}, angular: {z: 0.3}}" --rate 10
+ros2 topic pub /cmd_vel_nav geometry_msgs/msg/Twist "{linear: {x: 0.0}, angular: {z: 0.3}}" --rate 10
 ```
 
 横移只对 `crab` 模式有直接意义：
 
 ```bash
 ros2 param set /chassis_controller motion_mode crab
-ros2 topic pub /cmd_vel geometry_msgs/msg/Twist "{linear: {y: 0.05}, angular: {z: 0.0}}" --rate 10
+ros2 topic pub /cmd_vel_nav geometry_msgs/msg/Twist "{linear: {y: 0.05}, angular: {z: 0.0}}" --rate 10
 ```
 
 观察输出：
@@ -402,6 +485,7 @@ ros2 topic echo /obstacle_warning
 - `/map`
 - `/global_costmap/costmap`
 - `/local_costmap/costmap`
+- `/cmd_vel_nav`
 - `/cmd_vel`
 - `/wheel_controller/commands`
 - `/steering_controller/commands`
@@ -429,10 +513,11 @@ ros2 topic echo /obstacle_warning
 
 ```bash
 ros2 action list -t
+ros2 topic echo /cmd_vel_nav --once
 ros2 topic echo /cmd_vel --once
 ```
 
-如果 `/cmd_vel` 没有速度，问题在 Nav2、TF、地图或 goal。继续检查：
+如果 `/cmd_vel_nav` 没有速度，问题在 Nav2、TF、地图或 goal。继续检查：
 
 ```bash
 ros2 lifecycle get /bt_navigator
@@ -441,7 +526,10 @@ ros2 lifecycle get /controller_server
 ros2 run tf2_ros tf2_echo map base_link
 ```
 
-如果 `/cmd_vel` 有速度但轮子命令没有变化，检查底盘节点和模式：
+如果 `/cmd_vel_nav` 有速度但 `/cmd_vel` 没有速度，检查 `/nav_controller/status`；如果 `/cmd_vel` 有速度但轮子命令没有变化，检查底盘节点和模式：
+
+`nav_controller_node` 会在新一段 Nav2 非零速度开始时重置卡住检测窗口，避免刚发送目标点时把发送目标前的静止 `/odom` 误判为卡住。修改该节点后需要重新 `colcon build --packages-select robot` 并重启 `robot.launch.py`。
+
 
 ```bash
 ros2 param get /chassis_controller motion_mode

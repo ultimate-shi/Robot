@@ -41,10 +41,10 @@ class ObstacleAvoidanceNode(Node):
         super().__init__('obstacle_avoidance')
 
         # Parameters
-        self.declare_parameter("front_stop_distance", 0.15)
-        self.declare_parameter("front_warn_distance", 0.40)
+        self.declare_parameter("front_stop_distance", 0.10)
+        self.declare_parameter("front_warn_distance", 0.20)
         self.declare_parameter("side_stop_distance", 0.10)
-        self.declare_parameter("side_warn_distance", 0.25)
+        self.declare_parameter("side_warn_distance", 0.20)
         self.declare_parameter("terrain_traversability_min", 0.3)
         self.declare_parameter("update_rate", 20.0)
         self.declare_parameter("cmd_vel_timeout", 0.3)

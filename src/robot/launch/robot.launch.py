@@ -11,6 +11,8 @@ robot.launch 使用说明：
 - pointcloud_obstacle_filter 把 /perception/points 过滤为 /nav/obstacle_points，供 Nav2 local_costmap 使用。
 - virtual_ultrasonic 订阅 /perception/points 并结合 TF，发布 8 路 /ultrasonic/* 虚拟超声波距离。
 - range_to_scan 把 8 路超声波拼成稀疏 /scan，主要用于调试或兼容 LaserScan 显示。
+- reverse_node 记录 /odom 历史轨迹，并在卡住恢复时输出 /cmd_vel_reverse。
+- nav_controller_node 接收 Nav2 的 /cmd_vel_nav，在正常导航和原路回退之间仲裁并输出 /cmd_vel。
 - obstacle_avoidance 把 /cmd_vel 过滤为 /cmd_vel_safe，底盘控制器只消费安全速度。
 - chassis_controller_node 根据 /cmd_vel_safe 输出转向/轮速控制，并发布 /odom、odom->base_link TF。
 - virtual_imu 根据 /odom 生成 /imu/data。
@@ -75,6 +77,7 @@ else:
 def generate_launch_description():
     pkg_share = get_package_share_directory('robot')
     MAP_YAML_PATH = os.path.join(pkg_share, 'map', 'studyroom.yaml')
+    DEFAULT_PLY_PATH = os.path.join(pkg_share, 'map', 'studyroom.ply')
     TERRAIN_PARAMS = os.path.join(pkg_share, 'config', 'terrain_params.yaml')
 
     # Virtual environment paths
@@ -95,11 +98,10 @@ def generate_launch_description():
     initial_yaw = LaunchConfiguration('initial_yaw')
     use_pointcloud_map = LaunchConfiguration('use_pointcloud_map')
     nav2_params_file = LaunchConfiguration('nav2_params_file')
-    # 一个参数同时控制真实地图和点云链路：false 用空白 map，true 用 studyroom map + PLY 点云。
-    map_yaml_file = PythonExpression([
-        '"', MAP_YAML_PATH, '" if "', use_pointcloud_map, '" == "true" else "',
-        BLANK_MAP_YAML, '"'
-    ])
+    ply_file = LaunchConfiguration('ply_file')
+    # 地图文件现在作为显式启动参数传入，避免表达式展开失败导致 /map 不发布。
+    # 默认仍使用 studyroom.yaml；空白地图或障碍物测试地图需要通过 map_yaml_file:=... 指定。
+    map_yaml_file = LaunchConfiguration('map_yaml_file')
 
     declare_initial_x = DeclareLaunchArgument(
         'initial_x',
@@ -116,16 +118,27 @@ def generate_launch_description():
         default_value='0.0',
         description='Initial robot yaw in radians in the map frame'
     )
-    # 默认先不启动点云/地形链路，便于只用 2D map 验证 Nav2 能否驱动车体。
+    # 默认进入 PLY 点云地图模式，让 Nav2、虚拟超声波和 obstacle_avoidance 一起工作，避免小车贴近障碍物时直接执行未过滤速度。
     declare_use_pointcloud_map = DeclareLaunchArgument(
         'use_pointcloud_map',
-        default_value='false',
+        default_value='true',
         description='Start PLY point cloud, terrain, ultrasonic and point cloud obstacle nodes'
     )
+    declare_map_yaml_file = DeclareLaunchArgument(
+        'map_yaml_file',
+        default_value=MAP_YAML_PATH,
+        description='Map YAML file used by map_server and Nav2'
+    )
+    declare_ply_file = DeclareLaunchArgument(
+        'ply_file',
+        default_value=DEFAULT_PLY_PATH,
+        description='PLY point cloud file used by publish_ply when use_pointcloud_map is true'
+    )
+
     declare_nav2_params_file = DeclareLaunchArgument(
         'nav2_params_file',
-        default_value=NAV2_2D_PARAMS,
-        description='Nav2 parameter file. Default uses 2D map only without point cloud local obstacles'
+        default_value=NAV2_PARAMS,
+        description='Nav2 parameter file. Default uses PLY point cloud obstacle parameters'
     )
 
     # ==================== 1. URDF Robot Description ====================
@@ -191,16 +204,19 @@ def generate_launch_description():
     )
 
     # ==================== 4. Point Cloud Publisher ====================
+    # PLY 地图模式下发布 studyroom.ply，后续点云过滤、虚拟超声波和地形分析都共用 /perception/points。
     publish_ply_node = Node(
         package='robot',
         executable='publish_ply',
         name='publish_ply',
         output='screen',
+        parameters=[{'ply_file': ply_file}],
         additional_env=venv_env,
         condition=IfCondition(use_pointcloud_map)
     )
 
     # ==================== 5. Virtual Ultrasonic (original, 8 sensors) ====================
+    # 虚拟 8 路超声波从 PLY 点云计算距离，obstacle_avoidance 依赖这些距离做近距离防撞。
     virtual_ultrasonic_node = Node(
         package='robot',
         executable='virtual_ultrasonic',
@@ -266,8 +282,29 @@ def generate_launch_description():
         output='screen'
     )
 
+    # ==================== 8. Navigation Recovery Controller ====================
+    # reverse_node 只记录 /odom 历史并输出 /cmd_vel_reverse，不直接取消 Nav2 目标。
+    reverse_node = Node(
+        package='robot',
+        executable='reverse_node',
+        name='reverse_node',
+        output='screen',
+        parameters=[TERRAIN_PARAMS, {'use_sim_time': False}]
+    )
+
+    # nav_controller_node 负责 Nav2 速度仲裁、卡住检测、回退请求和超过次数后的目标取消。
+    # 正常链路：Nav2 -> /cmd_vel_nav -> nav_controller_node -> /cmd_vel。
+    # 回退链路：reverse_node -> /cmd_vel_reverse -> nav_controller_node -> /cmd_vel。
+    nav_controller_node = Node(
+        package='robot',
+        executable='nav_controller_node',
+        name='nav_controller_node',
+        output='screen',
+        parameters=[TERRAIN_PARAMS, {'use_sim_time': False}]
+    )
+
     # ==================== 8. Chassis Controller Node ====================
-    # 空白地图调试模式下，底盘直接订阅 /cmd_vel，避免安全层持续发布零速度干扰底盘排查。
+    # 空白地图调试模式下，底盘订阅 nav_controller_node 输出的 /cmd_vel，避免安全层持续发布零速度干扰底盘排查。
     chassis_controller_direct_node = Node(
         package='robot',
         executable='chassis_controller_node',
@@ -278,7 +315,7 @@ def generate_launch_description():
         condition=UnlessCondition(use_pointcloud_map)
     )
 
-    # 点云模式下保留 /cmd_vel -> obstacle_avoidance -> /cmd_vel_safe -> chassis 的安全链路。
+    # PLY 点云模式下保留 /cmd_vel_nav -> nav_controller_node -> /cmd_vel -> obstacle_avoidance -> /cmd_vel_safe -> chassis 的安全链路。
     chassis_controller_safe_node = Node(
         package='robot',
         executable='chassis_controller_node',
@@ -303,6 +340,7 @@ def generate_launch_description():
     )
 
     # ==================== 10. Obstacle Avoidance (NEW) ====================
+    # 安全避障层读取 8 路 /ultrasonic/* 和 /terrain_status，将 nav_controller_node 输出的 /cmd_vel 过滤成 /cmd_vel_safe。
     obstacle_avoidance_node = Node(
         package='robot',
         executable='obstacle_avoidance',
@@ -328,6 +366,7 @@ def generate_launch_description():
     )
 
 
+    # 点云障碍过滤输出 /nav/obstacle_points，供 Nav2 local_costmap 的 VoxelLayer 使用。
     pointcloud_obstacle_filter_node = Node(
         package='robot',
         executable='pointcloud_obstacle_filter',
@@ -340,6 +379,7 @@ def generate_launch_description():
 
 
 
+    # 地形分析从 PLY 点云估计坡度、台阶和跌落风险，并发布 /terrain_status 给底盘和避障层。
     terrain_analyzer_node = Node(
         package='robot',
         executable='terrain_analyzer',
@@ -350,6 +390,7 @@ def generate_launch_description():
         condition=IfCondition(use_pointcloud_map)
     )
 
+    # 将 8 路超声波转换成稀疏 /scan，便于 Foxglove/RViz 显示和兼容需要 LaserScan 的调试工具。
     range_to_scan_node = Node(
         package='robot',
         executable='range_to_scan',
@@ -401,6 +442,8 @@ def generate_launch_description():
         declare_initial_y,
         declare_initial_yaw,
         declare_use_pointcloud_map,
+        declare_map_yaml_file,
+        declare_ply_file,
         declare_nav2_params_file,
         robot_state_publisher,
         map_server_node,
@@ -414,6 +457,8 @@ def generate_launch_description():
         controller_manager,
         zero_commands,
         chassis_feedback_node,
+        reverse_node,
+        nav_controller_node,
         chassis_controller_direct_node,
         chassis_controller_safe_node,
         virtual_imu_node,
