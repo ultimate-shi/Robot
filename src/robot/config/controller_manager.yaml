@@ -8,5 +8,5 @@
 # controller_manager.yaml
 controller_manager:
   ros__parameters:
-    update_rate: 10
-    use_sim_time: false
+    update_rate: 10        # controller_manager 控制循环更新频率，单位 Hz
+    use_sim_time: false    # 是否使用仿真 /clock 时间，false 表示使用系统时间

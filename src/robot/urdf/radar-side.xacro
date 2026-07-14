@@ -47,7 +47,7 @@
 
       <sensor name="ultrasonic_${suffix}" type="ultrasonic">
         <!-- 绑定超声波自身的连杆 -->
-        <parent_link name="radar-front_${suffix}"/>
+        <parent_link name="radar-side_${suffix}"/>
         <!-- 数据刷新频率（HC-SR04标准频率） -->
         <update_rate>10</update_rate>
         <!-- 超声波探测锥形区域 -->

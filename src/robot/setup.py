@@ -58,7 +58,6 @@ setup(
             'range_to_scan = robot.range_to_scan_node:main',
             'pointcloud_obstacle_filter = robot.pointcloud_obstacle_filter:main',
             'terrain_analyzer = robot.terrain_analyzer_node:main',
-            'reverse_node = robot.reverse_node:main',
             'nav_controller_node = robot.nav_controller_node:main',
         ],
     },

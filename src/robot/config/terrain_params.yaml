@@ -1,119 +1,103 @@
 # robot.launch 使用说明：
-# 本文件由 robot.launch.py 同时传给 chassis_controller_node、virtual_imu、obstacle_avoidance、
-# pointcloud_obstacle_filter 等节点。
-# 它集中管理底盘尺寸、地形分析阈值、IMU 噪声、超声波安全距离、cmd_vel 超时和点云过滤参数。
-# 删除风险：多个节点会退回默认参数，导致数字孪生模型、避障距离和点云过滤行为不可控。
-
-# Terrain and 3D simulation parameters
-# Used by robot.launch.py
+# 本文件由 robot.launch.py 传给底盘、IMU、安全避障、点云过滤、地形分析、虚拟超声波、
+# range_to_scan 和 nav_controller_node。
+# 它只保留运行时确实需要外部调整的底盘尺寸/模式、地形阈值、点云过滤、超声波安全距离和速度超时。
 
 chassis_controller:
   ros__parameters:
-    # Original chassis parameters
-    # Nav2 默认输出 linear.x + angular.z，four_ws 能响应原地/转向角速度。
-    wheelbase: 0.4
-    track: 0.2
-    radius: 0.05
-    motion_mode: "four_ws"
-    steering_limit: 1.57              # Match URDF steer joint limit: -90deg to +90deg
-    ackermann_min_turning_speed: 0.04  # Small forward speed when Nav2 asks Ackermann to rotate in place
-
-    # Terrain status integration
-    terrain_check_enabled: true
-    grid_resolution: 0.02            # 2cm grid
-    ground_tolerance: 0.05           # 5cm tolerance for ground detection
-    ground_to_base_height: 0.15      # Ground to base_link vertical offset
-
-    # Physical constraints
-    max_grade_deg: 35.0              # Max traversable slope (degrees)
-    step_threshold: 0.03             # Step blocking threshold (3cm)
-    dropoff_threshold: 0.05          # Drop-off blocking threshold (5cm)
-    look_ahead_distance: 0.10        # Look-ahead distance (10cm)
-    look_ahead_samples: 5            # Number of samples along look-ahead
+    wheelbase: 0.4  # 前后轮轴距，单位 m
+    track: 0.2  # 左右轮距，单位 m
+    radius: 0.05  # 车轮半径，单位 m
+    motion_mode: "four_ws"  # 底盘运动模式，four_ws 表示四轮转向
+    steering_limit: 1.57  # 转向关节最大角度限制，单位 rad
+    ackermann_min_turning_speed: 0.04  # 阿克曼模式原地转向时使用的最小前进速度，单位 m/s
+    terrain_check_enabled: true  # 是否启用地形可通行性检查
+    grid_resolution: 0.02  # 地形栅格分辨率，单位 m
+    ground_tolerance: 0.05  # 地面高度识别容差，单位 m
+    ground_to_base_height: 0.15  # 地面到 base_link 的垂直偏移，单位 m
+    max_grade_deg: 35.0  # 最大可通行坡度，单位 deg
+    step_threshold: 0.03  # 台阶障碍判定高度阈值，单位 m
+    dropoff_threshold: 0.05  # 跌落边缘判定高度阈值，单位 m
+    look_ahead_distance: 0.10  # 前向地形检测距离，单位 m
+    look_ahead_samples: 5  # 前向地形检测采样点数量
 
 virtual_imu:
   ros__parameters:
-    publish_rate: 20.0               # 20Hz IMU output
-    orientation_noise_std: 0.0087    # ~0.5 degree (GY25T spec)
-    angular_vel_noise_std: 0.005     # rad/s
-    linear_accel_noise_std: 0.02     # m/s^2
-    gravity: 9.81
+    publish_rate: 20.0  # 消息发布频率，单位 Hz
+    orientation_noise_std: 0.0087  # IMU 姿态噪声标准差，单位 rad
+    angular_vel_noise_std: 0.005  # IMU 角速度噪声标准差，单位 rad/s
+    linear_accel_noise_std: 0.02  # IMU 线加速度噪声标准差，单位 m/s^2
+    gravity: 9.81  # 重力加速度，单位 m/s^2
 
 obstacle_avoidance:
   ros__parameters:
-    front_stop_distance: 0.15        # Stop when front obstacle < 15cm
-    front_warn_distance: 0.40        # Decelerate when front obstacle < 40cm
-    side_stop_distance: 0.10         # Block turning when side < 10cm
-    side_warn_distance: 0.25         # Reduce turn rate when side < 25cm
-    terrain_traversability_min: 0.3  # Min traversability to proceed
-    update_rate: 20.0                # 20Hz avoidance check
-    cmd_vel_timeout: 0.3           # Stop if no new cmd_vel arrives for 300ms
-
-reverse_node:
-  ros__parameters:
-    reverse_distance: 0.8          # 每次自动原路回退的目标距离，单位 m
-    reverse_speed: -0.06           # 回退线速度，负值表示倒车，单位 m/s
-    max_angular_speed: 0.35        # 回退时最大角速度，单位 rad/s
-    history_distance: 5.0          # 最多保留最近 5m 轨迹用于原路回退
-    history_timeout: 60.0          # 最多保留最近 60s 轨迹
-    sample_distance: 0.03          # /odom 轨迹抽样间隔，单位 m
-    rear_stop_distance: 0.15       # 后向超声波小于该距离时立即停止回退
-    safe_ultrasonic_distance: 0.25 # 后向障碍进入该距离后主动降低回退速度
-    control_rate: 20.0             # 回退控制频率，单位 Hz
-    lookahead_distance: 0.12       # 沿历史轨迹反向跟踪的前瞻距离，单位 m
-    angular_gain: 1.6             # 倒车沿历史轨迹修正方向的角速度增益
+    front_stop_distance: 0.10  # 前方/后方障碍小于该距离时停止，单位 m
+    front_warn_distance: 0.20  # 前方/后方障碍小于该距离时减速，单位 m
+    side_stop_distance: 0.10  # 侧向障碍小于该距离时限制横移或转向，单位 m
+    side_warn_distance: 0.20  # 侧向障碍小于该距离时降低横移或转向速度，单位 m
+    terrain_traversability_min: 0.20  # 允许继续行驶的最小地形可通行性评分
+    update_rate: 20.0  # 控制或检测循环更新频率，单位 Hz
+    cmd_vel_timeout: 0.3  # 速度命令超时时间，单位 s
 
 nav_controller_node:
   ros__parameters:
-    update_rate: 20.0              # 速度仲裁循环频率，单位 Hz
-    stuck_timeout: 2.5             # Nav2 有速度但该时间内位移不足则判定卡住
-    stuck_distance: 0.03           # stuck_timeout 内最小期望位移，单位 m
-    nav_cmd_active_threshold: 0.02 # 判断 /cmd_vel_nav 为运动命令的阈值
-    safe_cmd_zero_threshold: 0.01  # 判断 /cmd_vel_safe 接近 0 的阈值
-    safe_block_timeout: 1.5        # 安全层持续拦停达到该时间后触发回退
-    cmd_vel_timeout: 0.5           # 上游速度命令超时时间，单位 s
-    reverse_distance: 0.8          # 请求 reverse_node 回退的距离，单位 m
-    max_recovery_attempts: 3       # 同一目标最多自动回退 3 次，第 4 次卡住取消目标
-    goal_idle_reset_time: 3.0      # Nav2 停止输出后清零恢复次数的空闲时间
-    reverse_retry_cooldown: 3.0    # 回退失败后暂停自动再次请求回退的时间，避免反复发布零速度
-
+    update_rate: 20.0  # 速度门控循环频率，单位 Hz
+    cmd_vel_timeout: 0.5  # /cmd_vel_nav_smoothed 超时后输出零速，单位 s
+    require_active_nav_goal: false  # 默认不依赖 action status 持续放行，避免 DDS status 丢失时误断速
+    nav_goal_status_timeout: 3.0  # Nav2 action 状态超时后切断遗留速度，单位 s
+    nav_cmd_active_threshold: 0.02  # 判断 /cmd_vel_nav_smoothed 为运动命令的速度阈值
 
 pointcloud_obstacle_filter:
   ros__parameters:
-    input_topic: /perception/points
-    output_topic: /nav/obstacle_points
-    target_frame: map
-    robot_base_frame: base_link
-    min_obstacle_height: 0.05
-    max_obstacle_height: 0.80
-    local_radius: 4.0
-    voxel_size: 0.05
-    max_points: 20000
-
+    input_topic: /perception/points  # 输入点云话题名称
+    output_topic: /nav/obstacle_points  # 输出点云话题名称
+    target_frame: map  # 点云过滤后使用的目标坐标系
+    robot_base_frame: base_link  # 机器人底盘坐标系名称
+    min_obstacle_height: 0.00  # 障碍物最小高度过滤阈值，单位 m
+    max_obstacle_height: 0.80  # 障碍物最大高度过滤阈值，单位 m
+    local_radius: 4.0  # 保留机器人周围局部点云的半径，单位 m
+    voxel_size: 0.05  # 点云体素降采样尺寸，单位 m
+    max_points: 20000  # 点云过滤后最多发布的点数
 
 terrain_analyzer:
   ros__parameters:
-    input_topic: /perception/points
-    publish_rate: 10.0
-    grid_resolution: 0.02
-    ground_tolerance: 0.05
-    terrain_voxel_size: 0.03
-    max_grade_deg: 35.0
-    step_threshold: 0.03
-    dropoff_threshold: 0.05
-    look_ahead_distance: 0.10
-    look_ahead_samples: 5
-    ground_to_base_height: 0.15
-    wheelbase: 0.4
-    track: 0.2
+    input_topic: /perception/points  # 输入点云话题名称
+    publish_rate: 10.0  # 消息发布频率，单位 Hz
+    grid_resolution: 0.02  # 地形栅格分辨率，单位 m
+    ground_tolerance: 0.05  # 地面高度识别容差，单位 m
+    terrain_voxel_size: 0.03  # 地形分析点云体素尺寸，单位 m
+    max_grade_deg: 35.0  # 最大可通行坡度，单位 deg
+    step_threshold: 0.03  # 台阶障碍判定高度阈值，单位 m
+    dropoff_threshold: 0.05  # 跌落边缘判定高度阈值，单位 m
+    look_ahead_distance: 0.10  # 前向地形检测距离，单位 m
+    look_ahead_samples: 5  # 前向地形检测采样点数量
+    ground_to_base_height: 0.15  # 地面到 base_link 的垂直偏移，单位 m
+    wheelbase: 0.4  # 前后轮轴距，单位 m
+    track: 0.2  # 左右轮距，单位 m
 
 virtual_ultrasonic:
   ros__parameters:
-    input_topic: /perception/points
-    max_range: 4.0
-    min_range: 0.02
-    fov_half_deg: 15.0
-    min_height: 0.03
-    max_height: 0.60
-    voxel_size: 0.03
-    publish_period: 0.2
+    input_topic: /perception/points  # 输入点云话题名称
+    max_range: 4.0  # 虚拟超声波最大测距范围，单位 m
+    min_range: 0.02  # 虚拟超声波最小有效测距范围，单位 m
+    fov_half_deg: 15.0  # 虚拟超声波半视场角，单位 deg
+    min_height: 0.03  # 参与测距的点云最小高度，单位 m
+    max_height: 0.80  # 参与测距的点云最大高度，单位 m
+    voxel_size: 0.03  # 点云体素降采样尺寸，单位 m
+    publish_period: 0.05  # 虚拟超声波发布周期，单位 s
+
+range_to_scan:
+  ros__parameters:
+    target_frame: base_link  # /scan 输出使用的目标坐标系
+    joint_state_topic: /joint_states  # 读取四个转向关节角的关节状态话题
+    publish_period: 0.05  # /scan 发布周期，单位 s
+    angle_increment_deg: 5.0  # /scan 角度分辨率，单位 deg
+    range_timeout: 0.25  # 超声波数据超过该时间后不再写入 /scan，单位 s
+    range_min: 0.02  # /scan 最小有效距离，单位 m
+    range_max: 4.0  # /scan 最大有效距离，单位 m
+    stamp_backdate: 0.05  # /scan 时间戳回退量，避免 TF 查询到未来，单位 s
+    cmd_vel_topic: /cmd_vel_nav_smoothed  # 读取 Nav2 平滑速度，仅用于调试可视化时判断纯旋转
+    cmd_vel_timeout: 0.3  # 速度命令缓存超时时间，单位 s
+    ignore_steering_ultrasonic_on_pure_rotation: true  # 纯原地旋转时 /scan 屏蔽随轮转向的前/后超声波
+    rotation_linear_threshold: 0.01  # 判定纯旋转时允许的最大线速度绝对值，单位 m/s
+    rotation_angular_threshold: 0.05  # 判定纯旋转时所需的最小角速度绝对值，单位 rad/s

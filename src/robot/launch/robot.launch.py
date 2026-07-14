@@ -11,9 +11,9 @@ robot.launch 使用说明：
 - pointcloud_obstacle_filter 把 /perception/points 过滤为 /nav/obstacle_points，供 Nav2 local_costmap 使用。
 - virtual_ultrasonic 订阅 /perception/points 并结合 TF，发布 8 路 /ultrasonic/* 虚拟超声波距离。
 - range_to_scan 把 8 路超声波拼成稀疏 /scan，主要用于调试或兼容 LaserScan 显示。
-- reverse_node 记录 /odom 历史轨迹，并在卡住恢复时输出 /cmd_vel_reverse。
-- nav_controller_node 接收 Nav2 的 /cmd_vel_nav，在正常导航和原路回退之间仲裁并输出 /cmd_vel。
-- obstacle_avoidance 把 /cmd_vel 过滤为 /cmd_vel_safe，底盘控制器只消费安全速度。
+- Nav2 controller/behavior 输出 /cmd_vel_nav_raw，由 velocity_smoother 平滑为 /cmd_vel_nav_smoothed。
+- nav_controller_node 监督 Nav2 action 状态，目标活跃时转发 /cmd_vel_nav_smoothed 到 /cmd_vel_nav，终态或超时时输出零速。
+- obstacle_avoidance 把 /cmd_vel_nav 过滤为 /cmd_vel_safe，底盘控制器只消费安全速度。
 - chassis_controller_node 根据 /cmd_vel_safe 输出转向/轮速控制，并发布 /odom、odom->base_link TF。
 - virtual_imu 根据 /odom 生成 /imu/data。
 - foxglove_bridge 对外提供 Mac Foxglove 前端连接。
@@ -31,9 +31,7 @@ from launch.substitutions import Command, PathJoinSubstitution, LaunchConfigurat
 from launch_ros.parameter_descriptions import ParameterValue
 from launch.actions import TimerAction, ExecuteProcess, DeclareLaunchArgument
 import subprocess
-from launch.actions import IncludeLaunchDescription
-from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.conditions import IfCondition, UnlessCondition
+from launch.conditions import IfCondition
 
 subprocess.run(['pkill', '-f', 'foxglove_bridge'], capture_output=True)
 subprocess.run(['sleep', '1'], capture_output=True)
@@ -45,18 +43,10 @@ os.environ['ROS_USE_SIM_TIME'] = '0'
 pkg_share = get_package_share_directory('robot')
 xacro_file = os.path.join(pkg_share, 'urdf', 'robot.xacro')
 urdf_file = os.path.join(pkg_share, 'urdf', 'robot.urdf')
-nav2_share = get_package_share_directory(
-    'nav2_bringup'
-)
 NAV2_PARAMS = os.path.join(
     pkg_share,
     'config',
     'nav2_params.yaml'
-)
-NAV2_2D_PARAMS = os.path.join(
-    pkg_share,
-    'config',
-    'nav2_2d_params.yaml'
 )
 BLANK_MAP_YAML = os.path.join(
     pkg_share,
@@ -97,8 +87,10 @@ def generate_launch_description():
     initial_y = LaunchConfiguration('initial_y')
     initial_yaw = LaunchConfiguration('initial_yaw')
     use_pointcloud_map = LaunchConfiguration('use_pointcloud_map')
+    enable_ultrasonic_avoidance = LaunchConfiguration('enable_ultrasonic_avoidance')
     nav2_params_file = LaunchConfiguration('nav2_params_file')
     ply_file = LaunchConfiguration('ply_file')
+    log_level = LaunchConfiguration('log_level')
     # 地图文件现在作为显式启动参数传入，避免表达式展开失败导致 /map 不发布。
     # 默认仍使用 studyroom.yaml；空白地图或障碍物测试地图需要通过 map_yaml_file:=... 指定。
     map_yaml_file = LaunchConfiguration('map_yaml_file')
@@ -124,6 +116,11 @@ def generate_launch_description():
         default_value='true',
         description='Start PLY point cloud, terrain, ultrasonic and point cloud obstacle nodes'
     )
+    declare_enable_ultrasonic_avoidance = DeclareLaunchArgument(
+        'enable_ultrasonic_avoidance',
+        default_value='true',
+        description='Use ultrasonic range data only for final /cmd_vel_safe filtering'
+    )
     declare_map_yaml_file = DeclareLaunchArgument(
         'map_yaml_file',
         default_value=MAP_YAML_PATH,
@@ -140,6 +137,24 @@ def generate_launch_description():
         default_value=NAV2_PARAMS,
         description='Nav2 parameter file. Default uses PLY point cloud obstacle parameters'
     )
+    declare_log_level = DeclareLaunchArgument(
+        'log_level',
+        default_value='warn',
+        description='ROS log level for launched nodes'
+    )
+
+    # 每个 ROS 节点统一使用同一个日志级别，默认 warn，调试时可通过 log_level:=info/debug 覆盖。
+    ros_log_args = ['--ros-args', '--log-level', log_level]
+
+    # 超声波避障只在点云模式下启用；关闭后底盘直接执行 nav_controller_node 的 /cmd_vel_nav。
+    use_ultrasonic_avoidance = PythonExpression([
+        '"', use_pointcloud_map, '" == "true" and "',
+        enable_ultrasonic_avoidance, '" == "true"'
+    ])
+    use_direct_chassis = PythonExpression([
+        '"', use_pointcloud_map, '" != "true" or "',
+        enable_ultrasonic_avoidance, '" != "true"'
+    ])
 
     # ==================== 1. URDF Robot Description ====================
     robot_description_content = Command(f'ros2 run xacro xacro {xacro_file}')
@@ -156,7 +171,7 @@ def generate_launch_description():
         executable='robot_state_publisher',
         output='screen',
         parameters=[robot_description, {'use_sim_time': False}],
-        arguments=['--ros-args', '--log-level', 'warn']
+        arguments=ros_log_args
     )
 
     # ==================== 3. Map Server ====================
@@ -169,7 +184,8 @@ def generate_launch_description():
         parameters=[
             {'yaml_filename': map_yaml_file},
             {'use_sim_time': False}
-        ]
+        ],
+        arguments=ros_log_args
     )
 
     map_lifecycle_manager = Node(
@@ -181,7 +197,8 @@ def generate_launch_description():
             {'use_sim_time': False},
             {'autostart': True},
             {'node_names': ['map_server']}
-        ]
+        ],
+        arguments=ros_log_args
     )
 
     # Static TF: map -> odom
@@ -199,7 +216,7 @@ def generate_launch_description():
             '--roll', '0.0',
             '--frame-id', 'map',
             '--child-frame-id', 'odom'
-        ],
+        ] + ros_log_args,
         output="screen",
     )
 
@@ -211,6 +228,7 @@ def generate_launch_description():
         name='publish_ply',
         output='screen',
         parameters=[{'ply_file': ply_file}],
+        arguments=ros_log_args,
         additional_env=venv_env,
         condition=IfCondition(use_pointcloud_map)
     )
@@ -223,8 +241,9 @@ def generate_launch_description():
         name='virtual_ultrasonic',
         output='screen',
         parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
+        arguments=ros_log_args,
         additional_env=venv_env,
-        condition=IfCondition(use_pointcloud_map)
+        condition=IfCondition(use_ultrasonic_avoidance)
     )
 
     # ==================== 6. ros2_control ====================
@@ -233,7 +252,7 @@ def generate_launch_description():
         executable='ros2_control_node',
         parameters=[robot_description, manager_config, {'use_sim_time': False}],
         output='screen',
-        arguments=['--ros-args', '--log-level', 'warn']
+        arguments=ros_log_args
     )
 
     controller_names = [
@@ -248,8 +267,7 @@ def generate_launch_description():
             package='controller_manager',
             executable='spawner',
             name=f'spawner_{name}',
-            arguments=[name, '--param-file', controller_config,
-                       '--ros-args', '--log-level', 'warn'],
+            arguments=[name, '--param-file', controller_config] + ros_log_args,
             output='screen'
         )
         for name in controller_names
@@ -279,43 +297,38 @@ def generate_launch_description():
         package='robot',
         executable='chassis_feedback_node',
         name='chassis_feedback_node',
-        output='screen'
-    )
-
-    # ==================== 8. Navigation Recovery Controller ====================
-    # reverse_node 只记录 /odom 历史并输出 /cmd_vel_reverse，不直接取消 Nav2 目标。
-    reverse_node = Node(
-        package='robot',
-        executable='reverse_node',
-        name='reverse_node',
         output='screen',
-        parameters=[TERRAIN_PARAMS, {'use_sim_time': False}]
+        arguments=ros_log_args
     )
 
-    # nav_controller_node 负责 Nav2 速度仲裁、卡住检测、回退请求和超过次数后的目标取消。
-    # 正常链路：Nav2 -> /cmd_vel_nav -> nav_controller_node -> /cmd_vel。
-    # 回退链路：reverse_node -> /cmd_vel_reverse -> nav_controller_node -> /cmd_vel。
+    # ==================== 8. Navigation Gate Controller ====================
+    # nav_controller_node 只监督 Nav2 action 状态和速度新鲜度，不再执行自定义倒车或原地旋转恢复。
+    # 速度链路：Nav2 -> /cmd_vel_nav_raw -> velocity_smoother -> /cmd_vel_nav_smoothed
+    #          -> nav_controller_node -> /cmd_vel_nav。
     nav_controller_node = Node(
         package='robot',
         executable='nav_controller_node',
         name='nav_controller_node',
         output='screen',
-        parameters=[TERRAIN_PARAMS, {'use_sim_time': False}]
+        parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
+        arguments=ros_log_args
     )
 
     # ==================== 8. Chassis Controller Node ====================
-    # 空白地图调试模式下，底盘订阅 nav_controller_node 输出的 /cmd_vel，避免安全层持续发布零速度干扰底盘排查。
+    # 空白地图或关闭超声波避障时，底盘直接订阅 nav_controller_node 输出的 /cmd_vel_nav。
     chassis_controller_direct_node = Node(
         package='robot',
         executable='chassis_controller_node',
         name='chassis_controller',  # Same node name for compatibility
         output='screen',
         parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
+        remappings=[('/cmd_vel', '/cmd_vel_nav')],
+        arguments=ros_log_args,
         additional_env=venv_env,
-        condition=UnlessCondition(use_pointcloud_map)
+        condition=IfCondition(use_direct_chassis)
     )
 
-    # PLY 点云模式下保留 /cmd_vel_nav -> nav_controller_node -> /cmd_vel -> obstacle_avoidance -> /cmd_vel_safe -> chassis 的安全链路。
+    # PLY 点云且启用超声波避障时，保留 /cmd_vel_nav -> obstacle_avoidance -> /cmd_vel_safe -> chassis 的安全链路。
     chassis_controller_safe_node = Node(
         package='robot',
         executable='chassis_controller_node',
@@ -325,8 +338,9 @@ def generate_launch_description():
         remappings=[
             ('/cmd_vel', '/cmd_vel_safe'),
         ],
+        arguments=ros_log_args,
         additional_env=venv_env,
-        condition=IfCondition(use_pointcloud_map)
+        condition=IfCondition(use_ultrasonic_avoidance)
     )
 
     # ==================== 9. Virtual IMU (NEW) ====================
@@ -336,11 +350,12 @@ def generate_launch_description():
         name='virtual_imu',
         output='screen',
         parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
+        arguments=ros_log_args,
         additional_env=venv_env
     )
 
     # ==================== 10. Obstacle Avoidance (NEW) ====================
-    # 安全避障层读取 8 路 /ultrasonic/* 和 /terrain_status，将 nav_controller_node 输出的 /cmd_vel 过滤成 /cmd_vel_safe。
+    # 安全避障层读取 8 路 /ultrasonic/* 和 /terrain_status，将 /cmd_vel_nav 过滤成 /cmd_vel_safe。
     obstacle_avoidance_node = Node(
         package='robot',
         executable='obstacle_avoidance',
@@ -348,10 +363,11 @@ def generate_launch_description():
         output='screen',
         parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
         remappings=[
-            ('/cmd_vel_raw', '/cmd_vel'),
+            ('/cmd_vel_raw', '/cmd_vel_nav'),
             ('/cmd_vel', '/cmd_vel_safe'),
         ],
-        condition=IfCondition(use_pointcloud_map)
+        arguments=ros_log_args,
+        condition=IfCondition(use_ultrasonic_avoidance)
     )
 
     # RVIZ
@@ -360,7 +376,7 @@ def generate_launch_description():
         package='rviz2',
         executable='rviz2',
         name='rviz2',
-        arguments=['-d', rviz_config],
+        arguments=['-d', rviz_config] + ros_log_args,
         parameters=[{'use_sim_time': False}],
         output='screen'
     )
@@ -373,6 +389,7 @@ def generate_launch_description():
         name='pointcloud_obstacle_filter',
         output='screen',
         parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
+        arguments=ros_log_args,
         additional_env=venv_env,
         condition=IfCondition(use_pointcloud_map)
     )
@@ -386,35 +403,122 @@ def generate_launch_description():
         name='terrain_analyzer',
         output='screen',
         parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
+        arguments=ros_log_args,
         additional_env=venv_env,
         condition=IfCondition(use_pointcloud_map)
     )
 
-    # 将 8 路超声波转换成稀疏 /scan，便于 Foxglove/RViz 显示和兼容需要 LaserScan 的调试工具。
+    # 将 8 路超声波转换成稀疏 /scan，仅用于调试可视化，不再作为 Nav2 collision_monitor 输入。
     range_to_scan_node = Node(
         package='robot',
         executable='range_to_scan',
         name='range_to_scan',
         output='screen',
-        parameters=[{'use_sim_time': False}],
+        parameters=[TERRAIN_PARAMS, {'use_sim_time': False}],
+        arguments=ros_log_args,
         condition=IfCondition(use_pointcloud_map)
     )
 
 
 
-    nav2_launch = IncludeLaunchDescription(
-        PythonLaunchDescriptionSource(
-            os.path.join(
-                nav2_share,
-                'launch',
-                'navigation_launch.py'
-            )
-        ),
-        launch_arguments={
-            'map': map_yaml_file,
-            'params_file': nav2_params_file,
-            'use_sim_time': 'false'
-        }.items()
+    # ==================== 11. Nav2 Navigation Stack ====================
+    # 本项目直接启动需要的 Nav2 节点，避免 navigation_launch.py 额外启动
+    # collision_monitor、route_server 和 docking_server 造成速度话题语义混乱。
+    nav2_remappings = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
+    nav2_cmd_remappings = nav2_remappings + [('cmd_vel', 'cmd_vel_nav_raw')]
+
+    nav2_controller_node = Node(
+        package='nav2_controller',
+        executable='controller_server',
+        name='controller_server',
+        output='screen',
+        parameters=[nav2_params_file, {'use_sim_time': False}],
+        arguments=ros_log_args,
+        remappings=nav2_cmd_remappings
+    )
+
+    nav2_smoother_node = Node(
+        package='nav2_smoother',
+        executable='smoother_server',
+        name='smoother_server',
+        output='screen',
+        parameters=[nav2_params_file, {'use_sim_time': False}],
+        arguments=ros_log_args,
+        remappings=nav2_remappings
+    )
+
+    nav2_planner_node = Node(
+        package='nav2_planner',
+        executable='planner_server',
+        name='planner_server',
+        output='screen',
+        parameters=[nav2_params_file, {'use_sim_time': False}],
+        arguments=ros_log_args,
+        remappings=nav2_remappings
+    )
+
+    nav2_behavior_node = Node(
+        package='nav2_behaviors',
+        executable='behavior_server',
+        name='behavior_server',
+        output='screen',
+        parameters=[nav2_params_file, {'use_sim_time': False}],
+        arguments=ros_log_args,
+        remappings=nav2_cmd_remappings
+    )
+
+    nav2_bt_navigator_node = Node(
+        package='nav2_bt_navigator',
+        executable='bt_navigator',
+        name='bt_navigator',
+        output='screen',
+        parameters=[nav2_params_file, {'use_sim_time': False}],
+        arguments=ros_log_args,
+        remappings=nav2_remappings
+    )
+
+    nav2_waypoint_follower_node = Node(
+        package='nav2_waypoint_follower',
+        executable='waypoint_follower',
+        name='waypoint_follower',
+        output='screen',
+        parameters=[nav2_params_file, {'use_sim_time': False}],
+        arguments=ros_log_args,
+        remappings=nav2_remappings
+    )
+
+    nav2_velocity_smoother_node = Node(
+        package='nav2_velocity_smoother',
+        executable='velocity_smoother',
+        name='velocity_smoother',
+        output='screen',
+        parameters=[nav2_params_file, {'use_sim_time': False}],
+        arguments=ros_log_args,
+        remappings=nav2_remappings + [
+            ('cmd_vel', 'cmd_vel_nav_raw'),
+            ('cmd_vel_smoothed', 'cmd_vel_nav_smoothed'),
+        ]
+    )
+
+    nav2_lifecycle_manager = Node(
+        package='nav2_lifecycle_manager',
+        executable='lifecycle_manager',
+        name='lifecycle_manager_navigation',
+        output='screen',
+        parameters=[
+            {'use_sim_time': False},
+            {'autostart': True},
+            {'node_names': [
+                'controller_server',
+                'smoother_server',
+                'planner_server',
+                'behavior_server',
+                'velocity_smoother',
+                'bt_navigator',
+                'waypoint_follower',
+            ]}
+        ],
+        arguments=ros_log_args
     )
 
     # ==================== 11. Foxglove Bridge ====================
@@ -433,6 +537,7 @@ def generate_launch_description():
             'client_timeout_ms': 300000,
             'keep_alive_interval_ms': 5000
         }],
+        arguments=ros_log_args,
         output='screen'
     )
 
@@ -442,9 +547,11 @@ def generate_launch_description():
         declare_initial_y,
         declare_initial_yaw,
         declare_use_pointcloud_map,
+        declare_enable_ultrasonic_avoidance,
         declare_map_yaml_file,
         declare_ply_file,
         declare_nav2_params_file,
+        declare_log_level,
         robot_state_publisher,
         map_server_node,
         map_lifecycle_manager,
@@ -457,7 +564,6 @@ def generate_launch_description():
         controller_manager,
         zero_commands,
         chassis_feedback_node,
-        reverse_node,
         nav_controller_node,
         chassis_controller_direct_node,
         chassis_controller_safe_node,
@@ -465,7 +571,14 @@ def generate_launch_description():
         obstacle_avoidance_node,
         # rviz_node,
         foxglove_bridge,
-        nav2_launch,
+        nav2_controller_node,
+        nav2_smoother_node,
+        nav2_planner_node,
+        nav2_behavior_node,
+        nav2_bt_navigator_node,
+        nav2_waypoint_follower_node,
+        nav2_velocity_smoother_node,
+        nav2_lifecycle_manager,
     ])
 
     for spawner in spawners:
