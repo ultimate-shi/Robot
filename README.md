@@ -10,7 +10,7 @@ ros2 launch robot robot.launch.py
 
 ## 当前导航链路
 
-Nav2 只负责全局/局部规划、速度生成和平滑以及 Nav2 自身恢复；自定义节点不再执行倒车恢复或原地旋转恢复。超声波只作为底盘前最后一层近距离安全过滤，不再接入 Nav2 collision monitor。
+Nav2 负责全局/局部规划、速度生成和平滑以及 Nav2 自身恢复。超声波一方面通过 `range_to_scan` 生成稀疏 `/scan` 并进入 Nav2 local costmap，另一方面仍作为底盘前最后一层近距离安全过滤；当前安全层在前方持续低于 stop 距离且后方安全时，会结合最近前进命令或 Nav2 目标刚活跃的状态，或目标失败后一段独立脱困窗口内的状态，短暂低速后退，避免小车一直顶在障碍前。
 
 启用超声波避障时：
 
@@ -48,7 +48,7 @@ Nav2 controller/behavior
 ros2 launch robot robot.launch.py
 ```
 
-默认使用 `studyroom.yaml` 作为 2D 地图，同时启动 `studyroom.ply` 点云、点云障碍物过滤、虚拟超声波、地形分析、`range_to_scan` 和 `obstacle_avoidance`。`/nav/obstacle_points` 进入 Nav2 local costmap，`/ultrasonic/*` 只进入 `obstacle_avoidance`。
+默认使用 `studyroom.yaml` 作为 2D 地图，同时启动 `studyroom.ply` 点云、点云障碍物过滤、虚拟超声波、地形分析、`range_to_scan` 和 `obstacle_avoidance`。`/nav/obstacle_points` 和 `/scan` 都进入 Nav2 local costmap，`/ultrasonic/*` 同时进入 `range_to_scan` 和 `obstacle_avoidance`。
 
 关闭超声波最终安全层：
 
@@ -117,18 +117,18 @@ ws://<虚拟机IP>:8765
 - `publish_ply`：读取 PLY，发布 `/pointcloud` 和 `/perception/points`。
 - `pointcloud_obstacle_filter`：过滤 `/perception/points`，发布 `/nav/obstacle_points` 给 Nav2 local costmap。
 - `terrain_analyzer`：基于点云和 `/odom` 发布 `/terrain_status`。
-- `range_to_scan`：把 8 路超声波转换为稀疏 `/scan`，仅用于调试可视化或兼容 LaserScan 显示。
+- `range_to_scan`：把 8 路超声波转换为稀疏 `/scan`，供 Nav2 local costmap 的 `ultrasonic_scan_layer` 使用，也可用于 Foxglove/RViz 调试。
 
 只在 `use_pointcloud_map:=true` 且 `enable_ultrasonic_avoidance:=true` 时启动：
 
-- `virtual_ultrasonic`：基于 `/perception/points` 和 TF 发布 8 路 `/ultrasonic/*`。
-- `obstacle_avoidance`：根据 `/ultrasonic/*` 和 `/terrain_status` 把 `/cmd_vel_nav` 过滤成 `/cmd_vel_safe`。
+- `virtual_ultrasonic`：基于 `/perception/points` 和每个超声波传感器自身 TF 朝向发布 8 路 `/ultrasonic/*`。
+- `obstacle_avoidance`：根据未超时的 `/ultrasonic/*` 和 `/terrain_status` 把 `/cmd_vel_nav` 过滤成 `/cmd_vel_safe`，检测到障碍时在后台打印具体传感器和距离，并发布 `/obstacle_avoidance/status`；前方持续被挡且后方安全时，会在最近有前进命令或 Nav2 目标刚活跃，或目标失败后的 `nav_goal_escape_timeout` 窗口仍有效时，按参数短暂发布低速后退命令脱离障碍。
 
 ## 参数文件
 
-`src/robot/config/nav2_params.yaml` 只配置当前实际启动的 Nav2 节点。它包含 planner、controller、local/global costmap、behavior、BT navigator、waypoint follower 和 velocity smoother 参数，不包含 `collision_monitor`、`route_server`、`docking_server`。
+`src/robot/config/nav2_params.yaml` 只配置当前实际启动的 Nav2 节点。它包含 planner、controller、local/global costmap、behavior、BT navigator、waypoint follower 和 velocity smoother 参数，不包含 `collision_monitor`、`route_server`、`docking_server`。local costmap 同时订阅 `/nav/obstacle_points` 和稀疏 `/scan`，global costmap 叠加 `/nav/obstacle_points` 供 planner 绕开 PLY 障碍。local/global `inflation_radius` 应大于车体内切半径；当前按 `robot_radius=0.25m` 设置为 `0.35m`，避免只规划中心线贴障碍而让车体边缘擦碰。RPP 碰撞预测开启后可根据局部障碍触发停止、恢复或重新规划。
 
-`src/robot/config/terrain_params.yaml` 只保留项目运行时需要外部调整的参数：底盘尺寸/模式、地形阈值、点云过滤、虚拟超声波、安全距离、速度超时和 `nav_controller_node` 的目标状态门控参数。
+`src/robot/config/terrain_params.yaml` 只保留项目运行时需要外部调整的参数：底盘尺寸/模式、地形阈值、点云过滤、虚拟超声波、安全距离、超声波过期时间、前方阻挡脱困后退、速度超时、`obstacle_avoidance` 的 Nav2 活跃目标和失败后脱困窗口和 `nav_controller_node` 的目标状态门控参数。
 
 ## 调试话题
 
@@ -145,6 +145,8 @@ ros2 topic echo /cmd_vel_nav --once
 ```bash
 ros2 topic echo /cmd_vel_safe --once
 ros2 topic echo /obstacle_warning --once
+ros2 topic echo /obstacle_avoidance/status --once
+ros2 topic echo /scan --once
 ```
 
 检查 `nav_controller_node` 是否因为 goal 终态或速度超时切断速度：

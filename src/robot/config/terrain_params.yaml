@@ -31,10 +31,20 @@ virtual_imu:
 
 obstacle_avoidance:
   ros__parameters:
-    front_stop_distance: 0.10  # 前方/后方障碍小于该距离时停止，单位 m
-    front_warn_distance: 0.20  # 前方/后方障碍小于该距离时减速，单位 m
-    side_stop_distance: 0.10  # 侧向障碍小于该距离时限制横移或转向，单位 m
-    side_warn_distance: 0.20  # 侧向障碍小于该距离时降低横移或转向速度，单位 m
+    front_stop_distance: 0.18  # 前方/后方障碍小于该距离时停止，单位 m
+    front_warn_distance: 0.35  # 前方/后方障碍小于该距离时减速，单位 m
+    side_stop_distance: 0.15  # 侧向障碍小于该距离时限制横移或转向，单位 m
+    side_warn_distance: 0.30  # 侧向障碍小于该距离时降低横移或转向速度，单位 m
+    range_timeout: 0.35  # 超声波数据超过该时间后视为过期，单位 s
+    escape_reverse_enabled: true  # 前方持续被挡且后方安全时，是否短暂后退脱困
+    escape_trigger_time: 1.0  # 前方持续低于 stop 距离多久后触发后退，单位 s
+    escape_reverse_duration: 2.0  # 每次脱困后退持续时间，单位 s
+    escape_reverse_speed: -0.06  # 脱困后退速度，单位 m/s
+    escape_cooldown: 1.5  # 两次自动后退之间的冷却时间，单位 s
+    rear_escape_clearance: 0.25  # 后方大于该距离才允许自动后退，单位 m
+    recent_forward_timeout: 3.0  # 最近收到过前进命令的有效窗口，单位 s
+    nav_goal_active_timeout: 3.0  # Nav2 目标仍活跃时允许自动后退的状态保鲜窗口，单位 s
+    nav_goal_escape_timeout: 30.0  # Nav2 目标失败后允许超声波触发后退的宽限窗口，覆盖测距滞后于 action abort 的情况，单位 s
     terrain_traversability_min: 0.20  # 允许继续行驶的最小地形可通行性评分
     update_rate: 20.0  # 控制或检测循环更新频率，单位 Hz
     cmd_vel_timeout: 0.3  # 速度命令超时时间，单位 s
@@ -84,18 +94,18 @@ virtual_ultrasonic:
     min_height: 0.03  # 参与测距的点云最小高度，单位 m
     max_height: 0.80  # 参与测距的点云最大高度，单位 m
     voxel_size: 0.03  # 点云体素降采样尺寸，单位 m
-    publish_period: 0.05  # 虚拟超声波发布周期，单位 s
+    publish_period: 0.03  # 虚拟超声波发布周期，单位 s
 
 range_to_scan:
   ros__parameters:
     target_frame: base_link  # /scan 输出使用的目标坐标系
     joint_state_topic: /joint_states  # 读取四个转向关节角的关节状态话题
-    publish_period: 0.05  # /scan 发布周期，单位 s
-    angle_increment_deg: 5.0  # /scan 角度分辨率，单位 deg
-    range_timeout: 0.25  # 超声波数据超过该时间后不再写入 /scan，单位 s
+    publish_period: 0.03  # /scan 发布周期，单位 s
+    angle_increment_deg: 2.5  # /scan 角度分辨率，单位 deg
+    range_timeout: 0.35  # 超声波数据超过该时间后不再写入 /scan，单位 s
     range_min: 0.02  # /scan 最小有效距离，单位 m
     range_max: 4.0  # /scan 最大有效距离，单位 m
-    stamp_backdate: 0.05  # /scan 时间戳回退量，避免 TF 查询到未来，单位 s
+    stamp_backdate: 0.0  # /scan 时间戳回退量，单位 s；保持当前时间避免被 TF 缓存判为过旧
     cmd_vel_topic: /cmd_vel_nav_smoothed  # 读取 Nav2 平滑速度，仅用于调试可视化时判断纯旋转
     cmd_vel_timeout: 0.3  # 速度命令缓存超时时间，单位 s
     ignore_steering_ultrasonic_on_pure_rotation: true  # 纯原地旋转时 /scan 屏蔽随轮转向的前/后超声波

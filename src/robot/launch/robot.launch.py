@@ -10,7 +10,7 @@ robot.launch 使用说明：
 - publish_ply 把 map/studyroom.ply 发布为 /pointcloud 和 /perception/points。
 - pointcloud_obstacle_filter 把 /perception/points 过滤为 /nav/obstacle_points，供 Nav2 local_costmap 使用。
 - virtual_ultrasonic 订阅 /perception/points 并结合 TF，发布 8 路 /ultrasonic/* 虚拟超声波距离。
-- range_to_scan 把 8 路超声波拼成稀疏 /scan，主要用于调试或兼容 LaserScan 显示。
+- range_to_scan 把 8 路超声波拼成稀疏 /scan，供 Nav2 local_costmap 和调试可视化使用。
 - Nav2 controller/behavior 输出 /cmd_vel_nav_raw，由 velocity_smoother 平滑为 /cmd_vel_nav_smoothed。
 - nav_controller_node 监督 Nav2 action 状态，目标活跃时转发 /cmd_vel_nav_smoothed 到 /cmd_vel_nav，终态或超时时输出零速。
 - obstacle_avoidance 把 /cmd_vel_nav 过滤为 /cmd_vel_safe，底盘控制器只消费安全速度。
@@ -262,20 +262,26 @@ def generate_launch_description():
         'shin_fr_position_controller', 'shin_fl_position_controller',
         'shin_rr_position_controller', 'shin_rl_position_controller',
     ]
+    # 控制器 spawner 串行错峰启动，避免同时抢 controller_manager 锁导致全部加载失败。
     spawners = [
-        Node(
-            package='controller_manager',
-            executable='spawner',
-            name=f'spawner_{name}',
-            arguments=[name, '--param-file', controller_config] + ros_log_args,
-            output='screen'
+        TimerAction(
+            period=2.0 + index * 1.5,
+            actions=[
+                Node(
+                    package='controller_manager',
+                    executable='spawner',
+                    name=f'spawner_{name}',
+                    arguments=[name, '--param-file', controller_config] + ros_log_args,
+                    output='screen'
+                )
+            ]
         )
-        for name in controller_names
+        for index, name in enumerate(controller_names)
     ]
 
     # Zero commands on startup
     zero_commands = TimerAction(
-        period=2.0,
+        period=20.0,
         actions=[
             ExecuteProcess(
                 cmd=['ros2', 'topic', 'pub', '--once',
@@ -408,7 +414,7 @@ def generate_launch_description():
         condition=IfCondition(use_pointcloud_map)
     )
 
-    # 将 8 路超声波转换成稀疏 /scan，仅用于调试可视化，不再作为 Nav2 collision_monitor 输入。
+    # 将 8 路超声波转换成稀疏 /scan，供 Nav2 local_costmap 的 ObstacleLayer 和调试可视化使用。
     range_to_scan_node = Node(
         package='robot',
         executable='range_to_scan',
