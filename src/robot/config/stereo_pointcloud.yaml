@@ -1,0 +1,30 @@
+stereo_pointcloud_filter:
+  ros__parameters:
+    input_topic: "/stereo/points2"
+    output_topic: "/nav/stereo_obstacle_points"
+    status_topic: "/stereo/pointcloud_filter/status"
+    target_frame: "base_link"
+    min_height: 0.05
+    max_height: 0.80
+    min_range: 0.25
+    max_range: 4.0
+    horizontal_fov_deg: 120.0
+    voxel_size: 0.05
+    max_points: 20000
+    max_input_rate: 20.0
+    tf_timeout: 0.05
+
+pointcloud_to_laserscan:
+  ros__parameters:
+    target_frame: "base_link"
+    transform_tolerance: 0.05
+    min_height: 0.05
+    max_height: 0.80
+    angle_min: -1.0472
+    angle_max: 1.0472
+    angle_increment: 0.00872665
+    scan_time: 0.05
+    range_min: 0.25
+    range_max: 4.0
+    use_inf: true
+    inf_epsilon: 1.0

@@ -1,0 +1,44 @@
+# 横向拼接 UVC 双目相机参数。更换相机时优先新建 profile，不修改下游话题契约。
+usb_cam:
+  ros__parameters:
+    video_device: "/dev/stereo_camera"
+    framerate: 30.0
+    io_method: "mmap"
+    frame_id: "stereo_camera_link"
+    pixel_format: "mjpeg2rgb"
+    image_width: 1280
+    image_height: 480
+    camera_name: "stereo_uvc_combined"
+
+stereo_splitter:
+  ros__parameters:
+    input_topic: "/stereo/image_raw"
+    left_image_topic: "/stereo/left/image_raw"
+    right_image_topic: "/stereo/right/image_raw"
+    left_camera_info_topic: "/stereo/left/camera_info"
+    right_camera_info_topic: "/stereo/right/camera_info"
+    left_frame_id: "stereo_left_optical_frame"
+    right_frame_id: "stereo_right_optical_frame"
+    left_first: true  # 遮挡镜头确认左右顺序后再修改
+    frame_skip: 0  # 0 表示处理每帧；1 表示隔一帧处理
+    output_encoding: "passthrough"
+
+disparity_node:
+  ros__parameters:
+    stereo_algorithm: 1  # 0=BM，1=SGBM
+    min_disparity: 0
+    disparity_range: 128  # 必须是 16 的倍数
+    correlation_window_size: 7
+    speckle_size: 100
+    speckle_range: 4
+    disp12_max_diff: 1
+    uniqueness_ratio: 10.0
+    texture_threshold: 10
+
+stereo_depth:
+  ros__parameters:
+    disparity_topic: "/stereo/disparity"
+    depth_topic: "/stereo/depth/image"
+    visual_topic: "/stereo/depth/image_visual"
+    min_depth: 0.25
+    max_depth: 4.0

@@ -178,3 +178,126 @@ ros2 launch robot robot.launch.py use_pointcloud_map:=true enable_ultrasonic_avo
 ```
 
 确认节点列表里没有 `collision_monitor`、`route_server`、`docking_server`、`reverse_node`，并确认 `/cmd_vel_nav_raw -> /cmd_vel_nav_smoothed -> /cmd_vel_nav` 单向存在。
+
+## 双目实机独立版
+
+双目实机链路与现有 PLY/虚拟超声波链路完全分开。启动关系如下：
+
+```text
+robot.launch.py
+  ├─ common_bringup.launch.py（URDF/TF、地图、底盘、Nav2、Foxglove）
+  └─ PLY、虚拟地形、虚拟 IMU、虚拟超声波、/scan
+
+stereo_robot.launch.py
+  ├─ common_bringup.launch.py
+  └─ stereo_camera.launch.py、双目点云过滤、/stereo/scan
+```
+
+`stereo_robot.launch.py` 不启动 PLY、虚拟地形、虚拟 IMU或虚拟超声波。实机 Nav2 通过
+`nav2_stereo_overrides.yaml` 只订阅 `/nav/stereo_obstacle_points`；`/stereo/scan`
+只用于 Foxglove 显示、诊断和将来的 2D 回退，不重复写入 costmap。
+
+### RK3588 依赖与设备准备
+
+ROCK 5B+ 应直接运行 Debian 12 和源码版 ROS 2 Jazzy，不要经 VMware 转接相机。先确认
+相机实际输出模式：
+
+```bash
+v4l2-ctl --list-formats-ext -d /dev/video0
+```
+
+默认 profile 请求横向拼接的 `1280x480 MJPEG @ 30 FPS`，设备名为
+`/dev/stereo_camera`。应根据 USB VID、PID 和序列号编写 udev 规则创建该稳定符号链接；
+不要把会随插拔变化的 `/dev/videoN` 写进节点代码。
+
+源码版 Jazzy underlay 需要提供：
+
+```text
+usb_cam  image_pipeline(image_proc/stereo_image_proc)
+camera_calibration  cv_bridge  image_transport
+compressed_image_transport  pointcloud_to_laserscan
+```
+
+Debian 12 是 Tier 3 平台。依赖在板端完成实际构建验证后，使用 `vcs export --exact`
+导出 `.repos` 并提交精确 SHA；不要提交未经板端构建的浮动分支或猜测 SHA。
+
+### 标定与相机单独启动
+
+第一次仅启动取流和左右拆分：
+
+```bash
+ros2 launch robot stereo_camera.launch.py calibration_mode:=true
+```
+
+遮挡左右镜头，确认 `/stereo/left/image_raw` 和 `/stereo/right/image_raw` 对应正确；
+若相反，修改 `stereo_camera.yaml` 的 `left_first`。用 8x6 内角点、30 mm 方格的刚性
+标定板运行 `camera_calibration`，把结果保存到：
+
+```text
+src/robot/config/cameras/<型号_序列号_分辨率>/left.yaml
+src/robot/config/cameras/<型号_序列号_分辨率>/right.yaml
+```
+
+仓库的 `_template_640x480` 只有字段模板，不是有效标定。正常模式会拒绝零焦距或右投影
+矩阵中没有 Tx 的模板，禁止用 URDF 中的标称 65 mm 基线计算深度。标定完成后重新构建，
+并显式传入当前相机文件：
+
+```bash
+ros2 launch robot stereo_camera.launch.py \
+  calibration_mode:=false \
+  left_calibration_file:=/绝对路径/left.yaml \
+  right_calibration_file:=/绝对路径/right.yaml
+```
+
+该入口使用 `image_proc` 校正左右图，使用标准 `stereo_image_proc` 发布视差和原始点云。
+`stereo_depth_node` 发布米制 `32FC1` 深度以及 8 位预览；无效或超范围深度为 NaN。
+左右原图和深度预览默认另发 compressed transport，适合跨网络预览。
+
+### RK3588 完整实机启动
+
+先把 `robot.xacro` 中 `base_link -> stereo_camera_link` 的初始 `xyz/rpy` 改为实测安装
+位姿，再运行：
+
+```bash
+ros2 launch robot stereo_robot.launch.py \
+  left_calibration_file:=/绝对路径/left.yaml \
+  right_calibration_file:=/绝对路径/right.yaml
+```
+
+Mac 不运行相机或 ROS 计算节点，只连接：
+
+```text
+ws://<RK3588_IP>:8765
+```
+
+Foxglove 优先显示左右 compressed 图像、`/stereo/depth/image_visual/compressed`、
+`/nav/stereo_obstacle_points` 和 `/stereo/scan`，不要跨网络持续显示完整
+`/stereo/points2`。
+
+固定公共话题契约：
+
+| 话题 | 类型/用途 |
+| --- | --- |
+| `/stereo/left/image_raw`、`/stereo/right/image_raw` | 同一采集时间戳的左右原图 |
+| `/stereo/left/camera_info`、`/stereo/right/camera_info` | 当前序列号与分辨率的标定 |
+| `/stereo/disparity` | `stereo_msgs/DisparityImage` |
+| `/stereo/depth/image` | 米制 `32FC1` 深度，非法值为 NaN |
+| `/stereo/depth/image_visual` | Foxglove 8 位深度预览 |
+| `/stereo/points2` | 标准立体处理生成的完整点云 |
+| `/nav/stereo_obstacle_points` | `base_link` 下过滤和降采样后的 Nav2 点云 |
+| `/stereo/scan` | 独立诊断 LaserScan，不覆盖仿真 `/scan` |
+| `/stereo/pointcloud_filter/status` | FPS、延迟、点数、TF 错误和丢帧 JSON |
+
+更换同类拼接 UVC 相机时只新增相机 profile、标定文件并更新安装 TF。双独立 UVC
+相机只替换取流/同步适配层；自带深度或点云的相机跳过 splitter/立体匹配并适配上述公共
+话题。Nav2、底盘和 `common_bringup.launch.py` 不随相机型号变化。
+
+### 双目验收
+
+- 极线误差小于 1 px，优先达到 RMS 0.5 px 以下。
+- 在 0.5、1、2、3 m 测深；0.5～2 m 中值误差不超过 5%，3 m 不超过 10%。
+- 深度和点云稳定输出至少 15 Hz，端到端延迟 P95 小于 200 ms。
+- 连续运行 30 分钟无 USB 重置、内存持续增长和热降频，RK3588 平均总 CPU 不超过
+  75%；超限时依次降低处理帧率、视差范围和分辨率。
+- 0.05～0.80 m 高、0.25～4.0 m 范围内的障碍应进入过滤点云和 local costmap，移除
+  后约 1 秒清除；`/stereo/scan` 的距离、角度和 frame 应与点云一致。

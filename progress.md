@@ -116,3 +116,53 @@
 - 复现结果：目标被接受，小车停在 odom 约 `(0.310, 0.711)`，离目标约 `1.557m`；停住时 `/cmd_vel_nav_raw`、`/cmd_vel_nav`、`/cmd_vel_safe` 都为 0，`/obstacle_avoidance/status` 无 warnings、`escape_active=false`，超声波侧边没有截停非零速度。
 - launch 日志显示根因是 Nav2/RPP：持续 `RegulatedPurePursuitController detected collision ahead!`，随后 `Failed to make progress`，最后 `navigate_to_pose` 返回 `ABORTED`；因此这是代价地图/RPP 碰撞预测导致停速，不是超声波避障层主动停车。
 - 将 `nav2_params.yaml` 的 local/global `inflation_radius` 恢复为 `0.35m`，重新构建并复测同一目标：没有再出现小于内切半径的错误，目标返回 `SUCCEEDED(error_code=0)`；最终 odom 约 `(1.784, 1.019)`，距离目标约 `0.051m`，小于 `xy_goal_tolerance=0.10m`。
+
+## 2026-07-28
+
+- 根据当前仓库状态做下一阶段规划：项目已经具备主 launch、URDF 模型、2D/PLY 地图、Nav2 精简导航链路、虚拟 IMU、虚拟超声波、点云障碍过滤、地形分析、底盘控制和 Foxglove 可视化基础。
+- 当前优先级应从“单个目标能到达”转向“稳定复现、参数标定、场景覆盖和现实小车一致性校准”。
+- 下一步建议先固定一套回归测试目标点和地图场景，记录每次导航的成功率、最终误差、恢复次数、是否触发超声波脱困、是否出现 costmap timeout 或 RPP collision ahead。
+- 后续阶段建议依次推进：实车尺寸/TF/传感器姿态校准、Nav2 参数系统化调参、多场景地图验证、反馈状态和可视化面板完善、最后再对接真实硬件或硬件在环。
+- 踩坑提醒：不要再把 inflation_radius 调小到小于车体内切半径；超声波频率低于 /scan 聚合频率时要保留足够 range_timeout；Nav2 action status 在当前环境偶发不稳定，底盘安全停速不能只依赖 action status 持续放行。
+
+### 双目实机独立版实现
+
+- 将原 `robot.launch.py` 拆为 `common_bringup.launch.py` 公共底盘/Nav2/Foxglove 层和
+  仿真专属 PLY、虚拟地形、虚拟 IMU、虚拟超声波层；现有仿真参数与速度安全链保留。
+- 新增 `stereo_camera.launch.py` 和 `stereo_robot.launch.py`。实机入口不启动 PLY 或
+  虚拟传感器，Nav2 覆盖配置只消费 `/nav/stereo_obstacle_points`；独立
+  `/stereo/scan` 不写入 costmap。
+- 新增横向拼接图拆分、视差转米制深度、向量化 PointCloud2 解析/TF 变换/高度距离视野
+  体素过滤三个节点；过滤状态包含 FPS、延迟、输入输出点数、TF 错误与丢帧。
+- 新增相机、点云、Nav2 实机覆盖和标定模板配置；URDF 加入标称 65 mm 双目结构和待实测
+  的安装位姿。模板不包含可用于测深的焦距或 Tx，正常使用必须传入实测标定。
+- 静态验证通过：新增 Python/launch 可编译，YAML/XML 可解析，NumPy 结构数组解析带
+  `point_step` 的 PointCloud2 测试通过，xacro 可生成 URDF，`colcon build
+  --packages-select robot` 通过，三个 launch 的 `--show-args` 均能展开。
+- 当前机器缺少 `usb_cam`、`image_proc`、`stereo_image_proc` 和
+  `pointcloud_to_laserscan`，且没有真实双目/RK3588，因此本轮不能完成取流、标定、
+  15 Hz/P95 延迟、30 分钟稳定性、CPU、深度误差和实机 Nav2 验收；板端依赖精确 SHA
+  也必须等 Debian 12 实际构建后用 `vcs export --exact` 记录，不能伪造。
+- 踩坑：本环境的补丁沙箱读取既有文件时持续出现
+  `bwrap: loopback: Failed RTM_NEWADDR`；新增文件仍用补丁创建，既有文件仅在补丁
+  重试失败后使用受控精确替换。项目原有 flake8/pep257 存量问题仍存在，本次针对新增
+  文件的 flake8 也报告 import-order/docstring 风格项，功能构建不受影响，后续可统一
+  做代码风格清理。
+- 下一步：在 ROCK 5B+ 确认 V4L2 拼接模式并安装依赖，生成 udev 规则，实测相机安装
+  `xyz/rpy`，完成 8x6/30 mm 双目标定后依次执行相机单测、深度精度测试、完整实机导航
+  和 30 分钟性能稳定性验收。
+- 公共栈运行回归：首次实际启动暴露 Jazzy `LifecycleNode` 必须显式传入
+  `namespace`，已给 map server 补上 `namespace=''` 并重建。随后以
+  `use_pointcloud_map:=false foxglove_enabled:=false` 启动成功，
+  `controller_server`、`planner_server`、`bt_navigator` 均为 active，
+  `/cmd_vel_nav_smoothed` 有 1 个发布者/1 个订阅者，`/odom` 有 1 个发布者，
+  两个导航 action 均存在。
+- 导航回归目标 `(0.2, -0.5)` 被接受；前期 planner 在当前 studyroom 静态地图上多次
+  报 `Failed to create plan`，恢复后机器人移动到约 `(0.173, -0.333)`，25 秒测试
+  窗口结束时距目标约 `0.171 m`，action 尚未终态，因此本次不能记为到点成功。测试
+  结束后已中止 launch；该结果说明重构后的 action/速度/odom 链路实际工作，但不是完整
+  的既有 PLY 导航到点回归。
+- 最终补充验证：对照 Jazzy `stereo_image_proc` 官方组件接口，将 PointCloudNode 的
+  `left/right/image_rect_color` 显式重映射到本链路的 `left/right/image_rect`；
+  新增无硬件单测覆盖左右顺序与同时间戳、`Z=fT/d` 及非法深度 NaN、带 padding 的
+  PointCloud2 向量化解析，`pytest` 结果为 3 passed。

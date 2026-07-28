@@ -10,6 +10,7 @@
   <xacro:include filename="radar-front.xacro"/>
   <xacro:include filename="radar-side.xacro"/>
   <xacro:include filename="imu.xacro"/>
+  <xacro:include filename="stereo_camera.xacro"/>
 
   <!-- 新增：动态获取robot包的绝对路径（核心！） -->
   <xacro:property name="pkg_path" value="$(find robot)"/>
@@ -231,6 +232,10 @@
     yaw="0"
   />
               
+  <!-- 双目安装位姿尚未实测；正式实机导航前必须替换 xyz/rpy。 -->
+  <xacro:stereo_camera parent_link="base_link" xyz="0.20 0 0.30"
+                       rpy="0 0 0" baseline="0.065"/>
+
   <xacro:include filename="hardware.xacro"/>
 
 </robot>

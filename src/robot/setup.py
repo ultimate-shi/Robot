@@ -1,50 +1,65 @@
-"""
-robot.launch 使用说明：
-这是 robot 包的 Python 安装配置文件，colcon build 时会读取它。
-robot.launch.py 中 package='robot'、executable='xxx' 的所有自定义节点，
-都必须在 entry_points['console_scripts'] 中注册，否则 ros2 launch 找不到可执行入口。
+"""robot 包安装配置，注册 ROS 节点和运行时资源。"""
 
-本文件还负责把 launch、config、urdf、meshes、world、map 等资源安装到 share/robot，
-因此 get_package_share_directory('robot') 才能在运行时找到 robot.xacro、nav2_params.yaml、studyroom.ply 等资源。
-"""
-
-from setuptools import find_packages, setup
-import os  # 关键：确保此行存在且无注释
+import os
 from glob import glob
 
+from setuptools import find_packages, setup
+
+
 package_name = 'robot'
+
+# 相机 profile 按型号/序列号/分辨率分目录，新增 profile 后无需再修改 setup.py。
+camera_profiles = [
+    (
+        os.path.join('share', package_name, os.path.dirname(path)),
+        [path],
+    )
+    for path in glob(os.path.join('config', 'cameras', '*', '*.yaml'))
+]
 
 setup(
     name=package_name,
     version='0.0.0',
     packages=find_packages(exclude=['test']),
     data_files=[
-        ('share/ament_index/resource_index/packages',
-            ['resource/' + package_name]),
+        (
+            'share/ament_index/resource_index/packages',
+            ['resource/' + package_name],
+        ),
         ('share/' + package_name, ['package.xml']),
-        # 添加launch文件安装配置
-        (os.path.join('share', package_name, 'launch'), 
-            glob(os.path.join('launch', '*.launch.py'))),
-        (os.path.join('share', package_name, 'config'),
-            glob('config/*.yaml')),
-        # 若有urdf和config目录，也建议添加
-        (os.path.join('share', package_name, 'urdf'), 
-            glob(os.path.join('urdf', '*.xacro')) + 
-            glob(os.path.join('urdf', '*.urdf'))),  # 同时安装 xacro 和 urdf
-        (os.path.join('share', package_name, 'config'), 
-            glob(os.path.join('config', '*.rviz'))),
-        (os.path.join('share', package_name, 'meshes'), 
-            glob(os.path.join('meshes', '*.*'))),
-        (os.path.join('share', package_name, 'world'), 
-            glob(os.path.join('world', '*.sdf'))),
-        (os.path.join('share', package_name, 'map'), 
-            glob(os.path.join('map', '*.*'))),
+        (
+            os.path.join('share', package_name, 'launch'),
+            glob(os.path.join('launch', '*.launch.py')),
+        ),
+        (
+            os.path.join('share', package_name, 'config'),
+            glob(os.path.join('config', '*.yaml'))
+            + glob(os.path.join('config', '*.rviz')),
+        ),
+        (
+            os.path.join('share', package_name, 'urdf'),
+            glob(os.path.join('urdf', '*.xacro'))
+            + glob(os.path.join('urdf', '*.urdf')),
+        ),
+        (
+            os.path.join('share', package_name, 'meshes'),
+            glob(os.path.join('meshes', '*.*')),
+        ),
+        (
+            os.path.join('share', package_name, 'world'),
+            glob(os.path.join('world', '*.sdf')),
+        ),
+        (
+            os.path.join('share', package_name, 'map'),
+            glob(os.path.join('map', '*.*')),
+        ),
+        *camera_profiles,
     ],
     install_requires=['setuptools'],
     zip_safe=True,
     maintainer='shijiahao',
     maintainer_email='shijiahao@todo.todo',
-    description='TODO: Package description',
+    description='ROS 2 robot digital twin and stereo navigation package',
     license='TODO: License declaration',
     tests_require=['pytest'],
     entry_points={
@@ -56,9 +71,14 @@ setup(
             'virtual_imu = robot.virtual_imu_node:main',
             'obstacle_avoidance = robot.obstacle_avoidance_node:main',
             'range_to_scan = robot.range_to_scan_node:main',
-            'pointcloud_obstacle_filter = robot.pointcloud_obstacle_filter:main',
+            'pointcloud_obstacle_filter = '
+            'robot.pointcloud_obstacle_filter:main',
             'terrain_analyzer = robot.terrain_analyzer_node:main',
             'nav_controller_node = robot.nav_controller_node:main',
+            'stereo_splitter_node = robot.stereo_splitter_node:main',
+            'stereo_depth_node = robot.stereo_depth_node:main',
+            'stereo_pointcloud_filter = '
+            'robot.stereo_pointcloud_filter:main',
         ],
     },
 )

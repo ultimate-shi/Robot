@@ -1,0 +1,37 @@
+# 实机双目版只使用过滤后的双目点云，不把 /stereo/scan 重复写入 costmap。
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      plugins: ["voxel_layer", "inflation_layer"]
+      voxel_layer:
+        observation_sources: stereo_obstacle_points
+        stereo_obstacle_points:
+          topic: /nav/stereo_obstacle_points
+          data_type: "PointCloud2"
+          marking: true
+          clearing: true
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.25
+          raytrace_max_range: 4.0
+          raytrace_min_range: 0.25
+          min_obstacle_height: 0.05
+          max_obstacle_height: 0.80
+          tf_filter_tolerance: 0.5
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      plugins: ["static_layer", "global_obstacle_layer", "inflation_layer"]
+      global_obstacle_layer:
+        observation_sources: stereo_obstacle_points
+        stereo_obstacle_points:
+          topic: /nav/stereo_obstacle_points
+          data_type: "PointCloud2"
+          marking: true
+          clearing: true
+          obstacle_max_range: 3.0
+          obstacle_min_range: 0.25
+          raytrace_max_range: 4.0
+          raytrace_min_range: 0.25
+          min_obstacle_height: 0.05
+          max_obstacle_height: 0.80
+          tf_filter_tolerance: 0.5
