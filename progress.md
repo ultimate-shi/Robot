@@ -166,3 +166,19 @@
   `left/right/image_rect_color` 显式重映射到本链路的 `left/right/image_rect`；
   新增无硬件单测覆盖左右顺序与同时间戳、`Z=fT/d` 及非法深度 NaN、带 padding 的
   PointCloud2 向量化解析，`pytest` 结果为 3 passed。
+
+## 2026-07-29
+
+- 补充双目从接线到 Nav2 的完整实机操作指南，覆盖 V4L2 模式确认、udev 稳定设备名、
+  左右遮挡检查、8×6 内角点/30 mm 棋盘格标定、标定 YAML 保存、真实基线检查、
+  `base_link -> stereo_camera_link` 安装外参测量、深度精度和 costmap 验收。
+- 明确区分两类外参：左右镜头之间的双目外参由 `camera_calibration` 写入 R/P；整个
+  相机相对车体的安装外参写入 `robot.xacro` 的 `xyz/rpy`。只完成棋盘格标定仍不能
+  直接用于 Nav2 障碍物高度和位置判断。
+- 为 `stereo_camera.yaml`、`stereo_pointcloud.yaml`、
+  `nav2_stereo_overrides.yaml` 和左右标定模板的每个参数补充中文用途、单位、约束及
+  调整影响说明。
+- 标定后应新增型号/序列号/单目分辨率 profile，不覆盖模板；右目真实基线按
+  `-P_right[3]/P_right[0]` 检查并同步到 URDF 结构参数，禁止用标称 65 mm 覆盖标定。
+- 当前没有连接真实双目和 RK3588，本次只能验证配置语法和构建；标定 RMS、极线误差、
+  深度误差、15 Hz/P95 延迟和 30 分钟稳定性仍需在板端按指南记录。

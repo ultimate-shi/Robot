@@ -301,3 +301,19 @@ Foxglove 优先显示左右 compressed 图像、`/stereo/depth/image_visual/comp
   75%；超限时依次降低处理帧率、视差范围和分辨率。
 - 0.05～0.80 m 高、0.25～4.0 m 范围内的障碍应进入过滤点云和 local costmap，移除
   后约 1 秒清除；`/stereo/scan` 的距离、角度和 frame 应与点云一致。
+
+### 完整标定操作
+
+双目真正用于实机前还需要完成相机模式确认、udev 固定设备名、双目内参/外参、相机到
+`base_link` 的安装外参以及深度与 Nav2 验收。逐条命令、标定板要求、标定后需要修改的
+文件和重标定条件见：
+
+[双目相机从接线到 Nav2 的完整操作指南](docs/stereo_calibration_guide.md)
+
+双目相关 YAML 已为每个参数补充中文说明：
+
+- `src/robot/config/stereo_camera.yaml`
+- `src/robot/config/stereo_pointcloud.yaml`
+- `src/robot/config/nav2_stereo_overrides.yaml`
+- `src/robot/config/cameras/_template_640x480/left.yaml`
+- `src/robot/config/cameras/_template_640x480/right.yaml`

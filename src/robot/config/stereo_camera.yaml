@@ -1,44 +1,45 @@
-# 横向拼接 UVC 双目相机参数。更换相机时优先新建 profile，不修改下游话题契约。
+# 横向拼接 UVC 双目相机、拆分、立体匹配和深度输出参数。
+# 更换相机或分辨率时应新建对应标定 profile，但保持 /stereo/* 公共话题不变。
 usb_cam:
   ros__parameters:
-    video_device: "/dev/stereo_camera"
-    framerate: 30.0
-    io_method: "mmap"
-    frame_id: "stereo_camera_link"
-    pixel_format: "mjpeg2rgb"
-    image_width: 1280
-    image_height: 480
-    camera_name: "stereo_uvc_combined"
+    video_device: "/dev/stereo_camera"  # udev 创建的稳定设备路径，禁止直接固定易变化的 /dev/videoN
+    framerate: 30.0  # 相机请求帧率，单位 Hz；必须是 v4l2-ctl 显示的该模式支持值
+    io_method: "mmap"  # V4L2 取流方式；mmap 通常比 read 少一次复制
+    frame_id: "stereo_camera_link"  # 横向拼接原始图的安装坐标系名称
+    pixel_format: "mjpeg2rgb"  # 请求相机 MJPEG 并在 usb_cam 中解码成 rgb8
+    image_width: 1280  # 横向拼接图总宽度；拆分后单目宽度为该值的一半
+    image_height: 480  # 横向拼接图高度，也是单目图高度
+    camera_name: "stereo_uvc_combined"  # 相机逻辑名称，用于日志和 CameraInfo 管理
 
 stereo_splitter:
   ros__parameters:
-    input_topic: "/stereo/image_raw"
-    left_image_topic: "/stereo/left/image_raw"
-    right_image_topic: "/stereo/right/image_raw"
-    left_camera_info_topic: "/stereo/left/camera_info"
-    right_camera_info_topic: "/stereo/right/camera_info"
-    left_frame_id: "stereo_left_optical_frame"
-    right_frame_id: "stereo_right_optical_frame"
-    left_first: true  # 遮挡镜头确认左右顺序后再修改
-    frame_skip: 0  # 0 表示处理每帧；1 表示隔一帧处理
-    output_encoding: "passthrough"
+    input_topic: "/stereo/image_raw"  # usb_cam 发布的横向拼接原始图
+    left_image_topic: "/stereo/left/image_raw"  # 拆分后的左目原始图话题
+    right_image_topic: "/stereo/right/image_raw"  # 拆分后的右目原始图话题
+    left_camera_info_topic: "/stereo/left/camera_info"  # 左目标定参数话题
+    right_camera_info_topic: "/stereo/right/camera_info"  # 右目标定参数话题
+    left_frame_id: "stereo_left_optical_frame"  # 左目 ROS optical 坐标系，z 前、x 右、y 下
+    right_frame_id: "stereo_right_optical_frame"  # 右目 ROS optical 坐标系，z 前、x 右、y 下
+    left_first: true  # true 表示拼接图左半幅是左目；必须通过遮挡镜头确认
+    frame_skip: 0  # 处理抽帧数；0 每帧处理，1 每两帧处理一帧，2 每三帧处理一帧
+    output_encoding: "passthrough"  # 保持 usb_cam 输出编码；本节点不做颜色空间转换
 
 disparity_node:
   ros__parameters:
-    stereo_algorithm: 1  # 0=BM，1=SGBM
-    min_disparity: 0
-    disparity_range: 128  # 必须是 16 的倍数
-    correlation_window_size: 7
-    speckle_size: 100
-    speckle_range: 4
-    disp12_max_diff: 1
-    uniqueness_ratio: 10.0
-    texture_threshold: 10
+    stereo_algorithm: 1  # 立体算法：0=BM，1=SGBM；RK3588 首版默认使用 CPU SGBM
+    min_disparity: 0  # 搜索的最小视差，单位 px；平行安装相机通常从 0 开始
+    disparity_range: 128  # 视差搜索范围，单位 px，必须是 16 的倍数；越大越耗 CPU
+    correlation_window_size: 7  # 匹配窗口边长，单位 px，必须为奇数；越大越平滑但损失细节
+    speckle_size: 100  # 删除面积小于该像素数的孤立视差区域；0 表示关闭
+    speckle_range: 4  # 连通视差斑点允许的最大视差差值，单位 px
+    disp12_max_diff: 1  # 左右一致性检查允许的最大视差差值，单位 px；负数可关闭
+    uniqueness_ratio: 10.0  # 最佳匹配相对次优匹配的唯一性阈值，越大过滤越严格
+    texture_threshold: 10  # 低纹理区域过滤阈值；越大输出越稀疏但误匹配更少
 
 stereo_depth:
   ros__parameters:
-    disparity_topic: "/stereo/disparity"
-    depth_topic: "/stereo/depth/image"
-    visual_topic: "/stereo/depth/image_visual"
-    min_depth: 0.25
-    max_depth: 4.0
+    disparity_topic: "/stereo/disparity"  # stereo_image_proc 输出的浮点视差
+    depth_topic: "/stereo/depth/image"  # 米制 32FC1 深度图输出话题
+    visual_topic: "/stereo/depth/image_visual"  # 供 Foxglove 显示的 mono8 深度预览
+    min_depth: 0.25  # 接受的最近深度，单位 m；更近的结果写为 NaN
+    max_depth: 4.0  # 接受的最远深度，单位 m；更远的结果写为 NaN

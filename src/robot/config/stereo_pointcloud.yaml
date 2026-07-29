@@ -1,30 +1,31 @@
+# 双目点云进入 Nav2 前的过滤参数，以及独立诊断 LaserScan 的转换参数。
 stereo_pointcloud_filter:
   ros__parameters:
-    input_topic: "/stereo/points2"
-    output_topic: "/nav/stereo_obstacle_points"
-    status_topic: "/stereo/pointcloud_filter/status"
-    target_frame: "base_link"
-    min_height: 0.05
-    max_height: 0.80
-    min_range: 0.25
-    max_range: 4.0
-    horizontal_fov_deg: 120.0
-    voxel_size: 0.05
-    max_points: 20000
-    max_input_rate: 20.0
-    tf_timeout: 0.05
+    input_topic: "/stereo/points2"  # stereo_image_proc 生成的完整双目 PointCloud2
+    output_topic: "/nav/stereo_obstacle_points"  # 过滤后供 Nav2 VoxelLayer 使用的障碍点云
+    status_topic: "/stereo/pointcloud_filter/status"  # FPS、延迟、点数、TF 错误和丢帧 JSON
+    target_frame: "base_link"  # 点云变换和过滤所使用的机器人底盘坐标系
+    min_height: 0.05  # base_link 下保留点的最低 z，单位 m；用于排除地面噪声
+    max_height: 0.80  # base_link 下保留点的最高 z，单位 m；用于排除无关高处点
+    min_range: 0.25  # base_link 平面内保留点的最近距离，单位 m
+    max_range: 4.0  # base_link 平面内保留点的最远距离，单位 m
+    horizontal_fov_deg: 120.0  # 以前向 x 轴为中心保留的水平视场总角度，单位 deg
+    voxel_size: 0.05  # 三维体素降采样边长，单位 m；增大可降低 CPU 和网络负载
+    max_points: 20000  # 每帧最多发布点数；超过时按固定步长均匀抽样
+    max_input_rate: 20.0  # 点云过滤最高处理频率，单位 Hz；0 表示不主动限频
+    tf_timeout: 0.05  # 按消息时间戳查询 TF 的最长等待时间，单位 s
 
 pointcloud_to_laserscan:
   ros__parameters:
-    target_frame: "base_link"
-    transform_tolerance: 0.05
-    min_height: 0.05
-    max_height: 0.80
-    angle_min: -1.0472
-    angle_max: 1.0472
-    angle_increment: 0.00872665
-    scan_time: 0.05
-    range_min: 0.25
-    range_max: 4.0
-    use_inf: true
-    inf_epsilon: 1.0
+    target_frame: "base_link"  # LaserScan 输出坐标系；输入点云已在该坐标系下
+    transform_tolerance: 0.05  # 转换节点等待 TF 的容忍时间，单位 s
+    min_height: 0.05  # 参与投影的最低 z，单位 m；应与点云过滤下限一致
+    max_height: 0.80  # 参与投影的最高 z，单位 m；应与点云过滤上限一致
+    angle_min: -1.0472  # 扫描起始角，单位 rad，约为 -60°
+    angle_max: 1.0472  # 扫描结束角，单位 rad，约为 +60°
+    angle_increment: 0.00872665  # 每个扫描 bin 的角分辨率，单位 rad，约为 0.5°
+    scan_time: 0.05  # LaserScan 消息中记录的扫描周期，单位 s，对应 20 Hz
+    range_min: 0.25  # LaserScan 最小有效距离，单位 m
+    range_max: 4.0  # LaserScan 最大有效距离，单位 m
+    use_inf: true  # true 时无障碍方向发布 +inf，便于可视化和清除语义
+    inf_epsilon: 1.0  # use_inf=false 时无障碍值为 range_max + 此值，单位 m
