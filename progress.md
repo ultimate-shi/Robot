@@ -182,3 +182,101 @@
   `-P_right[3]/P_right[0]` 检查并同步到 URDF 结构参数，禁止用标称 65 mm 覆盖标定。
 - 当前没有连接真实双目和 RK3588，本次只能验证配置语法和构建；标定 RMS、极线误差、
   深度误差、15 Hz/P95 延迟和 30 分钟稳定性仍需在板端按指南记录。
+
+## 2026-07-31
+
+- 在 RK3588 开发板确认当前系统为 Debian 12 arm64，内存 8GB、swap 4GB，仓库
+  `main` 与 `origin/main` 一致且工作区起初干净。
+- 确认 ROS 2 Jazzy 官方 deb 面向 Ubuntu 24.04；为避免在仅剩约 11GB 空间的 Debian
+  主机上源码编译整套 ROS/Nav2，新增基于官方 `ros:jazzy-ros-base-noble` 的 ARM64
+  容器方案，安装 Nav2、ros2_control、控制器、xacro、Foxglove Bridge、NumPy 和
+  SciPy 等主 launch 依赖。
+- 新增 Docker 安装、镜像构建和机器人启动脚本；启动脚本使用 host 网络、挂载当前
+  工作区、自动 colcon 构建并执行 `ros2 launch robot robot.launch.py`。
+- 补全 `package.xml` 中 launch、Nav2、控制器、Foxglove、xacro 和 SciPy 运行依赖，
+  README 增加 Debian 12/RK3588 安装、启动、Foxglove 连接及排障说明。
+- 当前卡点：Codex 受控会话不是 root，`apt-get` 无权取得系统锁，且 sudo 被
+  `no_new_privileges` 禁止；需要用户在开发板本机终端运行
+  `sudo bash scripts/install_jazzy_docker.sh`，随后才能实际拉取镜像、构建并完成 launch
+  验收。
+- 踩坑：即使外部命令获得执行许可，也不会自动提升为 root；系统包安装必须由本机 sudo
+  会话完成。后续镜像构建前应留意根分区仅剩约 11GB，脚本和 Dockerfile 已清理 apt
+  缓存以减少占用。
+
+## 2026-08-01
+
+- Docker 20.10.24 已安装并运行，daemon 确认是 aarch64/overlay2；通过 ACL 让当前
+  Codex 会话可访问 Docker socket。
+- 首次构建 Jazzy 镜像在拉取 `ros:jazzy-ros-base-noble` 时连续两次超时。网络诊断
+  确认终端可通过 `http://127.0.0.1:7897` 代理访问 Docker Registry 和鉴权接口，但
+  Docker systemd 服务的 Environment 为空，因此 daemon 直连超时。
+- 新增 `configure_docker_proxy.sh`，用于写入 Docker systemd HTTP/HTTPS 代理、重启
+  daemon，并在 socket 重建后恢复当前用户 ACL；README 同步代理配置与自定义端口用法。
+- 当前卡点：需要本机 sudo 执行 Docker daemon 代理配置。完成后继续拉取镜像、构建
+  工作区并验证 `robot.launch.py`、Nav2 和 Foxglove 端口。
+- 踩坑：Docker CLI 所在终端设置 `HTTP_PROXY` 不等于 Docker daemon 使用代理；镜像
+  pull 阶段必须配置 daemon 的 systemd 环境。
+- Docker daemon 代理生效后已成功拉取官方 Jazzy ARM64 基础镜像。首次依赖解析发现
+  `navigation2`、`nav2_bringup` 和 `ros2_controllers` 元包会带入 Gazebo、RViz、Qt、
+  OpenCV 和全套控制器，共 968 个新包、约 2.8GB；已主动停止中间构建，改为按
+  `robot.launch.py` 和参数文件列出实际 Nav2 服务、RPP/NavFn 插件以及位置/速度控制器，
+  避免在 64GB 板载存储上安装无关仿真依赖。
+- 第二次构建确认精简后为 425 个新包、约 1.36GB，但 apt 构建容器仍未使用宿主机代理。
+  已给 Docker 构建增加 host 网络并传入当前终端 HTTP/HTTPS 代理作为临时 build args，
+  避免 `127.0.0.1` 在默认 bridge 网络中指向构建容器自身；代理不保留在最终运行环境。
+- 代理对 Ubuntu HTTP 软件源仍只有约 83KB/s；验证 USTC Ubuntu Ports 与清华 ROS 2
+  镜像可用后，将其设为 Dockerfile 默认软件源，并保留 `UBUNTU_MIRROR`、
+  `ROS2_MIRROR` build args 供其他网络环境覆盖。
+- 首次切源构建发现当前官方基础镜像使用 deb822 的 `ros2.sources` 符号链接，而不是旧版
+  `ros2-latest.list`；已读取镜像内真实配置并修正 Dockerfile。
+- 国内镜像把 apt 索引下载从 7 分 31 秒缩短到 19 秒；清华 ROS 2 镜像不提供源码索引，
+  而基础镜像默认 `Types: deb deb-src`，因此进一步关闭容器内不需要的 ROS `deb-src`。
+- 第一轮完整运行已成功构建 robot 包并启动全部主进程；地图与 Nav2 生命周期管理器均
+  报告 managed nodes active，11 个 ros2_control 控制器全部激活，`/map`、`/odom`、
+  `/pointcloud` 有发布者，Foxglove Bridge 在 `0.0.0.0:8765` 监听。
+- 运行中发现 `publish_ply` 因缺少 `plyfile` 使用 2 点回退云，不能作为最终点云验收；
+  已补充 `python3-plyfile`。同时补充 `ros2controlcli`，便于用 `ros2 control` 诊断控制器。
+- 首轮停止时 `range_to_scan` 显示 exit code -2，日志为 Ctrl+C 引发的 KeyboardInterrupt，
+  属于测试主动停止而非运行期崩溃；其余节点正常完成生命周期清理。
+- Ubuntu 24.04 无 `python3-plyfile` apt 包；改为安装 `python3-pip` 后从清华 PyPI 镜像
+  固定安装 `plyfile==1.1.3`，并在 setup.py 声明兼容范围，避免依赖缺失或版本漂移。
+- 最终 Jazzy ARM64 镜像构建成功，并在开发板上实际执行
+  `ros2 launch robot robot.launch.py`。`controller_server` 与 `bt_navigator` 均为
+  `active [3]`，11 个 ros2_control 控制器全部为 active，`/map`、`/odom`、
+  `/pointcloud` 均有发布者。
+- `publish_ply` 已用 plyfile 正常读取 `studyroom.ply` 的 494,114 个点，不再进入 2 点
+  回退模式；Foxglove Bridge 在 8765 端口监听，主机侧 TCP 连接成功。当前容器保持运行，
+  Mac 可连接 `ws://192.168.0.115:8765`。
+- 运行时仅见 ros2_control 无法启用 FIFO 实时调度的容器权限警告，以及启动初期控制器
+  顺序加载锁重试、局部代价地图旧时间戳丢帧；重试后控制器全部激活，未阻塞当前功能。
+- 使用方式补充：Jazzy 位于 Ubuntu 24.04 ARM64 容器中，Debian 宿主机不会直接出现
+  `ros2` 命令；宿主机应运行 `bash scripts/run_robot_jazzy.sh`，或用
+  `docker exec -it robot-jazzy bash` 进入已经运行的容器后再执行 ROS 2 CLI。当前
+  `robot-jazzy` 容器已持续运行 11 小时。
+- 当前部署结构复核：宿主机为 Debian 12 arm64，Docker 镜像 `robot-jazzy:local` 为
+  Linux/arm64、约 2.27GB；容器采用 host network、host IPC，并把
+  `/home/radxa/Robot` 挂载到 `/workspace`。检查时 launch 及地图、Nav2、ros2_control、
+  Foxglove、PLY/地形/虚拟传感器等 24 个业务进程仍在运行。根分区 57GB，已用 46GB，
+  剩余 8.7GB；内存 7.8GiB，可用约 4.9GiB。
+- 记录容器方案取舍：Jazzy 官方 ARM64 二进制目标是 Ubuntu 24.04；当前 Debian 12
+  宿主机为 Python 3.11/glibc 2.36，而容器为 Python 3.12/glibc 2.39，不能安全地把
+  Ubuntu Noble ROS deb 直接混装到 Debian。Debian 原生可选源码编译，但依赖解析、
+  编译时间、磁盘占用和后续升级维护成本更高；当前优先使用容器获得官方 ABI 环境，
+  后续接真实 CAN/串口/相机时再按设备访问和实时性需求评估原生部署。
+- 补充部署文件职责说明：`docker/Dockerfile.jazzy` 定义 Ubuntu 24.04/Jazzy 运行环境和
+  精简依赖；`install_jazzy_docker.sh` 只负责宿主机 Docker 安装；
+  `configure_docker_proxy.sh` 配置 Docker daemon 代理；`build_jazzy_image.sh` 根据
+  Dockerfile 生成 `robot-jazzy:local`；`run_robot_jazzy.sh` 挂载工作区、增量构建 robot
+  包并启动主 launch。四个脚本按安装、网络、构建、运行四阶段分工。
+- 明确日常使用方式：Docker 安装脚本通常只在新系统执行一次；daemon 代理脚本仅在
+  初次配置或代理地址变化时执行；镜像构建脚本在新板首次部署或 Dockerfile/系统依赖
+  变化时执行。机器人启动后，在第二个终端通过 `docker exec -it robot-jazzy bash`
+  进入容器，并加载 `/opt/ros/jazzy/setup.bash` 与 `/workspace/install/setup.bash` 后使用
+  ROS 2 CLI。
+- 改进容器终端体验：`run_robot_jazzy.sh` 在创建容器时把 Jazzy 和当前工作区的环境
+  加载命令写入容器 root 用户的 `.bashrc`。后续执行
+  `docker exec -it robot-jazzy bash` 会自动加载两个 setup 文件，可以直接使用 `ros2`；
+  README 已同步说明。现有运行中容器需要重启后才应用该行为。
+- 给 `scripts/` 下四个部署脚本增加顶部中文注释，明确首次安装、代理变更、镜像依赖
+  变更和日常启动各自的执行时机及重复执行条件。README 新增以工作区根目录为基准的
+  `obstacle_test.yaml`、`obstacle_test.ply` 和 `nav2_params.yaml` 相对路径启动示例。

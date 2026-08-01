@@ -55,7 +55,8 @@ setup(
         ),
         *camera_profiles,
     ],
-    install_requires=['setuptools'],
+    # PLY 点云读取依赖由板端容器固定版本安装，此处同时声明 Python 包元数据。
+    install_requires=['setuptools', 'plyfile>=1.0,<2'],
     zip_safe=True,
     maintainer='shijiahao',
     maintainer_email='shijiahao@todo.todo',

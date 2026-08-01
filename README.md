@@ -84,6 +84,89 @@ ros2 launch robot robot.launch.py \
 
 ## 构建和环境
 
+### RK3588 + Debian 12（推荐）
+
+ROS 2 Jazzy 官方 deb 面向 Ubuntu 24.04；Debian 12 ARM64 原生安装需要源码构建整套
+ROS/Nav2，耗时、占用空间大且不易复现。本开发板使用官方 Ubuntu 24.04 Jazzy ARM64
+容器，容器采用 host 网络，因此 ROS 话题和 Foxglove Bridge 都直接使用开发板 IP。
+
+首次安装 Docker（需要在开发板本机终端输入 sudo 密码）：
+
+```bash
+cd /home/radxa/Robot
+sudo bash scripts/install_jazzy_docker.sh
+```
+
+安装完成后注销并重新登录，使 docker 用户组生效。然后构建 Jazzy 镜像并启动：
+
+```bash
+cd /home/radxa/Robot
+bash scripts/build_jazzy_image.sh
+bash scripts/run_robot_jazzy.sh
+```
+
+如果终端依靠本机代理联网，而 `docker pull` 报连接 Docker Hub 超时，需要同时给 Docker
+daemon 配置代理。以下命令默认使用 `http://127.0.0.1:7897`：
+
+```bash
+sudo bash scripts/configure_docker_proxy.sh
+```
+
+代理端口不同时，将实际地址作为参数传入，例如：
+
+```bash
+sudo bash scripts/configure_docker_proxy.sh http://127.0.0.1:7890
+```
+
+镜像构建脚本会把当前终端的 `HTTP_PROXY`/`HTTPS_PROXY` 作为临时构建参数，并使用 host
+网络访问宿主机回环地址上的代理；代理不会保留在最终机器人运行环境中。
+Dockerfile 默认使用 USTC 的 Ubuntu Ports 镜像和清华 ROS 2 镜像，以改善国内网络下
+ARM64 软件包下载速度；需要切回官方源时可通过同名 build argument 覆盖。
+`plyfile` 通过清华 PyPI 镜像安装，并在 Dockerfile 中固定版本，确保 PLY 地图不是回退
+测试点云。
+
+启动脚本会挂载当前仓库、执行 `colcon build --packages-select robot --symlink-install`，
+最后运行 `ros2 launch robot robot.launch.py`。launch 参数可直接追加，例如：
+
+```bash
+bash scripts/run_robot_jazzy.sh log_level:=info foxglove_port:=8765
+```
+
+使用仓库内相对路径启动障碍测试地图时，路径相对于挂载后的工作区根目录
+`/workspace`（即宿主机的仓库根目录）：
+
+```bash
+bash scripts/run_robot_jazzy.sh \
+  map_yaml_file:=src/robot/map/obstacle_test.yaml \
+  ply_file:=src/robot/map/obstacle_test.ply \
+  nav2_params_file:=src/robot/config/nav2_params.yaml
+```
+
+启动脚本会为容器内的交互式 Bash 配置 ROS 环境。机器人运行期间另开一个终端执行：
+
+```bash
+docker exec -it robot-jazzy bash
+```
+
+进入后可以直接使用 `ros2 node list`、`ros2 topic list` 等命令，不需要再次手动执行
+`source /opt/ros/jazzy/setup.bash` 和 `source /workspace/install/setup.bash`。该自动加载配置
+随容器创建，不修改 Debian 宿主机的 Bash 环境。
+
+Mac 与开发板位于同一局域网时，在 Foxglove 中添加 Foxglove WebSocket 连接：
+
+```text
+ws://<RK3588开发板IP>:8765
+```
+
+可用 `hostname -I` 查看开发板 IP。若连接失败，检查两台设备网络互通、8765/TCP
+未被防火墙拦截，并确认启动日志中存在 `foxglove_bridge`。
+
+容器运行期间按 `Ctrl+C` 会停止 launch 并自动删除容器；源码、`build/`、`install/`
+和 `log/` 均保留在宿主机工作区。重新拉取代码后通常直接再次运行启动脚本即可，只有
+Dockerfile 中的系统依赖变化时才需要重建镜像。
+
+### Ubuntu 24.04 原生 ROS 2 环境
+
 ```bash
 cd /home/shijiahao/Downloads/ros2/robot_ws
 colcon build --packages-select robot
@@ -199,8 +282,9 @@ stereo_robot.launch.py
 
 ### RK3588 依赖与设备准备
 
-ROCK 5B+ 应直接运行 Debian 12 和源码版 ROS 2 Jazzy，不要经 VMware 转接相机。先确认
-相机实际输出模式：
+ROCK 5B+ 使用上述 Debian 12 + Jazzy ARM64 容器，不要经 VMware 转接相机。实机双目
+启动时需要在 `docker run` 中额外映射稳定后的相机设备（例如
+`--device /dev/stereo_camera`）。先确认相机实际输出模式：
 
 ```bash
 v4l2-ctl --list-formats-ext -d /dev/video0
@@ -210,7 +294,7 @@ v4l2-ctl --list-formats-ext -d /dev/video0
 `/dev/stereo_camera`。应根据 USB VID、PID 和序列号编写 udev 规则创建该稳定符号链接；
 不要把会随插拔变化的 `/dev/videoN` 写进节点代码。
 
-源码版 Jazzy underlay 需要提供：
+Jazzy 环境需要提供：
 
 ```text
 usb_cam  image_pipeline(image_proc/stereo_image_proc)
@@ -218,8 +302,9 @@ camera_calibration  cv_bridge  image_transport
 compressed_image_transport  pointcloud_to_laserscan
 ```
 
-Debian 12 是 Tier 3 平台。依赖在板端完成实际构建验证后，使用 `vcs export --exact`
-导出 `.repos` 并提交精确 SHA；不要提交未经板端构建的浮动分支或猜测 SHA。
+如以后改为 Debian 12 原生源码 underlay，依赖在板端完成实际构建验证后应使用
+`vcs export --exact` 导出 `.repos` 并提交精确 SHA；不要提交未经板端构建的浮动分支
+或猜测 SHA。
 
 ### 标定与相机单独启动
 
