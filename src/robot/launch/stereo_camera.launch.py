@@ -14,10 +14,12 @@ def generate_launch_description():
     pkg_share = get_package_share_directory('robot')
     camera_params = os.path.join(
         pkg_share, 'config', 'stereo_camera.yaml')
-    template_dir = os.path.join(
-        pkg_share, 'config', 'cameras', '_template_640x480')
+    calibration_dir = os.path.join(
+        pkg_share, 'config', 'cameras',
+        'usb_camera_01_00_00_640x480')
     calibration_mode = LaunchConfiguration('calibration_mode')
     camera_config = LaunchConfiguration('camera_config')
+    video_device = LaunchConfiguration('video_device')
     log_level = LaunchConfiguration('log_level')
     ros_args = ['--ros-args', '--log-level', log_level]
     processing_condition = UnlessCondition(calibration_mode)
@@ -31,18 +33,20 @@ def generate_launch_description():
         DeclareLaunchArgument('publish_compressed', default_value='true'),
         DeclareLaunchArgument('camera_config', default_value=camera_params),
         DeclareLaunchArgument(
+            'video_device', default_value='/dev/stereo_camera'),
+        DeclareLaunchArgument(
             'left_calibration_file',
-            default_value=os.path.join(template_dir, 'left.yaml')),
+            default_value=os.path.join(calibration_dir, 'left.yaml')),
         DeclareLaunchArgument(
             'right_calibration_file',
-            default_value=os.path.join(template_dir, 'right.yaml')),
+            default_value=os.path.join(calibration_dir, 'right.yaml')),
         DeclareLaunchArgument('log_level', default_value='warn'),
     ]
     camera = Node(
         package='usb_cam',
         executable='usb_cam_node_exe',
         name='usb_cam',
-        parameters=[camera_config],
+        parameters=[camera_config, {'video_device': video_device}],
         remappings=[
             ('image_raw', '/stereo/image_raw'),
             ('camera_info', '/stereo/combined/camera_info'),

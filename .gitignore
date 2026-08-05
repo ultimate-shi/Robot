@@ -1,5 +1,6 @@
 build/
 install/
 log/
+calibration_output/
 __pycache__/
 *.pyc

@@ -3,13 +3,24 @@
 usb_cam:
   ros__parameters:
     video_device: "/dev/stereo_camera"  # udev 创建的稳定设备路径，禁止直接固定易变化的 /dev/videoN
-    framerate: 30.0  # 相机请求帧率，单位 Hz；必须是 v4l2-ctl 显示的该模式支持值
+    framerate: 20.0  # 该相机 1280x480 MJPEG 模式实测最高 20 Hz，禁止请求不支持的 30 Hz
     io_method: "mmap"  # V4L2 取流方式；mmap 通常比 read 少一次复制
     frame_id: "stereo_camera_link"  # 横向拼接原始图的安装坐标系名称
     pixel_format: "mjpeg2rgb"  # 请求相机 MJPEG 并在 usb_cam 中解码成 rgb8
     image_width: 1280  # 横向拼接图总宽度；拆分后单目宽度为该值的一半
     image_height: 480  # 横向拼接图高度，也是单目图高度
     camera_name: "stereo_uvc_combined"  # 相机逻辑名称，用于日志和 CameraInfo 管理
+    brightness: -1  # -1 表示 usb_cam 不覆盖宿主机标定前固定的亮度
+    contrast: -1  # -1 表示不覆盖当前对比度，避免不同驱动控制名不兼容
+    saturation: -1  # -1 表示不覆盖当前饱和度
+    sharpness: -1  # -1 表示不覆盖当前锐度
+    gain: -1  # 当前相机未暴露增益控制，不向驱动写入不存在的控制项
+    auto_white_balance: false  # 保持关闭自动白平衡；实际 V4L2 控制由板端脚本固定
+    white_balance: -1  # 不由 usb_cam 重写色温，避免和 white_balance_temperature 名称不一致
+    autoexposure: false  # 保持手动曝光；实际 V4L2 控制由板端脚本固定
+    exposure: -1  # 不由 usb_cam 重写曝光，避免和 exposure_time_absolute 名称不一致
+    autofocus: false  # 当前模组为固定焦距，不启用自动对焦
+    focus: -1  # 当前相机未暴露焦距控制
 
 stereo_splitter:
   ros__parameters:

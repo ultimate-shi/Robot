@@ -290,9 +290,20 @@ ROCK 5B+ 使用上述 Debian 12 + Jazzy ARM64 容器，不要经 VMware 转接�
 v4l2-ctl --list-formats-ext -d /dev/video0
 ```
 
-默认 profile 请求横向拼接的 `1280x480 MJPEG @ 30 FPS`，设备名为
+当前板端实测 profile 请求横向拼接的 `1280x480 MJPEG @ 20 FPS`，设备名为
 `/dev/stereo_camera`。应根据 USB VID、PID 和序列号编写 udev 规则创建该稳定符号链接；
 不要把会随插拔变化的 `/dev/videoN` 写进节点代码。
+
+当前相机已确认 VID:PID 为 `1bcf:0b15`、序列号为 `01.00.00`，仓库提供对应规则和安装
+脚本。首次准备设备时在 Debian 桌面终端执行：
+
+```bash
+cd /home/radxa/Robot
+sudo bash scripts/install_stereo_camera_udev.sh
+```
+
+执行后重新插拔相机，并用 `ls -l /dev/stereo_camera` 确认稳定设备存在。规则仅把 index 0
+的图像采集节点映射为稳定名称，不会误选 index 1 的 metadata 节点。
 
 Jazzy 环境需要提供：
 
@@ -302,37 +313,103 @@ camera_calibration  cv_bridge  image_transport
 compressed_image_transport  pointcloud_to_laserscan
 ```
 
+上述依赖已写入 `docker/Dockerfile.jazzy`。更新代码后先重建镜像：
+
+```bash
+cd /home/radxa/Robot
+bash scripts/build_jazzy_image.sh
+```
+
 如以后改为 Debian 12 原生源码 underlay，依赖在板端完成实际构建验证后应使用
 `vcs export --exact` 导出 `.repos` 并提交精确 SHA；不要提交未经板端构建的浮动分支
 或猜测 SHA。
 
 ### 标定与相机单独启动
 
-第一次仅启动取流和左右拆分：
+从 Debian 图形桌面打开终端（通常可按 `Ctrl+Alt+T`），确认 `echo $DISPLAY` 有输出，然后
+进入工作区。第一次先启动左右图形预览：
 
 ```bash
-ros2 launch robot stereo_camera.launch.py calibration_mode:=true
+cd /home/radxa/Robot
+bash scripts/run_stereo_calibration.sh preview
 ```
 
-遮挡左右镜头，确认 `/stereo/left/image_raw` 和 `/stereo/right/image_raw` 对应正确；
-若相反，修改 `stereo_camera.yaml` 的 `left_first`。用 8x6 内角点、30 mm 方格的刚性
-标定板运行 `camera_calibration`，把结果保存到：
+通过 VNC 登录时 `DISPLAY` 通常类似 `:1.0`。脚本会从当前用户的 `XAUTHORITY` 或
+`~/.Xauthority` 提取该 VNC 显示的临时 MIT-MAGIC-COOKIE 并传给容器，不会调用
+`xhost` 放宽整个 X Server 的访问控制；退出时临时 cookie 会自动删除。
+
+脚本会固定亮度为 0、曝光为 166、白平衡为 4600 K，把宿主机稳定设备映射为容器内固定的
+`/dev/video0`，构建工作区并同时打开左右图像窗口。容器内使用标准 `/dev/videoN` 是因为
+`usb_cam` 的设备发现只枚举该命名；映射来源始终是宿主机 `/dev/stereo_camera`，不会因
+宿主机节点编号变化而选错设备。依次遮挡物理左右镜头，确认窗口和话题对应；若相反，修改
+`stereo_camera.yaml` 的 `left_first`。如果画面过亮或过暗，可覆盖曝光与白平衡后重试：
+
+```bash
+STEREO_EXPOSURE=200 STEREO_WHITE_BALANCE=5000 \
+  bash scripts/run_stereo_calibration.sh preview
+```
+
+也可以让相机先自动调整 3 秒，再读取结果并立即切回手动锁定。运行命令前先把棋盘格放在
+正常标定距离、保持静止：
+
+```bash
+STEREO_AUTO_TUNE=1 bash scripts/run_stereo_calibration.sh preview
+```
+
+需要更长的收敛时间时可设置 `STEREO_AUTO_TUNE_SECONDS=5`，允许范围为 1～15 秒。自动
+调节只发生在启动前，预览和标定期间仍保持手动值，不会因棋盘格移动而持续改变亮度。
+
+曝光范围为 3～2047，白平衡范围为 2800～6500 K。确认取流、方向和左右顺序后关闭预览
+窗口。用卡尺测量刚性 8×6 内角点标定板的实际内角点间距，再以米为单位启动正式标定。
+例如实测 29.82 mm：
+
+```bash
+bash scripts/run_stereo_calibration.sh calibrate 0.02982
+```
+
+如果希望正式标定前也重新自动适应当前灯光，可执行：
+
+```bash
+STEREO_AUTO_TUNE=1 bash scripts/run_stereo_calibration.sh calibrate 0.02982
+```
+
+脚本会等待左右话题就绪并打开 `camera_calibration` GUI。采样覆盖充分后依次点击
+`CALIBRATE` 和 `SAVE`，不点击 `COMMIT`；结果通常保存为
+`/tmp/calibrationdata.tar.gz`。脚本已把容器 `/tmp` 映射到工作区，退出 GUI 后结果仍在：
+
+```text
+/home/radxa/Robot/calibration_output/calibrationdata.tar.gz
+```
+
+`calibration_output/` 已加入 Git 忽略清单，避免原始采样图和临时文件被误提交。随后按相机
+型号、序列号和单目分辨率保存左右 YAML：
 
 ```text
 src/robot/config/cameras/<型号_序列号_分辨率>/left.yaml
 src/robot/config/cameras/<型号_序列号_分辨率>/right.yaml
 ```
 
+当前 `USB Camera 01.00.00` 的正式标定已归档为：
+
+```text
+src/robot/config/cameras/usb_camera_01_00_00_640x480/left.yaml
+src/robot/config/cameras/usb_camera_01_00_00_640x480/right.yaml
+```
+
+正常相机入口和完整实机入口已默认读取这组文件，因此当前相机不需要再手工传入路径。
+离线复核的极线垂直误差 RMS 为 0.345 px；详细结果和仍需现场完成的深度、TF、障碍及
+30 分钟稳定性项目见
+[双目标定验收记录](docs/stereo_calibration_acceptance_2026-08-04.md)。
+
 仓库的 `_template_640x480` 只有字段模板，不是有效标定。正常模式会拒绝零焦距或右投影
-矩阵中没有 Tx 的模板，禁止用 URDF 中的标称 65 mm 基线计算深度。标定完成后重新构建，
-并显式传入当前相机文件：
+矩阵中没有 Tx 的模板，禁止用标称基线计算深度。标定完成后重新构建。当前已登记的相机
+可直接启动：
 
 ```bash
-ros2 launch robot stereo_camera.launch.py \
-  calibration_mode:=false \
-  left_calibration_file:=/绝对路径/left.yaml \
-  right_calibration_file:=/绝对路径/right.yaml
+ros2 launch robot stereo_camera.launch.py calibration_mode:=false
 ```
+
+更换相机 profile 时仍可用 `left_calibration_file` 和 `right_calibration_file` 覆盖默认路径。
 
 该入口使用 `image_proc` 校正左右图，使用标准 `stereo_image_proc` 发布视差和原始点云。
 `stereo_depth_node` 发布米制 `32FC1` 深度以及 8 位预览；无效或超范围深度为 NaN。
@@ -344,9 +421,7 @@ ros2 launch robot stereo_camera.launch.py \
 位姿，再运行：
 
 ```bash
-ros2 launch robot stereo_robot.launch.py \
-  left_calibration_file:=/绝对路径/left.yaml \
-  right_calibration_file:=/绝对路径/right.yaml
+ros2 launch robot stereo_robot.launch.py
 ```
 
 Mac 不运行相机或 ROS 计算节点，只连接：
@@ -402,3 +477,5 @@ Foxglove 优先显示左右 compressed 图像、`/stereo/depth/image_visual/comp
 - `src/robot/config/nav2_stereo_overrides.yaml`
 - `src/robot/config/cameras/_template_640x480/left.yaml`
 - `src/robot/config/cameras/_template_640x480/right.yaml`
+- `src/robot/config/cameras/usb_camera_01_00_00_640x480/left.yaml`
+- `src/robot/config/cameras/usb_camera_01_00_00_640x480/right.yaml`

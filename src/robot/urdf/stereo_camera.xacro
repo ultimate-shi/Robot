@@ -1,10 +1,10 @@
 <?xml version="1.0"?>
 <robot xmlns:xacro="http://www.ros.org/wiki/xacro">
   <!--
-    这里只提供待实测的初始安装位姿和标称 65 mm 几何外观。
-    深度计算必须使用标定 YAML 中的真实投影矩阵，不能使用该标称值。
+    安装位姿仍待实测；默认基线来自 USB Camera 01.00.00 的双目标定结果。
+    深度计算使用标定 YAML 中的投影矩阵，几何基线仅用于同步模型中的镜头位置。
   -->
-  <xacro:macro name="stereo_camera" params="parent_link xyz rpy baseline:=0.065">
+  <xacro:macro name="stereo_camera" params="parent_link xyz rpy baseline:=0.061145213">
     <link name="stereo_camera_link">
       <visual>
         <geometry>

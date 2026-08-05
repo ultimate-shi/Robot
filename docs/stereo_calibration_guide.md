@@ -39,7 +39,7 @@ v4l2-ctl --list-formats-ext -d /dev/video0
 udevadm info --query=property --name=/dev/video0
 ```
 
-必须在输出中找到计划使用的拼接模式，例如 `1280x480 MJPG 30 fps`。如果只有
+必须在输出中找到计划使用的拼接模式。当前板端实测为 `1280x480 MJPG 20 fps`。如果只有
 `2560x720`，则修改 `stereo_camera.yaml`：
 
 ```yaml
@@ -86,24 +86,29 @@ ls -l /dev/stereo_camera
 
 ## 四、第一次取流和左右确认
 
-构建并加载工作区：
+当前 RK3588 Debian 12 使用 Jazzy 容器。首次安装相机稳定设备规则并重建带标定依赖的
+镜像：
 
 ```bash
-cd /home/shijiahao/Downloads/ros2/robot_ws
-colcon build --packages-select robot
-source install/setup.bash
+cd /home/radxa/Robot
+sudo bash scripts/install_stereo_camera_udev.sh
+# 重新插拔相机并确认 /dev/stereo_camera 存在
+bash scripts/build_jazzy_image.sh
 ```
 
-只启动原图拆分，暂不启动视差和点云：
+从 Debian 图形桌面打开终端，只启动原图拆分和左右预览，暂不启动视差和点云：
 
 ```bash
-ros2 launch robot stereo_camera.launch.py calibration_mode:=true
+bash scripts/run_stereo_calibration.sh preview
 ```
 
-另开终端检查：
+脚本会固定亮度、曝光和白平衡，并同时弹出左右图像窗口。需要用 ROS CLI 检查时，保持
+预览容器运行并另开桌面终端：
 
 ```bash
-source install/setup.bash
+docker exec -it robot-jazzy-calibration bash
+source /opt/ros/jazzy/setup.bash
+source /workspace/install/setup.bash
 ros2 topic hz /stereo/left/image_raw
 ros2 topic hz /stereo/right/image_raw
 ros2 topic echo /stereo/left/image_raw --once --field width
@@ -127,17 +132,35 @@ ros2 topic echo /stereo/left/image_raw --once --field height
 - 实际格子数量：9×7。
 - 单格边长：30 mm，即命令中的 `--square 0.030`。
 - 材料：刚性平板，不能拿一张会弯曲的纸直接标定。
-- 测量：用卡尺测量打印后的实际格子，不要默认打印比例正好是 100%。
+- 测量：用卡尺测量相邻内角点间距，不要默认打印比例正好是 100%。
 
 如果实测格子为 29.82 mm，命令必须写 `--square 0.02982`。格子尺寸误差会直接按比例
 进入基线和深度尺度。
+
+`--square` 表示相邻内角点之间的距离，不是标定板最外边缘到第一个内角点的距离。9×7
+格子对应 8×6 内角点：沿 9 格方向，首尾内角点跨 7 个间距，30 mm 标准板应为 210 mm；
+沿 7 格方向，首尾内角点跨 5 个间距，应为 150 mm。如果只有最外侧两个边缘格为
+27 mm，而所有相邻内角点间距和上述总跨度仍为 30 mm、210 mm、150 mm，则外侧格不参与
+角点几何约束，仍使用 `--square 0.030`。如果内角点间距本身不均匀，则必须重新打印。
+
+A4 短边只有 210 mm，不适合在该方向无页边距打印 7 个 30 mm 格子。重新制作时优先使用
+A3，或把 9×7 格子的统一边长缩小到 25 mm，并按打印后的真实内角点间距填写命令。
 
 标定前固定好镜头焦距、曝光模式、分辨率和左右相对位置。标定后不允许旋转镜头、改变
 焦距、拆开相机支架或切换分辨率；发生这些变化必须重新标定。
 
 ## 六、执行双目标定
 
-保持 `calibration_mode:=true` 正在运行，另开带图形界面的 Linux 终端执行：
+当前 RK3588 推荐关闭预览窗口后，直接从 Debian 图形桌面终端传入卡尺实测的格子边长。
+例如实际边长为 29.82 mm：
+
+```bash
+cd /home/radxa/Robot
+bash scripts/run_stereo_calibration.sh calibrate 0.02982
+```
+
+脚本会重新启动 `calibration_mode:=true` 并打开标定 GUI，效果等同于在带图形界面的
+Jazzy 环境手工执行：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
@@ -296,6 +319,16 @@ ros2 launch robot stereo_robot.launch.py \
 
 只有再次 `colcon build` 后，profile 才会被安装到 `install/robot/share/robot/config/cameras`。
 直接传源码目录绝对路径可以立即测试，但正式部署建议构建后使用安装空间中的文件。
+
+本机 `USB Camera 01.00.00` 的 640×480 单目 profile 已保存为：
+
+```text
+src/robot/config/cameras/usb_camera_01_00_00_640x480/left.yaml
+src/robot/config/cameras/usb_camera_01_00_00_640x480/right.yaml
+```
+
+两个实机启动入口已默认读取这组文件。2026-08-04 的离线验收数据见
+[`stereo_calibration_acceptance_2026-08-04.md`](stereo_calibration_acceptance_2026-08-04.md)。
 
 ## 九、标定后分层验收
 

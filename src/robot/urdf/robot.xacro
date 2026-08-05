@@ -234,7 +234,7 @@
               
   <!-- 双目安装位姿尚未实测；正式实机导航前必须替换 xyz/rpy。 -->
   <xacro:stereo_camera parent_link="base_link" xyz="0.20 0 0.30"
-                       rpy="0 0 0" baseline="0.065"/>
+                       rpy="0 0 0" baseline="0.061145213"/>
 
   <xacro:include filename="hardware.xacro"/>
 

@@ -48,12 +48,14 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'left_calibration_file',
             default_value=os.path.join(
-                pkg_share, 'config', 'cameras', '_template_640x480',
+                pkg_share, 'config', 'cameras',
+                'usb_camera_01_00_00_640x480',
                 'left.yaml')),
         DeclareLaunchArgument(
             'right_calibration_file',
             default_value=os.path.join(
-                pkg_share, 'config', 'cameras', '_template_640x480',
+                pkg_share, 'config', 'cameras',
+                'usb_camera_01_00_00_640x480',
                 'right.yaml')),
     ]
     common = IncludeLaunchDescription(

@@ -280,3 +280,92 @@
 - 给 `scripts/` 下四个部署脚本增加顶部中文注释，明确首次安装、代理变更、镜像依赖
   变更和日常启动各自的执行时机及重复执行条件。README 新增以工作区根目录为基准的
   `obstacle_test.yaml`、`obstacle_test.ply` 和 `nav2_params.yaml` 相对路径启动示例。
+
+## 2026-08-04
+
+- 按 `docs/stereo_calibration_guide.md` 在 RK3588 板端完成双目标定前只读检查。确认宿主机
+  为 ROCK 5B+、Debian 12、aarch64；USB 双目相机由 `uvcvideo` 识别，VID:PID 为
+  `1bcf:0b15`，序列号为 `01.00.00`，视频采集节点为 `/dev/video1`（index 0），
+  `/dev/video2` 是 metadata 节点，`/dev/video0` 是板载 HDMI RX。
+- 相机支持 `1280x480 MJPG` 横向拼接模式，但该模式最高仅为 20 fps；仓库当前
+  `stereo_camera.yaml` 配置为 30 fps，与硬件能力不符。使用目标模式连续采集 100 帧，
+  实测约 19.99～20.00 fps，无序号跳变或取流错误。
+- 抓取并检查一帧 1280×480 JPEG，确认图像为左右横向拼接、单目各 640×480，方向一致，
+  未见明显镜像、上下翻转、撕裂或解码异常；物理左右镜头与话题的对应关系仍需用逐个
+  遮挡测试确认。
+- 系统已生成稳定 by-id 链接
+  `/dev/v4l/by-id/usb-USB_Camera_USB_Camera_01.00.00-video-index0`，但仓库配置要求的
+  `/dev/stereo_camera` 尚未创建。当前自动曝光与自动白平衡开启，标定前还需固定曝光、
+  白平衡、分辨率和相机结构。
+- Jazzy 容器镜像存在，但实测缺少 `usb_cam`、`image_proc`、`stereo_image_proc`、
+  `camera_calibration`、`compressed_image_transport` 和 `pointcloud_to_laserscan`；
+  `cv_bridge`、`image_transport` 和 `colcon` 已存在。当前启动脚本也未映射相机设备，
+  终端无 GUI 显示环境，因此尚不能执行 ROS 左右遮挡检查和标定 GUI。
+- 下一步：把相机依赖加入 Jazzy 镜像并重建；创建 `/dev/stereo_camera` udev 规则；将
+  `1280x480` profile 帧率改为 20 fps；给标定容器映射相机和图形界面；随后启动
+  `calibration_mode:=true` 完成话题帧率、尺寸、左右遮挡和图像质量检查，再使用实测格子
+  尺寸执行 8×6 双目标定。
+- 踩坑：Debian 宿主机本来就不直接安装 ROS 2，ROS 依赖必须在 Jazzy 容器中检查；
+  UVC 设备会同时暴露采集与 metadata 节点，不能按 `/dev/videoN` 数字顺序猜测取流节点。
+- 完成标定软件整改：Jazzy 镜像加入 `usb_cam`、`camera_calibration`、`image_proc`、
+  `stereo_image_proc`、`image_view`、压缩图像传输、点云转激光和 `v4l-utils` 等依赖，
+  新镜像已成功构建，逐包检查全部通过；`robot` 工作区在新镜像中构建通过。
+- 将 `stereo_camera.yaml` 的实测 profile 改为 `1280x480 MJPEG @ 20 FPS`，并配置
+  `usb_cam` 不覆盖板端固定的相机控制。新增 `configure_stereo_camera.sh`，默认固定亮度 0、
+  手动曝光 166 和白平衡 4600 K；ROS 运行时回读确认这些值没有被覆盖。
+- 新增当前相机专用 udev 规则和安装脚本，按 `1bcf:0b15`、序列号 `01.00.00`、index 0
+  创建 `/dev/stereo_camera`。当前 Codex 会话没有 sudo 密码，规则文件已完成但系统安装
+  仍需用户在 Debian 桌面终端执行一次 `sudo bash scripts/install_stereo_camera_udev.sh`。
+- 新增 `run_stereo_calibration.sh` 图形启动脚本：`preview` 模式同时打开左右图像窗口用于
+  遮挡检查，`calibrate <实测格子米数>` 模式启动标定 GUI；脚本自动映射 X11、相机和
+  持久化 `calibration_output/`。README 和标定指南已同步桌面操作步骤。
+- 容器实测 `usb_cam` 成功使用 `/dev/video0` 启动 `1280x480 MJPEG @ 20 FPS`，左右拆分
+  话题均为 640×480。宿主机稳定名作为 Docker 映射来源，容器内固定为标准
+  `/dev/video0`，避免 `usb_cam` 不识别非 `/dev/videoN` 设备名的问题。
+- 踩坑：ROS 2 setup 脚本不能在 `set -u` 下加载，标定容器内部已改为不启用 nounset；
+  `ros2 topic hz` 在板端首次订阅会受 DDS 建链与成批到达影响产生虚高/虚低，取流模式以
+  V4L2、usb_cam 日志和消息时间戳综合确认。测试临时容器均已停止。
+- 当前磁盘状态：根分区剩余约 6.6 GB，新 `robot-jazzy:local` 镜像约 2.35 GB；标定原始
+  文件目录已加入 Git 忽略，后续仍应及时归档或清理无用采样和旧镜像。
+- 短时验证强制停止 ROS 时曾在工作区生成 181 MB `core` 转储，确认属于本轮容器测试后
+  已删除；标定启动脚本增加 `--ulimit core=0`，避免后续异常退出再次占用板端空间。
+- VNC 实际运行预览时，原 X11 回退逻辑调用 `xhost +SI:localuser:root`，当前 VNC X Server
+  不支持该授权族并返回 `BadValue`，随后 Qt 因容器未授权而无法连接 `DISPLAY=:1.0`。
+  已移除 `xhost` 方案，改为从当前 `XAUTHORITY` 或 `~/.Xauthority` 提取对应显示的
+  MIT-MAGIC-COOKIE，转换为 FamilyWild 临时授权文件后只读映射到容器，退出时自动删除。
+- 使用当前 VNC `DISPLAY=:1.0` 实测修正版预览，两个 `image_view` 均成功连接 X Server，
+  不再出现 `Client is not authorized` 或 Qt xcb 初始化失败；VNC 报告的 XKeyboard/DRI3
+  警告只表示无键盘扩展和硬件渲染，软件显示不受影响。测试结束后容器与临时 cookie 已
+  清理；同时把容器内清理信号改为 TERM，并增加超时后的 KILL 兜底，避免 GUI 异常退出
+  时相机 launch 长时间残留。
+- 为曝光和白平衡增加可选的一次性自动调节：设置 `STEREO_AUTO_TUNE=1` 后，脚本先在
+  `1280x480 MJPG @ 20 FPS` 下开启自动曝光/白平衡并丢弃采集 3 秒，再读取收敛值并切回
+  手动锁定；可用 `STEREO_AUTO_TUNE_SECONDS` 在 1～15 秒内调整，标定过程中不会持续漂移。
+- 明确标定板尺寸判据：`--square` 是相邻内角点距离。9×7 格子产生 8×6 内角点；只要
+  中间角点间距均为 30 mm，沿 9 格/7 格方向的首尾内角点跨度分别为 210/150 mm，最外侧
+  两个边缘格为 27 mm 不影响角点模型，仍可使用 0.030 m；若内角点间距不均匀则重新打印。
+- 补充现场采样操作顺序：在左右画面都完整识别 8×6 内角点的前提下，按中距正视、四周
+  平移、近远尺度、俯仰/偏航/滚转倾斜逐组覆盖 GUI 的 X、Y、Size、Skew；每个姿态静止
+  1～2 秒，采集 40～80 组差异明显的清晰双目样本。CALIBRATE 可用后停止移动并计算，
+  检查校正后同名角点水平对齐，再点击 SAVE，不使用 COMMIT。
+- 检查用户保存的 `calibrationdata.tar.gz`：归档可安全读取，包含 101 组 640×480 左右图、
+  左右 YAML 和 `ost.txt`。矩阵字段完整有效，右目 `P[3]=-28.48706`，计算基线为
+  61.145 mm；与模型原标称 65 mm 相差约 5.9%，还需用卡尺核对实际光心距离。
+- 对原始样本独立复核极线：101 组中 94 组可重新检测完整 8×6 内角点，校正后垂直误差
+  平均绝对值 0.254 px、RMS 0.345 px、P95 0.709 px；所有可检组的逐组 RMS 均低于
+  1 px。样本覆盖画面四周、远近及多种倾角，离线几何验收通过。
+- 把正式左右参数归档到
+  `src/robot/config/cameras/usb_camera_01_00_00_640x480/`，并把相机单测及完整实机入口的
+  默认文件从占位模板切换到该 profile。URDF 几何基线同步为 0.061145213 m，安装
+  `xyz/rpy` 仍待相机装车后实测。
+- 新增 `docs/stereo_calibration_acceptance_2026-08-04.md`，区分已通过的文件/极线检查与
+  尚需现场完成的 0.5～3 m 深度尺度、TF、障碍、性能和 30 分钟稳定性验收，避免把离线
+  标定合格误写成整车验收完成。
+- Jazzy 容器重新构建 `robot` 包成功；正式 profile 已进入安装空间，xacro 展开通过。
+  使用保存样本以 20 Hz 合成回放，左右 CameraInfo 的矩阵和 optical frame 正确，左右
+  校正图、视差、深度和点云均有输出，证明配置读取和处理链可运行。
+- 当前复查环境未暴露 `/dev/video*` 或 `/dev/stereo_camera`，因此不能在本轮把离线回放
+  消息数当作真实 USB 帧率/延迟成绩；在线性能、深度尺度和 30 分钟稳定性仍列为现场项。
+- `test_stereo_processing.py` 的 3 个双目功能测试全部通过；全包测试的 flake8/pep257
+  仍因仓库既有的 306 条跨文件风格问题失败，属于历史 lint 债务，没有把它误报为本次
+  标定功能失败，也未在本次任务中扩大范围批量改写旧节点。

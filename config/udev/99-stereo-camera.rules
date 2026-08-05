@@ -1,0 +1,2 @@
+# USB 双目相机稳定设备名；index 0 是图像采集节点，index 1 是 metadata 节点。
+SUBSYSTEM=="video4linux", ATTR{index}=="0", ATTRS{idVendor}=="1bcf", ATTRS{idProduct}=="0b15", ATTRS{serial}=="01.00.00", SYMLINK+="stereo_camera"

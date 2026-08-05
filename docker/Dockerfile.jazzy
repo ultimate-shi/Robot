@@ -25,7 +25,13 @@ RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" \
         python3-scipy \
         python3-yaml \
         ros-jazzy-controller-manager \
+        ros-jazzy-camera-calibration \
+        ros-jazzy-compressed-image-transport \
+        ros-jazzy-cv-bridge \
         ros-jazzy-foxglove-bridge \
+        ros-jazzy-image-proc \
+        ros-jazzy-image-transport \
+        ros-jazzy-image-view \
         ros-jazzy-joint-state-broadcaster \
         ros-jazzy-nav2-behaviors \
         ros-jazzy-nav2-bt-navigator \
@@ -39,10 +45,14 @@ RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" \
         ros-jazzy-nav2-velocity-smoother \
         ros-jazzy-nav2-waypoint-follower \
         ros-jazzy-position-controllers \
+        ros-jazzy-pointcloud-to-laserscan \
         ros-jazzy-robot-state-publisher \
         ros-jazzy-ros2controlcli \
+        ros-jazzy-stereo-image-proc \
+        ros-jazzy-usb-cam \
         ros-jazzy-velocity-controllers \
         ros-jazzy-xacro \
+        v4l-utils \
     && python3 -m pip install --break-system-packages --no-cache-dir \
         --index-url "${PYPI_MIRROR}" plyfile==1.1.3 \
     && rm -rf /var/lib/apt/lists/*
