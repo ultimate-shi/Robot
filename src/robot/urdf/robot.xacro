@@ -11,6 +11,7 @@
   <xacro:include filename="radar-side.xacro"/>
   <xacro:include filename="imu.xacro"/>
   <xacro:include filename="stereo_camera.xacro"/>
+  <xacro:include filename="head.xacro"/>
 
   <!-- 新增：动态获取robot包的绝对路径（核心！） -->
   <xacro:property name="pkg_path" value="$(find robot)"/>
@@ -231,10 +232,24 @@
     pitch="0"
     yaw="0"
   />
+
+  <!--
+    两自由度头部安装在 body 前方中线。当前位姿依据参考图和网格边界设置，
+    实机装配完成后应测量安装面并校准 xyz/rpy。
+  -->
+  <xacro:head parent_link="body"
+              xyz="0 -0.145 0.205"
+              rpy="0 0 0"
+              mesh_scale="0.001 0.001 0.001"/>
               
-  <!-- 双目安装位姿尚未实测；正式实机导航前必须替换 xyz/rpy。 -->
-  <xacro:stereo_camera parent_link="base_link" xyz="0.20 0 0.30"
-                       rpy="0 0 0" baseline="0.061145213"/>
+  <!--
+    双目摄像头安装在头部上半部分内部；两个 OBJ 共享局部装配原点，
+    相机镜头中心与面罩的左右孔重合。
+  -->
+  <xacro:stereo_camera parent_link="head_pitch_link"
+                       xyz="0 0 0"
+                       rpy="0 0 0"
+                       baseline="0.061145213"/>
 
   <xacro:include filename="hardware.xacro"/>
 

@@ -1,5 +1,32 @@
 # 过程记录
 
+## 2026-08-05
+
+- 根据 `robot.png` 中的实车结构，在车体前方中线增加独立两自由度头部；新增
+  `head.xacro`，下部 `head_yaw_joint` 绕 Z 轴控制 yaw，上部 `head_pitch_joint` 绕 X 轴
+  控制 pitch，并在 `robot.xacro` 中单独 include 和实例化。
+- 为新增的 `yaw_camera.obj`、`pitch_camera.obj` 补充同名 MTL，覆盖 OBJ 中引用的全部材质名，
+  统一使用蓝色；模型仍按毫米到米的 `0.001` 比例加载。
+- README 已补充头部结构、关节范围和后续实机校准项。当前安装位置与 pitch 转轴位置依据
+  参考图和 OBJ 边界确定，尚未经过实物尺寸测量；下一步应核对安装面坐标、转轴中心和舵机
+  机械限位，再决定是否接入 ros2_control 控制器。
+- 完整 `robot.xacro` 已成功展开并通过 `check_urdf`，模型树确认是
+  `body -> head_yaw_link -> head_pitch_link`；两个 OBJ 的全部 10 个材质引用均有定义，
+  `colcon build --packages-select robot` 构建通过。
+- 根据新增 `stereo_camera.obj` 的顶点坐标确认其与 `pitch_camera.obj` 共用装配原点：
+  相机外壳宽 80 mm，左右镜头中心位于 x=±30.5 mm、y=-16.5 mm、z=46.8 mm，孔距 61 mm，
+  可直接嵌入头部上半部分而无需额外模型平移。
+- 新增浅灰色 `stereo_camera.mtl` 并修正 OBJ 的材质库引用；双目可视模型由原先占位 box
+  替换为真实 OBJ。`robot.xacro` 中相机父链接由 `base_link` 改为
+  `head_pitch_link`，左右 camera/optical frame 改为沿头部 X 轴排列、朝车头负 Y，
+  并保留标定基线 61.145213 mm。
+- 完整 xacro 再次展开并通过 `check_urdf`，TF 树确认双目位于
+  `head_pitch_link -> stereo_camera_link` 下；左右光学中心展开为 x=±30.5726 mm、
+  y=-16.5 mm、z=46.8 mm，材质引用检查和
+  `colcon build --packages-select robot` 均通过。
+- 踩坑：本轮普通文件和图片查看再次遇到 `bwrap: loopback: Failed RTM_NEWADDR`；改用受控
+  权限读取工作区，并通过临时图片编码完成参考图检查，未修改原始图片。
+
 ## 2026-07-09
 
 - 检查 `range_to_scan_node`、`obstacle_avoidance_node`、`nav2_params.yaml` 和 `terrain_params.yaml`，确认点云模式下 Nav2 local costmap 使用 `/nav/obstacle_points`，但 collision monitor 会订阅 `range_to_scan` 发布的 `/scan`。

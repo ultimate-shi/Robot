@@ -8,6 +8,21 @@ ros2 launch robot robot.launch.py
 
 本项目目标是按现实小车模型搭建 ROS 2 数字孪生，逐步还原车体结构、传感器、底盘运动控制、反馈状态、地图和 Nav2 路径规划能力。改底盘、轮子、传感器、地图和导航参数时，应优先考虑是否仍然和现实小车一致。
 
+## 机器人头部模型
+
+车体前方中线安装了独立的两自由度头部模型，结构定义位于
+`src/robot/urdf/head.xacro`。下部 `head_yaw_joint` 绕 Z 轴控制 yaw，初始范围为
+±90°；上部 `head_pitch_joint` 绕 X 轴控制 pitch，初始范围为 ±45°。两部分分别使用
+`yaw_camera.obj` 和 `pitch_camera.obj`，对应 MTL 已统一设为蓝色。
+
+双目摄像头实际安装在 `head_pitch_link` 内部，使用浅灰色 `stereo_camera.obj` 网格。
+网格中的左右镜头中心与头部上半部分面罩孔重合，模型孔距为 61 mm；左右 optical frame
+保留实机标定得到的 61.145213 mm 基线，并随头部 yaw、pitch 一起运动。
+
+当前 `body -> head_yaw_link` 安装位姿是根据参考图片和 OBJ 边界设置的初始值。完成实车
+装配后，应测量安装面、pitch 转轴和舵机机械限位，并同步校准 `robot.xacro` 中的安装位姿、
+`head.xacro` 中的 `pitch_joint_xyz` 与关节上下限。
+
 ## 当前导航链路
 
 Nav2 负责全局/局部规划、速度生成和平滑以及 Nav2 自身恢复。超声波一方面通过 `range_to_scan` 生成稀疏 `/scan` 并进入 Nav2 local costmap，另一方面仍作为底盘前最后一层近距离安全过滤；当前安全层在前方持续低于 stop 距离且后方安全时，会结合最近前进命令或 Nav2 目标刚活跃的状态，或目标失败后一段独立脱困窗口内的状态，短暂低速后退，避免小车一直顶在障碍前。
