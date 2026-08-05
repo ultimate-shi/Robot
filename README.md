@@ -147,6 +147,39 @@ ARM64 软件包下载速度；需要切回官方源时可通过同名 build argu
 bash scripts/run_robot_jazzy.sh log_level:=info foxglove_port:=8765
 ```
 
+检测到宿主机 `/dev/stereo_camera` 时，该脚本会自动映射为容器内 `/dev/video0`，启动日志
+应显示“已映射双目相机”。Docker 不能给已经创建的容器动态补加设备；如果旧容器内没有
+`/dev/video0`，必须退出旧容器后重新运行脚本。进入容器单独启动相机时执行：
+
+```bash
+ros2 launch robot stereo_camera.launch.py video_device:=/dev/video0
+```
+
+完整实机入口执行：
+
+```bash
+ros2 launch robot stereo_robot.launch.py video_device:=/dev/video0
+```
+
+如果只需要启动 Jazzy 容器，不构建项目、也不运行任何 launch，执行：
+
+```bash
+bash scripts/run_jazzy_container.sh
+```
+
+该脚本在后台创建同名的 `robot-jazzy` 容器并挂载当前仓库。进入和停止容器分别使用：
+
+```bash
+docker exec -it robot-jazzy bash
+docker stop robot-jazzy
+```
+
+`run_jazzy_container.sh` 同样会在宿主机稳定设备存在时自动映射到容器 `/dev/video0`。
+
+进入容器后会自动加载 ROS 2 Jazzy，以及已经存在时的工作区 `install/setup.bash`。如需使用
+最新代码，可在容器内自行执行 `colcon build --packages-select robot --symlink-install`；脚本
+本身不会隐式构建或启动节点。
+
 使用仓库内相对路径启动障碍测试地图时，路径相对于挂载后的工作区根目录
 `/workspace`（即宿主机的仓库根目录）：
 
@@ -424,11 +457,24 @@ src/robot/config/cameras/usb_camera_01_00_00_640x480/right.yaml
 ros2 launch robot stereo_camera.launch.py calibration_mode:=false
 ```
 
+该独立入口默认同时启动监听 `0.0.0.0:8765` 的 Foxglove Bridge。相机处理启动后可直接从
+另一台电脑连接 `ws://<RK3588_IP>:8765`；如端口被其他入口占用，可使用
+`foxglove_enabled:=false` 关闭，或用 `foxglove_port:=<端口>` 修改端口。完整实机入口由
+`common_bringup.launch.py` 统一启动 Bridge，因此包含相机入口时会自动关闭重复实例。
+
 更换相机 profile 时仍可用 `left_calibration_file` 和 `right_calibration_file` 覆盖默认路径。
 
 该入口使用 `image_proc` 校正左右图，使用标准 `stereo_image_proc` 发布视差和原始点云。
 `stereo_depth_node` 发布米制 `32FC1` 深度以及 8 位预览；无效或超范围深度为 NaN。
 左右原图和深度预览默认另发 compressed transport，适合跨网络预览。
+
+splitter 的左右图及 CameraInfo 使用 `RELIABLE` QoS，以兼容 `image_proc` 的可靠订阅；相机
+拼接图输入仍使用传感器常用的 `BEST_EFFORT`。若话题存在但校正图、视差和深度没有消息，
+应先用 `ros2 topic info <话题> -v` 检查发布/订阅两端的 Reliability 是否兼容。
+米制深度和8位预览同样使用 `RELIABLE`，保证 Foxglove 与压缩转发器能够稳定订阅。
+Jazzy 的 `image_transport republish` 通过 `in_transport=raw`、`out_transport=compressed`
+参数选择插件，并把插件实际输出 `out/compressed` 分别映射到对应图像的 `/compressed`
+话题；三个转发器不会把图像重新发布回原始基话题。
 
 ### RK3588 完整实机启动
 
@@ -462,6 +508,27 @@ Foxglove 优先显示左右 compressed 图像、`/stereo/depth/image_visual/comp
 | `/nav/stereo_obstacle_points` | `base_link` 下过滤和降采样后的 Nav2 点云 |
 | `/stereo/scan` | 独立诊断 LaserScan，不覆盖仿真 `/scan` |
 | `/stereo/pointcloud_filter/status` | FPS、延迟、点数、TF 错误和丢帧 JSON |
+
+相机图像到 Foxglove 的数据链如下：
+
+```text
+/dev/stereo_camera
+  -> usb_cam: 1280×480 RGB 拼接图 /stereo/image_raw
+  -> stereo_splitter: 左右 640×480 原图和 CameraInfo
+  -> image_proc: /stereo/left|right/image_rect
+  -> stereo_image_proc: /stereo/disparity 和 /stereo/points2
+  -> stereo_depth_node: 米制 32FC1 /stereo/depth/image
+                        8 位预览 /stereo/depth/image_visual
+  -> image_transport: /stereo/depth/image_visual/compressed
+  -> foxglove_bridge: ws://<RK3588_IP>:8765
+  -> Foxglove Image/3D 面板
+```
+
+`/stereo/depth/image` 的每个有效像素直接表示以米为单位的 Z 深度，适合尺度验收；Foxglove
+Image 面板把 `Value min/max` 设为 `0.25/4.0` 后，把鼠标悬停在目标中心即可读取像素深度。
+`/stereo/depth/image_visual` 只是“近亮远暗”的 mono8 网络预览，像素值不是米，不能用来
+判定距离。需要三维查看时，在 3D 面板直接显示 `/stereo/points2`，或把米制深度图设为
+`Depth map`、`Distance type=Z-axis`、`Depth scale=1.0` 并配对左目 CameraInfo。
 
 更换同类拼接 UVC 相机时只新增相机 profile、标定文件并更新安装 TF。双独立 UVC
 相机只替换取流/同步适配层；自带深度或点云的相机跳过 splitter/立体匹配并适配上述公共

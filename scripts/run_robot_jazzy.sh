@@ -13,11 +13,21 @@ if ! docker image inspect robot-jazzy:local >/dev/null 2>&1; then
   exit 1
 fi
 
+# 真实相机存在时自动映射到容器标准视频节点；仿真场景没有相机也允许正常启动。
+CAMERA_DEVICE_ARGS=()
+if [[ -e /dev/stereo_camera ]]; then
+  CAMERA_DEVICE_ARGS=(--device /dev/stereo_camera:/dev/video0)
+  echo "已映射双目相机：/dev/stereo_camera -> 容器 /dev/video0"
+else
+  echo "提示：未找到 /dev/stereo_camera，本次容器不映射真实双目相机。" >&2
+fi
+
 # host 网络让 DDS 与 Foxglove Bridge 直接使用开发板 IP；工作区挂载便于持续开发。
 exec docker run --rm --interactive --tty \
   --name robot-jazzy \
   --network host \
   --ipc host \
+  "${CAMERA_DEVICE_ARGS[@]}" \
   --volume "${WORKSPACE_DIR}:/workspace" \
   --workdir /workspace \
   robot-jazzy:local \

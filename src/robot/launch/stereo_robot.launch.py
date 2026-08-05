@@ -42,6 +42,8 @@ def generate_launch_description():
         DeclareLaunchArgument('foxglove_port', default_value='8765'),
         DeclareLaunchArgument('calibration_mode', default_value='false'),
         DeclareLaunchArgument(
+            'video_device', default_value='/dev/stereo_camera'),
+        DeclareLaunchArgument(
             'camera_config',
             default_value=os.path.join(
                 pkg_share, 'config', 'stereo_camera.yaml')),
@@ -73,10 +75,13 @@ def generate_launch_description():
         launch_arguments={
             'calibration_mode': LaunchConfiguration('calibration_mode'),
             'camera_config': LaunchConfiguration('camera_config'),
+            'video_device': LaunchConfiguration('video_device'),
             'left_calibration_file': LaunchConfiguration(
                 'left_calibration_file'),
             'right_calibration_file': LaunchConfiguration(
                 'right_calibration_file'),
+            # 完整实机入口已由 common_bringup 启动 Bridge，避免重复占用 8765。
+            'foxglove_enabled': 'false',
             'log_level': LaunchConfiguration('log_level'),
         }.items(),
     )

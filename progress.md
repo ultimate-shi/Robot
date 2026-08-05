@@ -26,6 +26,118 @@
   `colcon build --packages-select robot` 均通过。
 - 踩坑：本轮普通文件和图片查看再次遇到 `bwrap: loopback: Failed RTM_NEWADDR`；改用受控
   权限读取工作区，并通过临时图片编码完成参考图检查，未修改原始图片。
+- 双目标定后续验收清单复核：相机已挂到 `head_pitch_link` 并完成模型安装位置调整，因此
+  不再把“填写静态安装 xyz/rpy”列为未完成项；现场仍需验证包含 yaw/pitch 关节在内的
+  动态 TF、0.5/1/2/3 m 深度尺度、真实输出帧率和延迟、障碍点云/local costmap 清除，
+  最后连续运行 30 分钟检查 USB、内存、温度和 CPU。
+- 本次说明统一通过判据：左右原图接近硬件 20 Hz；深度和点云至少 15 Hz；端到端延迟
+  P95 小于 200 ms；0.5～2 m 深度中值误差不超过 5%，3 m 不超过 10%；障碍移除后约
+  1 秒清除；30 分钟内无 USB reset、持续内存增长和热降频，平均总 CPU 低于 75%。
+- 补充从 UVC 到 Foxglove 的完整数据路径说明：`usb_cam` 发布 1280×480 拼接图，splitter
+  拆成左右 640×480，`image_proc` 校正，`stereo_image_proc` 计算视差和点云，项目深度
+  节点按 `Z=fT/d` 发布米制 `32FC1` 深度及 mono8 预览，最后由 Foxglove Bridge 通过
+  8765 端口送到客户端。
+- 明确深度尺度读取方法和易错点：Foxglove Image 面板显示 `/stereo/depth/image` 时，悬停
+  像素显示的数值单位是米；`/stereo/depth/image_visual` 及其 compressed 话题只是近亮远暗
+  的 8 位预览，像素值不是距离，不能拿它做 0.5/1/2/3 m 精度验收。
+- 梳理 `stereo_camera.launch.py` 的启动组成：始终启动 `usb_cam` 和横向拼接图 splitter；
+  正常模式额外启动左右 `image_proc` 校正、`stereo_image_proc` 视差/点云、项目米制深度
+  节点及3个 compressed 转发器；标定模式关闭这些后处理和压缩，只保留左右原图供
+  `camera_calibration` 使用。该文件本身不启动 Foxglove Bridge、Nav2、TF 发布器或标定 GUI。
+- 现场诊断 `/stereo/depth/image` 只有话题名但无消息：相机拼接图实际有发布，格式为
+  1280×480 `rgb8`、step 3840；splitter 参数和正式 YAML 路径正确，全部处理进程也仍在。
+  真正断点是 splitter 的左右图/CameraInfo 发布端采用 `BEST_EFFORT`，而两个
+  `image_proc/rectify_node` 订阅端要求 `RELIABLE`，DDS 报告
+  `RELIABILITY_QOS_POLICY` 不兼容，导致校正图、视差、深度和点云依次没有数据。
+- 同时观察到 `/stereo/image_raw` 本轮短时统计约 6.5 Hz，低于相机目标20 Hz；该统计受
+  当前多路诊断订阅和板端负载影响，但QoS修复后仍需重新单独测量，不能直接判为性能通过。
+- 完成深度断链修复：`stereo_splitter_node` 的左右 Image 和 CameraInfo 发布端改为
+  `RELIABLE + KEEP_LAST(10)`，输入拼接图订阅仍保留传感器 `BEST_EFFORT`。在线端点复核
+  显示 splitter 与左右 `rectify_node` 现在均为 RELIABLE，DDS 不再因可靠性策略拒绝连接；
+  实机已收到视差，并成功读取 640×480、`32FC1` 的 `/stereo/depth/image` 消息。
+- `stereo_camera.launch.py` 新增默认开启的 `stereo_foxglove_bridge`，监听
+  `0.0.0.0:8765`，支持 `foxglove_enabled` 和 `foxglove_port` 参数；当前相机入口启动后
+  Foxglove 可直接连接。`stereo_robot.launch.py` 包含该入口时显式关闭相机内 Bridge，继续
+  使用 `common_bringup` 的实例，避免同一端口启动两次。
+- QoS修复在线复测时暴露原压缩转发器的隐藏问题：Jazzy 不再采用旧式 `raw compressed`
+  位置参数，导致 `out_transport` 为空并把raw图发布回同名基话题，形成自回环和CPU暴涨。
+  已改为参数 `in_transport=raw`、`out_transport=compressed`，并直接重映射插件输出
+  `out/compressed`；最终确认左右原图及深度预览的3个 `/compressed` 话题名称正确。
+- 最终重新构建成功，3个双目功能测试通过，Foxglove Bridge进程随相机launch运行，真实
+  深度消息编码回读为 `32FC1`。usb_cam 仍提示缺少拼接相机自身的
+  `~/.ros/camera_info/stereo_uvc_combined.yaml`，但下游使用 splitter 加载的左右正式YAML，
+  该警告不阻断校正和深度输出。当前性能和点云频率仍需后续单独优化、验收。
+- 最后一轮发现深度预览发布端仍为 `BEST_EFFORT`，与压缩转发器的可靠订阅不兼容；已把
+  `stereo_depth_node` 的米制深度和mono8预览统一改为 `RELIABLE + KEEP_LAST(10)`。
+  重建和3项功能测试再次通过，在线确认8765端口可连接、米制深度编码为 `32FC1`，并成功
+  收到 `/stereo/depth/image_visual/compressed` 的 `mono8; jpeg compressed mono8` 消息。
+- 诊断 Foxglove 画面卡顿和深度延迟：当前客户端订阅的是 usb_cam 动态生成的
+  `/image_raw/compressed`，它会把完整1280×480拼接RGB再次JPEG编码，并非项目的左右
+  640×480压缩话题；端点确认该话题发布者是 `usb_cam`，订阅者是 Foxglove Bridge，而
+  `/stereo/left/image_raw/compressed` 当时没有客户端订阅。
+- 20秒 KEEP_LAST=1 轻量探针测得：拼接图约2.05 Hz、左右校正约1.1 Hz、视差约0.2 Hz，
+  深度样本极少；板端各级消息时间戳延迟约0.84～1.05秒。因此Foxglove观察到5秒以上延迟
+  不全是SGBM计算，约4秒来自米制raw深度经Bridge/网络/面板的额外排队。`32FC1`深度每帧
+  约1.23 MB，RELIABLE传输配合10 MB发送缓冲最多可积压约8帧，更容易呈现“旧画面”。
+- 同期容器总CPU约164%（约1.64个核），主要进程为usb_cam约36.7%、SGBM约24.6%、左右
+  校正各约7%、Bridge约6%；不是8核总CPU耗尽，而是JPEG编码、节点单链回调、SGBM和可靠
+  大消息传输依次串联形成瓶颈。现场应先关闭 `/image_raw/compressed` 和raw深度面板，改看
+  左/右专用compressed与深度预览compressed，再清空Foxglove积压后复测基础帧率。
+- 将实测频率和时间戳换算为毫秒：拼接图约2.05 Hz即约488 ms来一帧，左右校正约1.1 Hz
+  即约909 ms来一帧，视差约0.2 Hz即约5000 ms来一帧；轻量探针测得消息年龄中位数由
+  拼接图约843 ms增至校正图约858～861 ms、视差约1037 ms、米制深度约1046 ms、预览
+  约1054 ms。按中位数差分估算，splitter加校正约15～18 ms、SGBM约176～179 ms、
+  视差转米制深度约9 ms、生成预览再约8 ms，板端拼接图到深度约203 ms；其余约843 ms
+  已在相机采集/解码/调度前段形成。Foxglove若观察到总延迟约5000 ms，则网络、Bridge和
+  客户端队列额外约3950 ms。以上是当前拥塞状态的近似差分，不是节点独占基准测试。
+- 处理新容器中 `usb_cam` 报 `/dev/video0` 无效：宿主机 `/dev/stereo_camera -> video1`
+  正常，V4L2可读取1280×480 MJPG；但当前 `robot-jazzy` 的 Docker Devices 列表为空，
+  容器内没有任何 `/dev/video*`，确认根因是创建容器时漏传 `--device`，不是相机权限、
+  标定YAML或设备损坏。
+- 修改 `run_robot_jazzy.sh` 和 `run_jazzy_container.sh`：检测到稳定相机设备时自动映射
+  `/dev/stereo_camera` 为容器 `/dev/video0`，没有相机时保留仿真启动能力并给出提示；说明
+  已运行的旧容器无法动态补设备，必须停止后重建。`stereo_robot.launch.py` 同时新增并向
+  相机子入口传递 `video_device` 参数。
+- 两个脚本均通过 `bash -n`，临时容器实测 `/dev/video0` 可由V4L2正常打开，`robot` 包
+  构建通过，完整实机入口的 `--show-args` 已包含 `video_device`。README同步补充重新创建
+  容器及相机单测/完整实机的启动命令。
+- 在重新映射相机并按正确Foxglove话题订阅后完成20秒同帧计时：相机时间戳到板端拼接图
+  中位约104.9 ms（P95 112.4 ms）；拼接到左右拆分约10.6/12.3 ms；左右raw到校正约
+  8.6/7.2 ms；校正到SGBM视差约197～201 ms（P95约289～292 ms）；视差转深度/预览
+  约10～13 ms。拼接图到米制深度中位约269.7 ms、P95约304.8 ms，从相机时间戳算到
+  深度约376.9 ms，已经超过200 ms验收目标。
+- 当前探针接收周期为拼接约127.7 ms、左右校正约340～466 ms、视差约2864 ms；单帧
+  SGBM约200 ms却没有达到理论约5 Hz，说明除计算外还有可靠队列、左右同步和大消息订阅
+  丢帧/背压。该探针同时订阅多路大图，频率用于定位而非最终无扰动基准。
+- 消息大小实测：拼接RGB 1,843,200 B、单目RGB 921,600 B、左图JPEG约45,715 B、深度
+  预览JPEG约59,671 B；米制640×480 `32FC1`固定1,228,800 B。当前Foxglove TCP RTT约
+  35.7 ms，交付速率约14.9 Mbps；raw深度若15 Hz需要约147.5 Mbps，单独就超出链路近
+  10倍，RELIABLE与10 MB Bridge缓冲会积压旧帧，是客户端数秒延迟的确定性原因。
+- 资源侧容器约128～140% CPU、内存约456 MiB；SGBM约24%、usb_cam约19%、左右校正约
+  7～9%，SoC/大核温度约35～36°C，无热降频迹象。瓶颈不是整机CPU或温度耗尽，而是
+  SGBM单帧约200 ms、同步/可靠队列以及远程raw深度带宽三项叠加。
+- 拟定优化顺序：第一阶段禁止Foxglove持续订阅raw深度，新增小型ROI深度统计话题，Bridge
+  缓冲降到约2 MB并让高带宽预览只保留最新帧；第二阶段把内部高带宽发布队列降为
+  KEEP_LAST(1)，将raw深度设为BEST_EFFORT、预览保持可压缩的可靠链，消除背压；第三阶段
+  基准测试BM/SGBM及64/96/128视差范围，明确64范围最近约0.445 m、96范围约0.297 m、
+  128范围才能覆盖0.25 m；若必须同时达到0.25 m和15 Hz，则采用320×240处理分辨率配套
+  标定/内参缩放或实现RK3588 NEON/OpenCL/RGA优化，而不能仅靠调小视差范围掩盖需求。
+- 核对 Docker 日常启动流程：宿主机先启动 Docker 服务，然后在仓库根目录执行
+  `bash scripts/run_robot_jazzy.sh`；脚本会挂载项目、增量构建 `robot` 包并自动运行
+  `ros2 launch robot robot.launch.py`，不需要再手动进入容器启动主 launch。
+- 补充运行中调试方法：另开终端执行 `docker exec -it robot-jazzy bash` 即可进入容器，
+  容器已配置自动加载 ROS 2 Jazzy 和工作区环境，可直接运行 `ros2 node list` 等命令。
+- 当前卡点：Codex 沙箱不能访问 `/var/run/docker.sock`，因此本轮只能核对仓库脚本，未能
+  代替用户检查宿主机 Docker 服务、镜像及容器的实时状态。踩坑：若提示无 Docker socket
+  权限，需注销并重新登录让 `docker` 用户组生效，或在宿主机终端按需使用 `sudo`。
+- 补充仅启动环境、不运行主 launch 的方法：只启动 Docker daemon 可执行
+  `sudo systemctl start docker`；只启动 `robot-jazzy:local` 容器时，需手动使用与日常脚本
+  相同的 host 网络、host IPC、工作区挂载和 `/workspace` 工作目录，并以交互式 Bash 作为
+  容器主进程。现有 `run_robot_jazzy.sh` 固定在构建后执行 `robot.launch.py`，不适合此场景。
+- 新增 `scripts/run_jazzy_container.sh`：后台启动 `robot-jazzy:local`，保留 host 网络、
+  host IPC 和工作区挂载，但不执行 colcon 构建、不启动任何 launch；通过 `docker exec`
+  进入时自动加载 Jazzy 和已有的工作区环境。脚本会识别已运行或停止的同名容器，避免
+  静默覆盖用户容器；README 已补充启动、进入、停止和按需手动构建的命令。
 
 ## 2026-07-09
 

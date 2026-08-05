@@ -8,6 +8,7 @@ from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition, UnlessCondition
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -20,6 +21,8 @@ def generate_launch_description():
     calibration_mode = LaunchConfiguration('calibration_mode')
     camera_config = LaunchConfiguration('camera_config')
     video_device = LaunchConfiguration('video_device')
+    foxglove_enabled = LaunchConfiguration('foxglove_enabled')
+    foxglove_port = LaunchConfiguration('foxglove_port')
     log_level = LaunchConfiguration('log_level')
     ros_args = ['--ros-args', '--log-level', log_level]
     processing_condition = UnlessCondition(calibration_mode)
@@ -34,6 +37,8 @@ def generate_launch_description():
         DeclareLaunchArgument('camera_config', default_value=camera_params),
         DeclareLaunchArgument(
             'video_device', default_value='/dev/stereo_camera'),
+        DeclareLaunchArgument('foxglove_enabled', default_value='true'),
+        DeclareLaunchArgument('foxglove_port', default_value='8765'),
         DeclareLaunchArgument(
             'left_calibration_file',
             default_value=os.path.join(calibration_dir, 'left.yaml')),
@@ -131,14 +136,42 @@ def generate_launch_description():
         arguments=ros_args,
         output='screen',
     )
+    foxglove = Node(
+        package='foxglove_bridge',
+        executable='foxglove_bridge',
+        name='stereo_foxglove_bridge',
+        parameters=[{
+            'port': ParameterValue(foxglove_port, value_type=int),
+            'address': '0.0.0.0',
+            'asset_uri_allowlist': ['package://robot/.*'],
+            'allow_file_transfer': True,
+            'send_buffer_limit': 10000000,
+            'max_packet_messages': 100,
+            'client_timeout_ms': 300000,
+            'keep_alive_interval_ms': 5000,
+        }],
+        condition=IfCondition(foxglove_enabled),
+        arguments=ros_args,
+        output='screen',
+    )
 
     def compressed_republisher(name, topic):
         return Node(
             package='image_transport',
             executable='republish',
             name=name,
-            arguments=['raw', 'compressed'] + ros_args,
-            remappings=[('in', topic), ('out', topic)],
+            # Jazzy 使用参数选择传输插件；旧式位置参数会让 out_transport 为空，
+            # 从而在同名基话题上重新发布 raw 图并形成自回环。
+            parameters=[{
+                'in_transport': 'raw',
+                'out_transport': 'compressed',
+            }],
+            arguments=ros_args,
+            # compressed 插件直接发布 out/compressed，必须重映射插件话题本身。
+            remappings=[
+                ('in', topic),
+                ('out/compressed', topic + '/compressed'),
+            ],
             condition=compressed_condition,
             output='screen',
         )
@@ -151,6 +184,7 @@ def generate_launch_description():
         disparity,
         point_cloud,
         depth,
+        foxglove,
         compressed_republisher(
             'left_compressed_republisher', '/stereo/left/image_raw'),
         compressed_republisher(

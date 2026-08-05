@@ -8,7 +8,12 @@ import rclpy
 import yaml
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import CameraInfo, Image
 
 
@@ -51,18 +56,25 @@ class StereoSplitter(Node):
         )
 
         input_topic = str(self.get_parameter('input_topic').value)
+        # image_proc 默认使用可靠订阅；左右图和 CameraInfo 必须采用 RELIABLE，
+        # 否则 DDS 会因 QoS 不兼容而切断校正、视差和深度整条处理链。
+        output_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
         self.left_pub = self.create_publisher(
             Image, str(self.get_parameter('left_image_topic').value),
-            qos_profile_sensor_data)
+            output_qos)
         self.right_pub = self.create_publisher(
             Image, str(self.get_parameter('right_image_topic').value),
-            qos_profile_sensor_data)
+            output_qos)
         self.left_info_pub = self.create_publisher(
             CameraInfo, str(self.get_parameter('left_camera_info_topic').value),
-            qos_profile_sensor_data)
+            output_qos)
         self.right_info_pub = self.create_publisher(
             CameraInfo, str(self.get_parameter('right_camera_info_topic').value),
-            qos_profile_sensor_data)
+            output_qos)
         self.create_subscription(
             Image, input_topic, self.image_callback, qos_profile_sensor_data)
         self.get_logger().info(

@@ -7,7 +7,12 @@ import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import (
+    HistoryPolicy,
+    QoSProfile,
+    ReliabilityPolicy,
+    qos_profile_sensor_data,
+)
 from sensor_msgs.msg import Image
 from stereo_msgs.msg import DisparityImage
 
@@ -26,12 +31,19 @@ class StereoDepth(Node):
 
         self.min_depth = float(self.get_parameter('min_depth').value)
         self.max_depth = float(self.get_parameter('max_depth').value)
+        # Foxglove 和 image_transport 默认使用可靠订阅，深度输出采用 RELIABLE
+        # 可避免话题存在但客户端或压缩转发器因 QoS 不兼容收不到消息。
+        output_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+        )
         self.depth_pub = self.create_publisher(
             Image, str(self.get_parameter('depth_topic').value),
-            qos_profile_sensor_data)
+            output_qos)
         self.visual_pub = self.create_publisher(
             Image, str(self.get_parameter('visual_topic').value),
-            qos_profile_sensor_data)
+            output_qos)
         self.create_subscription(
             DisparityImage,
             str(self.get_parameter('disparity_topic').value),
