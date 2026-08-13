@@ -1,13 +1,13 @@
-"""双目节点不依赖相机硬件的核心数据处理测试。"""
+"""双目节点不依赖相机硬件的核心数据处理测试."""
 
 import numpy as np
 
+from robot.diagnostics.stereo_pipeline_benchmark import percentile
+from robot.perception.stereo_depth import StereoDepth
+from robot.perception.stereo_pointcloud_filter import StereoPointCloudFilter
+from robot.sensing.stereo_splitter import StereoSplitter
 from sensor_msgs.msg import Image, PointCloud2, PointField
 from stereo_msgs.msg import DisparityImage
-
-from robot.stereo_depth_node import StereoDepth
-from robot.stereo_pointcloud_filter import StereoPointCloudFilter
-from robot.stereo_splitter_node import StereoSplitter
 
 
 class _Publisher:
@@ -24,10 +24,12 @@ class _Logger:
 
 
 def test_splitter_preserves_stamp_and_left_right_order():
-    """横向拼接图应按配置拆分，并让左右图保持同一时间戳。"""
+    """横向拼接图应按配置拆分，并让左右图保持同一时间戳."""
     fake = type('FakeSplitter', (), {})()
     fake.frame_count = 0
+    fake.published_count = 0
     fake.frame_skip = 0
+    fake.calibration_mode = True
     fake.left_first = True
     fake.output_encoding = 'passthrough'
     fake.left_frame = 'left_optical'
@@ -59,12 +61,15 @@ def test_splitter_preserves_stamp_and_left_right_order():
 
 
 def test_depth_uses_metric_scale_and_nan_for_invalid_values():
-    """深度应使用 Z=fT/d，零视差与超范围结果必须为 NaN。"""
+    """深度应使用 Z=fT/d，零视差与超范围结果必须为 NaN."""
     fake = type('FakeDepth', (), {})()
     fake.min_depth = 0.25
     fake.max_depth = 4.0
     fake.depth_pub = _Publisher()
     fake.visual_pub = _Publisher()
+    fake.frames = 0
+    fake.processing_samples_ms = []
+    fake.age_samples_ms = []
     fake.get_logger = lambda: _Logger()
 
     message = DisparityImage()
@@ -87,7 +92,7 @@ def test_depth_uses_metric_scale_and_nan_for_invalid_values():
 
 
 def test_pointcloud_parser_handles_padding_without_unpack_loop():
-    """结构数组解析应支持 point_step 中的额外 padding。"""
+    """结构数组解析应支持 point_step 中的额外 padding."""
     message = PointCloud2()
     message.height = 1
     message.width = 2
@@ -108,3 +113,26 @@ def test_pointcloud_parser_handles_padding_without_unpack_loop():
 
     points = StereoPointCloudFilter._cloud_to_xyz(message)
     assert np.allclose(points, raw[:, :3])
+
+
+def test_voxel_filter_keeps_nearest_point_for_navigation_safety():
+    """同一体素存在多个点时必须保留离底盘最近的障碍边界."""
+    fake = type('FakeFilter', (), {'voxel_size': 0.05})()
+    points = np.array([
+        [0.149, 0.01, 0.10],
+        [0.101, 0.01, 0.10],
+        [0.30, 0.01, 0.10],
+    ], dtype=np.float32)
+
+    filtered = StereoPointCloudFilter._voxel_downsample(fake, points)
+
+    assert len(filtered) == 2
+    assert np.any(np.isclose(filtered[:, 0], 0.101))
+    assert not np.any(np.isclose(filtered[:, 0], 0.149))
+
+
+def test_benchmark_percentile_is_stable_for_small_samples():
+    """验收统计在小样本下也应给出确定的中位数和P95."""
+    assert percentile([], 0.95) is None
+    assert percentile([10.0, 20.0, 30.0], 0.5) == 20.0
+    assert percentile([10.0, 20.0, 30.0], 0.95) == 30.0

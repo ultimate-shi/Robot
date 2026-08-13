@@ -1,7 +1,7 @@
 """
 robot.launch 使用说明：
 本节点由 robot.launch.py 以 executable='chassis_feedback_node' 启动。
-它把 ros2_control 发布的 /joint_states 转换成底盘控制器更容易使用的 /wheel_states。
+它把 ros2_control 发布的 /joint_states 转换成底盘使用的 /wheel_states。
 
 输入：
 - /joint_states：joint_state_broadcaster 发布，包含所有关节的位置和速度。

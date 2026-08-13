@@ -26,6 +26,7 @@ RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" \
         python3-yaml \
         ros-jazzy-controller-manager \
         ros-jazzy-camera-calibration \
+        ros-jazzy-camera-info-manager \
         ros-jazzy-compressed-image-transport \
         ros-jazzy-cv-bridge \
         ros-jazzy-foxglove-bridge \
@@ -33,8 +34,10 @@ RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" \
         ros-jazzy-image-transport \
         ros-jazzy-image-view \
         ros-jazzy-joint-state-broadcaster \
+        ros-jazzy-joint-state-publisher \
         ros-jazzy-nav2-behaviors \
         ros-jazzy-nav2-bt-navigator \
+        ros-jazzy-nav2-collision-monitor \
         ros-jazzy-nav2-controller \
         ros-jazzy-nav2-lifecycle-manager \
         ros-jazzy-nav2-map-server \
@@ -47,6 +50,9 @@ RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" \
         ros-jazzy-position-controllers \
         ros-jazzy-pointcloud-to-laserscan \
         ros-jazzy-robot-state-publisher \
+        ros-jazzy-rtabmap-odom \
+        ros-jazzy-rtabmap-slam \
+        ros-jazzy-rtabmap-util \
         ros-jazzy-ros2controlcli \
         ros-jazzy-stereo-image-proc \
         ros-jazzy-usb-cam \

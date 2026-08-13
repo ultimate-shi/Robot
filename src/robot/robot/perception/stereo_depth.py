@@ -1,24 +1,22 @@
 #!/usr/bin/env python3
 """把 stereo_image_proc 的视差图转换为米制深度图和 8 位预览图。"""
 
+import json
 import math
+import time
 
 import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
-from rclpy.qos import (
-    HistoryPolicy,
-    QoSProfile,
-    ReliabilityPolicy,
-    qos_profile_sensor_data,
-)
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image
+from std_msgs.msg import String
 from stereo_msgs.msg import DisparityImage
 
 
 class StereoDepth(Node):
-    """根据 Z=fT/d 计算深度，无效值保持为 NaN。"""
+    """根据 Z=fT/d 计算深度，无效值保持为 NaN."""
 
     def __init__(self):
         super().__init__('stereo_depth')
@@ -28,16 +26,17 @@ class StereoDepth(Node):
             'visual_topic', '/stereo/depth/image_visual')
         self.declare_parameter('min_depth', 0.25)
         self.declare_parameter('max_depth', 4.0)
+        self.declare_parameter('status_topic', '/stereo/depth/status')
 
         self.min_depth = float(self.get_parameter('min_depth').value)
         self.max_depth = float(self.get_parameter('max_depth').value)
-        # Foxglove 和 image_transport 默认使用可靠订阅，深度输出采用 RELIABLE
-        # 可避免话题存在但客户端或压缩转发器因 QoS 不兼容收不到消息。
-        output_qos = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=10,
-        )
+        self.frames = 0
+        self.last_status_frames = 0
+        self.last_status_time = time.monotonic()
+        self.processing_samples_ms = []
+        self.age_samples_ms = []
+        # 深度是高带宽传感器数据，BEST_EFFORT/KEEP_LAST(1) 避免远程监测反压计算链。
+        output_qos = qos_profile_sensor_data
         self.depth_pub = self.create_publisher(
             Image, str(self.get_parameter('depth_topic').value),
             output_qos)
@@ -50,8 +49,12 @@ class StereoDepth(Node):
             self.disparity_callback,
             qos_profile_sensor_data,
         )
+        self.status_pub = self.create_publisher(
+            String, str(self.get_parameter('status_topic').value), 10)
+        self.create_timer(1.0, self._publish_status)
 
     def disparity_callback(self, msg):
+        processing_started = time.perf_counter()
         image = msg.image
         if image.encoding != '32FC1':
             self.get_logger().error(
@@ -110,6 +113,43 @@ class StereoDepth(Node):
         visual_msg.step = image.width
         visual_msg.data = visual.tobytes()
         self.visual_pub.publish(visual_msg)
+        self.frames += 1
+        self.processing_samples_ms.append(
+            (time.perf_counter() - processing_started) * 1000.0)
+        stamp_ns = (
+            int(image.header.stamp.sec) * 1_000_000_000
+            + int(image.header.stamp.nanosec)
+        )
+        if stamp_ns > 0:
+            age_ms = (self.get_clock().now().nanoseconds - stamp_ns) / 1e6
+            self.age_samples_ms.append(max(0.0, age_ms))
+
+    @staticmethod
+    def _percentile(values, ratio):
+        if not values:
+            return None
+        ordered = sorted(values)
+        index = min(len(ordered) - 1, round((len(ordered) - 1) * ratio))
+        return round(float(ordered[index]), 2)
+
+    def _publish_status(self):
+        """每秒报告深度输出频率、处理时间和采集到深度的消息年龄."""
+        now = time.monotonic()
+        elapsed = max(now - self.last_status_time, 1e-6)
+        payload = {
+            'state': 'ok' if self.frames else 'waiting_disparity',
+            'fps': round((self.frames - self.last_status_frames) / elapsed, 2),
+            'frames': self.frames,
+            'processing_p95_ms': self._percentile(
+                self.processing_samples_ms, 0.95),
+            'capture_to_depth_p95_ms': self._percentile(
+                self.age_samples_ms, 0.95),
+        }
+        self.status_pub.publish(String(data=json.dumps(payload)))
+        self.last_status_time = now
+        self.last_status_frames = self.frames
+        self.processing_samples_ms.clear()
+        self.age_samples_ms.clear()
 
 
 def main(args=None):

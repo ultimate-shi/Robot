@@ -1,7 +1,7 @@
 """
 robot.launch 使用说明：
 本节点由 robot.launch.py 以 executable='chassis_controller_node' 启动，节点名为 chassis_controller。
-它是当前仿真底盘的主控制节点，接收安全速度并输出 ros2_control 控制命令。
+它是当前仿真底盘主控制节点，接收安全速度并输出 ros2_control 控制命令。
 
 输入：
 - /cmd_vel：在 launch 中被 remap 到 /cmd_vel_safe，因此只接收 obstacle_avoidance 过滤后的速度。

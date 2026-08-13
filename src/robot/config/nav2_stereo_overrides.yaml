@@ -1,5 +1,4 @@
-# 实机双目 Nav2 覆盖参数。
-# costmap 只消费 /nav/stereo_obstacle_points，/stereo/scan 仅用于显示和诊断。
+# 实机双目 Nav2 覆盖参数。点云负责代价地图，/stereo/scan 负责速度安全层。
 local_costmap:
   local_costmap:
     ros__parameters:

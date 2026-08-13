@@ -109,7 +109,7 @@ docker run --rm --interactive --tty \
     MODE="$1"
     SQUARE_SIZE="$2"
     source /opt/ros/jazzy/setup.bash
-    colcon build --packages-select robot --symlink-install
+    colcon build --packages-up-to robot --symlink-install
     source /workspace/install/setup.bash
 
     ros2 launch robot stereo_camera.launch.py \

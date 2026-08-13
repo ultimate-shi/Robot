@@ -1,4 +1,4 @@
-#!/home/shijiahao/ros2_pythonenv/bin/python
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
 robot.launch 使用说明：
@@ -17,7 +17,7 @@ robot.launch 使用说明：
 """
 
 import math
-import struct
+import time
 
 import numpy as np
 import rclpy
@@ -27,6 +27,8 @@ from rclpy.node import Node
 from scipy.spatial import cKDTree
 from sensor_msgs.msg import PointCloud2, Range
 import tf2_ros
+
+from robot.mapping.snapshot_manager import cloud_to_xyz
 
 
 SENSORS = [
@@ -55,6 +57,8 @@ class VirtualUltrasonic(Node):
         self.declare_parameter('max_height', 0.60)
         self.declare_parameter('voxel_size', 0.03)
         self.declare_parameter('publish_period', 0.2)
+        self.declare_parameter('source_timeout', 2.0)
+        self.declare_parameter('cache_static_source', False)
 
         input_topic = self.get_parameter('input_topic').value
         self.MAX_RANGE = self.get_parameter('max_range').value
@@ -63,9 +67,14 @@ class VirtualUltrasonic(Node):
         self.MIN_HEIGHT = self.get_parameter('min_height').value
         self.MAX_HEIGHT = self.get_parameter('max_height').value
         self.voxel_size = self.get_parameter('voxel_size').value
+        self.source_timeout = float(
+            self.get_parameter('source_timeout').value)
+        self.cache_static_source = bool(
+            self.get_parameter('cache_static_source').value)
 
         self.points = np.empty((0, 3), dtype=np.float32)
         self.kdtree = None
+        self.last_cloud_monotonic = None
 
         self.tf_buffer = tf2_ros.Buffer(cache_time=Duration(seconds=10.0))
         self.tf_listener = tf2_ros.TransformListener(self.tf_buffer, self)
@@ -80,7 +89,15 @@ class VirtualUltrasonic(Node):
 
     def cloud_callback(self, msg: PointCloud2):
         """Update KDTree from the latest shared perception cloud."""
-        points = self._cloud_to_xyz_array(msg)
+        # 地图预演使用静态点云，只需构建一次 KDTree；真实传感器保持更新。
+        if self.cache_static_source and self.kdtree is not None:
+            return
+        try:
+            points = cloud_to_xyz(msg)
+        except (TypeError, ValueError) as exc:
+            self.get_logger().error(
+                f'点云解析失败: {exc}', throttle_duration_sec=2.0)
+            return
         if len(points) == 0:
             return
         if self.voxel_size > 0.0:
@@ -89,16 +106,21 @@ class VirtualUltrasonic(Node):
             points = points[idx]
         self.points = points.astype(np.float32)
         self.kdtree = cKDTree(self.points)
+        self.last_cloud_monotonic = time.monotonic()
 
     def get_sensor_distance(self, link_name):
         """Return nearest point distance in the sensor cone."""
-        if self.kdtree is None:
-            return self.MAX_RANGE
+        if self.kdtree is None or self.last_cloud_monotonic is None:
+            return float('nan')
+        if (self.source_timeout > 0.0
+                and time.monotonic() - self.last_cloud_monotonic
+                > self.source_timeout):
+            return float('nan')
 
         try:
             tf = self.tf_buffer.lookup_transform('map', link_name, rclpy.time.Time())
         except Exception:
-            return self.MAX_RANGE
+            return float('nan')
 
         sx = tf.transform.translation.x
         sy = tf.transform.translation.y
@@ -163,23 +185,6 @@ class VirtualUltrasonic(Node):
             msg.max_range = self.MAX_RANGE
             msg.range = self.get_sensor_distance(link)
             self.sensor_publishers[link].publish(msg)
-
-    def _cloud_to_xyz_array(self, msg: PointCloud2) -> np.ndarray:
-        offsets = {field.name: field.offset for field in msg.fields}
-        if not {'x', 'y', 'z'}.issubset(offsets):
-            return np.empty((0, 3), dtype=np.float32)
-        point_count = msg.width * msg.height
-        points = np.empty((point_count, 3), dtype=np.float32)
-        data = memoryview(msg.data)
-        endian = '>' if msg.is_bigendian else '<'
-        fmt = endian + 'f'
-        for i in range(point_count):
-            base = i * msg.point_step
-            points[i, 0] = struct.unpack_from(fmt, data, base + offsets['x'])[0]
-            points[i, 1] = struct.unpack_from(fmt, data, base + offsets['y'])[0]
-            points[i, 2] = struct.unpack_from(fmt, data, base + offsets['z'])[0]
-        return points[np.isfinite(points).all(axis=1)]
-
 
 def main(args=None):
     rclpy.init(args=args)

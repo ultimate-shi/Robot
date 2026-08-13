@@ -1,7 +1,7 @@
 """
 robot.launch 使用说明：
 本节点由 robot.launch.py 以 executable='obstacle_avoidance' 启动。
-它是底盘控制前的安全过滤层，不负责路径规划，只负责把危险速度降速或置零。
+它是底盘控制前的最终安全过滤层，不负责路径规划，只负责把危险速度降速或置零。
 
 输入：
 - /cmd_vel_raw：在 launch 中被 remap 到 /cmd_vel，因此 Foxglove、Nav2 或命令行发布的 /cmd_vel 都会进入这里。
@@ -28,6 +28,7 @@ robot.launch 使用说明：
 """
 
 import json
+import math
 
 from action_msgs.msg import GoalStatus, GoalStatusArray
 import rclpy
@@ -76,6 +77,7 @@ class ObstacleAvoidanceNode(Node):
         self.declare_parameter("update_rate", 20.0)
         self.declare_parameter("cmd_vel_timeout", 0.3)
         self.declare_parameter("range_timeout", 0.15)
+        self.declare_parameter("require_valid_ranges", False)
         self.declare_parameter("obstacle_log_period", 0.5)
         self.declare_parameter("escape_reverse_enabled", True)
         self.declare_parameter("escape_trigger_time", 1.0)
@@ -95,6 +97,8 @@ class ObstacleAvoidanceNode(Node):
         update_rate = self.get_parameter("update_rate").value
         self.cmd_vel_timeout = self.get_parameter("cmd_vel_timeout").value
         self.range_timeout = self.get_parameter("range_timeout").value
+        self.require_valid_ranges = bool(
+            self.get_parameter("require_valid_ranges").value)
         self.obstacle_log_period = self.get_parameter("obstacle_log_period").value
         self.escape_reverse_enabled = bool(
             self.get_parameter("escape_reverse_enabled").value
@@ -220,11 +224,14 @@ class ObstacleAvoidanceNode(Node):
 
     def ultrasonic_callback(self, msg: Range, topic: str):
         """缓存超声波距离和接收时间，避免主循环使用过期测距。"""
-        if msg.range >= msg.min_range and msg.range <= msg.max_range:
+        if (math.isfinite(msg.range)
+                and msg.range >= msg.min_range
+                and msg.range <= msg.max_range):
             self.ultrasonic_data[topic] = msg.range
+            self.ultrasonic_stamp[topic] = self.get_clock().now()
         else:
-            self.ultrasonic_data[topic] = msg.max_range
-        self.ultrasonic_stamp[topic] = self.get_clock().now()
+            self.ultrasonic_data[topic] = float('inf')
+            self.ultrasonic_stamp[topic] = None
 
     def timer_callback(self):
         """Main avoidance logic - filter cmd_vel_raw and publish safe cmd_vel."""
@@ -241,7 +248,11 @@ class ObstacleAvoidanceNode(Node):
 
         # === Front obstacle check (only when moving forward) ===
         if cmd.linear.x > 0.001:
-            if front_min < self.front_stop:
+            if self.require_valid_ranges and not self._has_valid_readings([
+                    '/ultrasonic/front_fl', '/ultrasonic/front_fr']):
+                cmd.linear.x = 0.0
+                warnings.append("FRONT_RANGE_STALE")
+            elif front_min < self.front_stop:
                 cmd.linear.x = 0.0
                 warnings.append(f"FRONT_WALL:{front_min:.2f}m")
             elif front_min < self.front_warn:
@@ -266,7 +277,11 @@ class ObstacleAvoidanceNode(Node):
         if cmd.linear.x < -0.001:
             rear_min = self._get_rear_min_distance()
 
-            if rear_min < self.front_stop:
+            if self.require_valid_ranges and not self._has_valid_readings([
+                    '/ultrasonic/front_rl', '/ultrasonic/front_rr']):
+                cmd.linear.x = 0.0
+                warnings.append("REAR_RANGE_STALE")
+            elif rear_min < self.front_stop:
                 cmd.linear.x = 0.0
                 warnings.append(f"REAR_WALL:{rear_min:.2f}m")
             elif rear_min < self.front_warn:
@@ -279,7 +294,13 @@ class ObstacleAvoidanceNode(Node):
         right_min = self._get_right_min_distance()
 
         # Positive linear.y = move left in ROS base_link convention.
-        if cmd.linear.y > 0.001 and left_min < self.side_stop:
+        left_topics = ['/ultrasonic/side_fl', '/ultrasonic/side_rl']
+        right_topics = ['/ultrasonic/side_fr', '/ultrasonic/side_rr']
+        if (cmd.linear.y > 0.001 and self.require_valid_ranges
+                and not self._has_valid_readings(left_topics)):
+            cmd.linear.y = 0.0
+            warnings.append("LEFT_RANGE_STALE")
+        elif cmd.linear.y > 0.001 and left_min < self.side_stop:
             cmd.linear.y = 0.0
             warnings.append(f"LEFT_SIDE_WALL:{left_min:.2f}m")
         elif cmd.linear.y > 0.001 and left_min < self.side_warn:
@@ -288,7 +309,11 @@ class ObstacleAvoidanceNode(Node):
             warnings.append(f"LEFT_SIDE_APPROACH:{left_min:.2f}m")
 
         # Negative linear.y = move right.
-        if cmd.linear.y < -0.001 and right_min < self.side_stop:
+        if (cmd.linear.y < -0.001 and self.require_valid_ranges
+                and not self._has_valid_readings(right_topics)):
+            cmd.linear.y = 0.0
+            warnings.append("RIGHT_RANGE_STALE")
+        elif cmd.linear.y < -0.001 and right_min < self.side_stop:
             cmd.linear.y = 0.0
             warnings.append(f"RIGHT_SIDE_WALL:{right_min:.2f}m")
         elif cmd.linear.y < -0.001 and right_min < self.side_warn:
@@ -297,7 +322,11 @@ class ObstacleAvoidanceNode(Node):
             warnings.append(f"RIGHT_SIDE_APPROACH:{right_min:.2f}m")
 
         # Positive angular.z = turn left (CCW in ROS convention)
-        if cmd.angular.z > 0.001 and left_min < self.side_stop:
+        if (cmd.angular.z > 0.001 and self.require_valid_ranges
+                and not self._has_valid_readings(left_topics)):
+            cmd.angular.z = 0.0
+            warnings.append("LEFT_TURN_RANGE_STALE")
+        elif cmd.angular.z > 0.001 and left_min < self.side_stop:
             cmd.angular.z = 0.0
             warnings.append(f"LEFT_WALL:{left_min:.2f}m")
         elif cmd.angular.z > 0.001 and left_min < self.side_warn:
@@ -305,7 +334,11 @@ class ObstacleAvoidanceNode(Node):
             cmd.angular.z *= max(0.0, min(1.0, scale))
 
         # Negative angular.z = turn right (CW)
-        if cmd.angular.z < -0.001 and right_min < self.side_stop:
+        if (cmd.angular.z < -0.001 and self.require_valid_ranges
+                and not self._has_valid_readings(right_topics)):
+            cmd.angular.z = 0.0
+            warnings.append("RIGHT_TURN_RANGE_STALE")
+        elif cmd.angular.z < -0.001 and right_min < self.side_stop:
             cmd.angular.z = 0.0
             warnings.append(f"RIGHT_WALL:{right_min:.2f}m")
         elif cmd.angular.z < -0.001 and right_min < self.side_warn:
@@ -459,6 +492,10 @@ class ObstacleAvoidanceNode(Node):
     def _valid_distances(self, topics):
         """返回未超时的测距；过期数据不参与避障判断。"""
         return [distance for _, distance in self._valid_readings(topics)]
+
+    def _has_valid_readings(self, topics):
+        """安全模式要求运动方向至少有一路未超时测距。"""
+        return bool(self._valid_readings(topics))
 
     def _get_front_min_distance(self) -> float:
         """Get minimum distance from front-facing sensors."""

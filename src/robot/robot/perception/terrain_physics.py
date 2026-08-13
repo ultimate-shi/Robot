@@ -1,6 +1,6 @@
 """
 robot.launch 使用说明：
-本模块不会被 launch 直接启动，而是被 chassis_controller_node.py import 使用。
+本模块不会被 launch 直接启动，而是被底盘控制和地形分析节点使用。
 它基于 TerrainHeightmap 的查询结果判断地形是否可通行。
 
 输入：
@@ -18,7 +18,11 @@ robot.launch 使用说明：
 import math
 from dataclasses import dataclass
 
-from robot.terrain_heightmap import TerrainHeightmap, WheelTerrainInfo, LookaheadResult
+from robot.perception.terrain_heightmap import (
+    LookaheadResult,
+    TerrainHeightmap,
+    WheelTerrainInfo,
+)
 
 
 @dataclass

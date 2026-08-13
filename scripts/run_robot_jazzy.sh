@@ -45,7 +45,7 @@ exec docker run --rm --interactive --tty \
       >> /root/.bashrc
 
     source /opt/ros/jazzy/setup.bash
-    colcon build --packages-select robot --symlink-install
+    colcon build --packages-up-to robot --symlink-install
     source install/setup.bash
     exec ros2 launch robot robot.launch.py "$@"
   ' bash "$@"

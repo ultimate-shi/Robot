@@ -28,6 +28,7 @@ cv_bridge
 image_transport
 compressed_image_transport
 pointcloud_to_laserscan
+nav2_collision_monitor
 v4l-utils
 ```
 
@@ -366,12 +367,23 @@ ros2 topic hz /stereo/depth/image
 ros2 topic hz /stereo/points2
 ```
 
+频率诊断时优先读取不含大图的状态话题，避免诊断订阅本身改变被测结果：
+
+```bash
+ros2 topic echo /stereo/splitter/status --once
+ros2 topic echo /stereo/pair_throttle/status --once
+ros2 topic echo /stereo/depth/status --once
+ros2 topic echo /stereo/pointcloud_filter/status --once
+```
+
 验收目标：
 
 - 0.5～2 m 中值误差不超过 5%。
 - 3 m 中值误差不超过 10%。
-- 深度和点云稳定输出至少 15 Hz。
-- 端到端延迟 P95 小于 200 ms。
+- 左右640×480校正识别图均不低于 9 Hz。
+- 深度、完整点云、导航点云和 Scan 均不低于 3.5 Hz，目标为 4 Hz。
+- 导航链 P95 帧间隔不超过 400 ms，连续无输出时间不超过 1 s。
+- 从采集时间戳到深度、导航点云或 Scan 的端到端延迟 P95 小于 600 ms。
 
 如果所有距离都按相同比例偏大或偏小，优先检查棋盘格实际尺寸和标定基线；如果边缘误差
 大而中心正常，优先检查畸变和极线校正；如果低纹理区域破碎，应最后再调整 SGBM。
@@ -389,12 +401,15 @@ ros2 topic echo /stereo/scan --once
 
 - `/nav/stereo_obstacle_points` 中应出现障碍。
 - local costmap 应标记障碍。
-- 移除后约 1 秒内应清除。
+- 障碍出现后 0.75 秒内应标记，移除后 1.5 秒内应清除。
 - `/stereo/scan` 的角度、距离和 `base_link` frame 应与过滤点云一致。
+- 障碍进入 0.40 m 区域时 `/cmd_vel_safe` 不得超过输入速度的 50%。
+- 障碍进入 0.25 m 区域时 `/cmd_vel_safe` 必须为零。
+- 停止发布 `/stereo/scan` 后 0.75 秒内必须输出零速。
 
 ### 5. 完整稳定性
 
-连续运行底盘、Nav2、双目和 Foxglove Bridge 30 分钟，记录：
+先关闭 Foxglove，连续运行底盘、Nav2和双目 30 分钟，记录：
 
 - USB reset、丢帧和 TF error。
 - RSS 内存是否持续增长。
@@ -403,11 +418,30 @@ ros2 topic echo /stereo/scan --once
 
 CPU 超限时依次调整：
 
-1. 增大 `frame_skip` 或降低 `max_input_rate`。
-2. 减小 `disparity_range`，但仍须为 16 的倍数。
-3. 降低相机分辨率并对新分辨率重新标定。
+1. 检查是否误订阅 raw 深度或完整稠密点云，并关闭 Foxglove 后复测。
+2. 确认最新帧调度为识别 10 Hz、导航 4 Hz，所有高带宽队列为深度 1。
+3. 优化节点实现或使用 RK3588 硬件加速；不得降低 640×480 图像质量或缩小
+   `disparity_range=128` 来掩盖超限。
 
 不要通过增大 `max_depth`、伪造无效深度或跳过 TF 错误来掩盖性能问题。
+
+关闭 Foxglove 后可用仓库的一次性工具测量60秒。工具按阶段串行订阅单个话题或一对相邻
+话题，避免同时反序列化多路大消息；仍只应在验收时运行，同时间戳阶段差值用于定位瓶颈：
+
+```bash
+ros2 run robot stereo_pipeline_benchmark --ros-args \
+  -p duration:=60.0 \
+  -p output_file:=/tmp/stereo_pipeline_result.json
+```
+
+需要人工监测时再启动 Bridge：
+
+```bash
+ros2 launch robot stereo_robot.launch.py
+```
+
+Foxglove 只显示左右校正压缩图、深度预览、过滤点云和 `/stereo/scan`，不要持续订阅
+`/stereo/depth/image` 或 `/stereo/points2`。
 
 ## 十、哪些变化必须重新标定
 

@@ -65,21 +65,30 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'chassis_feedback_node = robot.chassis_feedback_node:main',
-            'publish_ply = robot.publish_ply:main',
-            'virtual_ultrasonic = robot.virtual_ultrasonic:main',
-            'chassis_controller_node = robot.chassis_controller_node:main',
-            'virtual_imu = robot.virtual_imu_node:main',
-            'obstacle_avoidance = robot.obstacle_avoidance_node:main',
-            'range_to_scan = robot.range_to_scan_node:main',
+            'chassis_feedback_node = robot.control.chassis_feedback:main',
+            'publish_ply = robot.mapping.ply_publisher:main',
+            'virtual_ultrasonic = robot.sensing.virtual_ultrasonic:main',
+            'chassis_controller_node = robot.control.chassis_controller:main',
+            'virtual_imu = robot.sensing.virtual_imu:main',
+            'obstacle_avoidance = robot.safety.obstacle_avoidance:main',
+            'range_to_scan = robot.safety.range_to_scan:main',
             'pointcloud_obstacle_filter = '
-            'robot.pointcloud_obstacle_filter:main',
-            'terrain_analyzer = robot.terrain_analyzer_node:main',
-            'nav_controller_node = robot.nav_controller_node:main',
-            'stereo_splitter_node = robot.stereo_splitter_node:main',
-            'stereo_depth_node = robot.stereo_depth_node:main',
+            'robot.perception.pointcloud_obstacle_filter:main',
+            'terrain_analyzer = robot.perception.terrain_analyzer:main',
+            'nav_controller_node = robot.control.nav_controller:main',
+            'stereo_splitter_node = robot.sensing.stereo_splitter:main',
+            'stereo_pair_throttle_node = '
+            'robot.sensing.stereo_pair_throttle:main',
+            'stereo_depth_node = robot.perception.stereo_depth:main',
+            'stereo_pipeline_benchmark = '
+            'robot.diagnostics.stereo_pipeline_benchmark:main',
             'stereo_pointcloud_filter = '
-            'robot.stereo_pointcloud_filter:main',
+            'robot.perception.stereo_pointcloud_filter:main',
+            'mapping_snapshot_manager = '
+            'robot.mapping.snapshot_manager:main',
+            'snapshot_local_observer = '
+            'robot.perception.snapshot_local_observer:main',
+            'goal_manager = robot.mission.goal_manager:main',
         ],
     },
 )

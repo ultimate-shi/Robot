@@ -51,7 +51,6 @@ def generate_launch_description():
             default_value=os.path.join(
                 pkg_share, 'config', 'nav2_params.yaml')),
         DeclareLaunchArgument('log_level', default_value='warn'),
-        DeclareLaunchArgument('foxglove_enabled', default_value='true'),
         DeclareLaunchArgument('foxglove_port', default_value='8765'),
     ]
     common = IncludeLaunchDescription(
@@ -66,7 +65,6 @@ def generate_launch_description():
             'nav2_params_file': LaunchConfiguration('nav2_params_file'),
             'chassis_cmd_topic': chassis_topic,
             'log_level': log_level,
-            'foxglove_enabled': LaunchConfiguration('foxglove_enabled'),
             'foxglove_port': LaunchConfiguration('foxglove_port'),
         }.items(),
     )

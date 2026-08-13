@@ -3,7 +3,7 @@
 """
 robot.launch 使用说明：
 本节点由 robot.launch.py 以 executable='range_to_scan' 启动。
-它把 8 路超声波 Range 数据合成为一个稀疏 LaserScan，主要用于 Foxglove/RViz 调试和兼容。
+它把 8 路超声波 Range 数据合成为稀疏 LaserScan，用于 Foxglove/RViz 调试和兼容。
 
 输入：
 - /ultrasonic/front_fl、front_fr、front_rl、front_rr：安装在前/后侧，随对应轮子转向关节转动。

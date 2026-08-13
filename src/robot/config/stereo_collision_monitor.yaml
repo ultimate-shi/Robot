@@ -1,0 +1,36 @@
+# 双目 LaserScan 位于 Nav2 与超声波紧急层之间，负责提前限速和停车。
+collision_monitor:
+  ros__parameters:
+    enabled: true
+    base_frame_id: "base_link"
+    odom_frame_id: "odom"
+    cmd_vel_in_topic: "/cmd_vel_nav"
+    cmd_vel_out_topic: "/cmd_vel_safe"
+    state_topic: "/stereo/collision_monitor/state"
+    transform_tolerance: 0.2
+    source_timeout: 0.75  # 超过三个 4 Hz 周期没有 Scan 时停车
+    base_shift_correction: true  # 使用里程计补偿图像采集到当前时刻的底盘运动
+    stop_pub_timeout: 2.0
+    enable_stamped_cmd_vel: false  # Jazzy 当前速度链使用 geometry_msgs/msg/Twist
+    polygons: ["StereoStop", "StereoSlow"]
+    StereoStop:
+      type: "circle"
+      radius: 0.25
+      action_type: "stop"
+      min_points: 1  # SGBM 已做散斑过滤，安全层保守响应单个有效 Scan bin
+      visualize: false
+      enabled: true
+    StereoSlow:
+      type: "circle"
+      radius: 0.40
+      action_type: "slowdown"
+      min_points: 1
+      slowdown_ratio: 0.50
+      visualize: false
+      enabled: true
+    observation_sources: ["stereo_scan"]
+    stereo_scan:
+      type: "scan"
+      topic: "/stereo/scan"
+      source_timeout: 0.75
+      enabled: true

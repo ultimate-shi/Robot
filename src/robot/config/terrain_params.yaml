@@ -36,6 +36,7 @@ obstacle_avoidance:
     side_stop_distance: 0.15  # 侧向障碍小于该距离时限制横移或转向，单位 m
     side_warn_distance: 0.30  # 侧向障碍小于该距离时降低横移或转向速度，单位 m
     range_timeout: 0.35  # 超声波数据超过该时间后视为过期，单位 s
+    require_valid_ranges: false  # 仿真默认兼容；实机紧急层会覆盖为 true，测距失联即停车
     escape_reverse_enabled: true  # 前方持续被挡且后方安全时，是否短暂后退脱困
     escape_trigger_time: 1.0  # 前方持续低于 stop 距离多久后触发后退，单位 s
     escape_reverse_duration: 2.0  # 每次脱困后退持续时间，单位 s

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 robot.launch 使用说明：
-本节点由 robot.launch.py 启动，负责把统一点云输入转换为统一地形状态输出。
+本节点由 robot.launch.py 启动，把统一点云输入转换为统一地形状态输出。
 它让仿真 PLY 点云和现实双目点云都走同一个接口：
 /perception/points -> /terrain_status。
 
@@ -25,8 +25,8 @@ from rclpy.node import Node
 from sensor_msgs.msg import PointCloud2
 from std_msgs.msg import String
 
-from robot.terrain_heightmap import TerrainHeightmap
-from robot.terrain_physics import TerrainPhysics
+from robot.perception.terrain_heightmap import TerrainHeightmap
+from robot.perception.terrain_physics import TerrainPhysics
 
 
 class TerrainAnalyzerNode(Node):

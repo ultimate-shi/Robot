@@ -1,6 +1,6 @@
 """
 nav_controller_node 使用说明：
-本节点位于 Nav2 velocity_smoother 和底盘安全层之间，只做目标状态监督和速度门控。
+本节点位于 Nav2 velocity_smoother 和底盘安全层之间，负责目标状态监督和速度门控。
 它不再执行自定义原地旋转、倒车恢复或取消 Nav2 goal，恢复行为交给 Nav2 自身处理。
 
 输入：

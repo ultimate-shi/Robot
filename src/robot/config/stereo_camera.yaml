@@ -15,9 +15,9 @@ usb_cam:
     saturation: -1  # -1 表示不覆盖当前饱和度
     sharpness: -1  # -1 表示不覆盖当前锐度
     gain: -1  # 当前相机未暴露增益控制，不向驱动写入不存在的控制项
-    auto_white_balance: false  # 保持关闭自动白平衡；实际 V4L2 控制由板端脚本固定
+    auto_white_balance: true  # 表达建图期望；真实控件由 launch 在取流前直接写入并回读
     white_balance: -1  # 不由 usb_cam 重写色温，避免和 white_balance_temperature 名称不一致
-    autoexposure: false  # 保持手动曝光；实际 V4L2 控制由板端脚本固定
+    autoexposure: true  # 表达建图期望；真实控件由 launch 在取流前直接写入并回读
     exposure: -1  # 不由 usb_cam 重写曝光，避免和 exposure_time_absolute 名称不一致
     autofocus: false  # 当前模组为固定焦距，不启用自动对焦
     focus: -1  # 当前相机未暴露焦距控制
@@ -33,10 +33,30 @@ stereo_splitter:
     right_frame_id: "stereo_right_optical_frame"  # 右目 ROS optical 坐标系，z 前、x 右、y 下
     left_first: true  # true 表示拼接图左半幅是左目；必须通过遮挡镜头确认
     frame_skip: 0  # 处理抽帧数；0 每帧处理，1 每两帧处理一帧，2 每三帧处理一帧
+    recognition_rate: 10.0  # 正常模式输出给极线校正和识别模型的双目频率；标定模式忽略此限制
     output_encoding: "passthrough"  # 保持 usb_cam 输出编码；本节点不做颜色空间转换
+
+stereo_pair_throttle:
+  ros__parameters:
+    navigation_rate: 4.0  # 视差、深度和导航点云只消费最新成对校正图，避免旧帧排队
+    pair_cache_size: 4  # 短暂缓存左右校正图，按完全相同的采集时间戳配对
 
 disparity_node:
   ros__parameters:
+    # 门后每组包含左右图和两份CameraInfo，任一路丢失都会使精确同步整组作废。
+    # 队列只保留一帧，SGBM慢时由上游最新帧门丢旧帧，而不是在这里积压。
+    "qos_overrides./stereo/navigation/left/image_rect.subscription.reliability": "reliable"
+    "qos_overrides./stereo/navigation/left/image_rect.subscription.history": "keep_last"
+    "qos_overrides./stereo/navigation/left/image_rect.subscription.depth": 1
+    "qos_overrides./stereo/navigation/right/image_rect.subscription.reliability": "reliable"
+    "qos_overrides./stereo/navigation/right/image_rect.subscription.history": "keep_last"
+    "qos_overrides./stereo/navigation/right/image_rect.subscription.depth": 1
+    "qos_overrides./stereo/navigation/left/camera_info.subscription.reliability": "reliable"
+    "qos_overrides./stereo/navigation/left/camera_info.subscription.history": "keep_last"
+    "qos_overrides./stereo/navigation/left/camera_info.subscription.depth": 1
+    "qos_overrides./stereo/navigation/right/camera_info.subscription.reliability": "reliable"
+    "qos_overrides./stereo/navigation/right/camera_info.subscription.history": "keep_last"
+    "qos_overrides./stereo/navigation/right/camera_info.subscription.depth": 1
     stereo_algorithm: 1  # 立体算法：0=BM，1=SGBM；RK3588 首版默认使用 CPU SGBM
     min_disparity: 0  # 搜索的最小视差，单位 px；平行安装相机通常从 0 开始
     disparity_range: 128  # 视差搜索范围，单位 px，必须是 16 的倍数；越大越耗 CPU

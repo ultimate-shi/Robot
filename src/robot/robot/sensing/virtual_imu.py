@@ -1,7 +1,7 @@
 """
 robot.launch 使用说明：
 本节点由 robot.launch.py 以 executable='virtual_imu' 启动。
-它根据 chassis_controller_node 发布的 /odom 生成模拟 IMU 数据，用于数字孪生传感器链路。
+它根据底盘控制节点发布的 /odom 生成模拟 IMU 数据，用于数字孪生传感器链路。
 
 输入：
 - /odom：包含 base_link 的位置、姿态和速度。

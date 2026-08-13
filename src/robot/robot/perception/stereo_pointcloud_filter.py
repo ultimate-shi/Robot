@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""独立过滤真实双目点云，输出给 Nav2 使用的 base_link 障碍点。"""
+"""过滤真实双目点云，输出给 Nav2 使用的 base_link 障碍点。"""
 
 import json
 import math
@@ -200,11 +200,17 @@ class StereoPointCloudFilter(Node):
         return points[mask]
 
     def _voxel_downsample(self, points):
+        """每个体素保留平面距离最近的点，导航障碍边界取保守值。"""
         if points.size == 0 or float(self.voxel_size) <= 0.0:
             return points
         grid = np.floor(points / float(self.voxel_size)).astype(np.int32)
-        _, indices = np.unique(grid, axis=0, return_index=True)
-        return points[np.sort(indices)]
+        planar_range = np.hypot(points[:, 0], points[:, 1])
+        nearest_order = np.argsort(planar_range, kind='stable')
+        ordered_grid = grid[nearest_order]
+        _, nearest_indices = np.unique(
+            ordered_grid, axis=0, return_index=True)
+        selected = nearest_order[nearest_indices]
+        return points[selected]
 
     def _publish_cloud(self, points, source):
         cloud = PointCloud2()

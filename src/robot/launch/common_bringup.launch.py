@@ -33,8 +33,12 @@ def generate_launch_description():
     nav2_overrides = LaunchConfiguration('nav2_overrides_file')
     chassis_cmd_topic = LaunchConfiguration('chassis_cmd_topic')
     log_level = LaunchConfiguration('log_level')
-    foxglove_enabled = LaunchConfiguration('foxglove_enabled')
+    # 仅供组合 launch 避免重复 Bridge，不作为用户启动参数暴露。
+    start_foxglove_bridge = LaunchConfiguration(
+        '_common_start_foxglove_bridge', default='true')
     foxglove_port = LaunchConfiguration('foxglove_port')
+    foxglove_send_buffer_limit = LaunchConfiguration(
+        'foxglove_send_buffer_limit')
     ros_args = ['--ros-args', '--log-level', log_level]
 
     declarations = [
@@ -48,8 +52,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'chassis_cmd_topic', default_value='/cmd_vel_nav'),
         DeclareLaunchArgument('log_level', default_value='warn'),
-        DeclareLaunchArgument('foxglove_enabled', default_value='true'),
         DeclareLaunchArgument('foxglove_port', default_value='8765'),
+        DeclareLaunchArgument(
+            'foxglove_send_buffer_limit', default_value='1000000'),
     ]
 
     robot_description = {
@@ -240,12 +245,13 @@ def generate_launch_description():
             'address': '0.0.0.0',
             'asset_uri_allowlist': ['package://robot/.*'],
             'allow_file_transfer': True,
-            'send_buffer_limit': 1000000,
+            'send_buffer_limit': ParameterValue(
+                foxglove_send_buffer_limit, value_type=int),
             'max_packet_messages': 100,
             'client_timeout_ms': 300000,
             'keep_alive_interval_ms': 5000,
         }],
-        condition=IfCondition(foxglove_enabled),
+        condition=IfCondition(start_foxglove_bridge),
         arguments=ros_args,
         output='screen',
     )

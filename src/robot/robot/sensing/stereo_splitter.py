@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """拆分横向拼接的 UVC 双目图像，并发布左右图像和标定信息。"""
 
+import json
 import os
+import time
 
 import numpy as np
 import rclpy
-import yaml
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import (
     HistoryPolicy,
     QoSProfile,
     ReliabilityPolicy,
-    qos_profile_sensor_data,
 )
 from sensor_msgs.msg import CameraInfo, Image
+from std_msgs.msg import String
+import yaml
 
 
 class StereoSplitter(Node):
-    """保持同一采集时间戳，将一帧横向拼接图像拆成左右两帧。"""
+    """保持同一采集时间戳，将一帧横向拼接图像拆成左右两帧."""
 
     def __init__(self):
         super().__init__('stereo_splitter')
@@ -31,18 +33,28 @@ class StereoSplitter(Node):
         self.declare_parameter('right_frame_id', 'stereo_right_optical_frame')
         self.declare_parameter('left_first', True)
         self.declare_parameter('frame_skip', 0)
+        self.declare_parameter('recognition_rate', 10.0)
         self.declare_parameter('output_encoding', 'passthrough')
         self.declare_parameter('calibration_mode', False)
         self.declare_parameter('left_calibration_file', '')
         self.declare_parameter('right_calibration_file', '')
+        self.declare_parameter('status_topic', '/stereo/splitter/status')
 
         self.left_first = bool(self.get_parameter('left_first').value)
         self.frame_skip = max(0, int(self.get_parameter('frame_skip').value))
+        self.recognition_rate = max(
+            0.0, float(self.get_parameter('recognition_rate').value))
         self.output_encoding = str(self.get_parameter('output_encoding').value)
         self.calibration_mode = bool(self.get_parameter('calibration_mode').value)
         self.left_frame = str(self.get_parameter('left_frame_id').value)
         self.right_frame = str(self.get_parameter('right_frame_id').value)
         self.frame_count = 0
+        self.published_count = 0
+        self.rate_dropped_count = 0
+        self.next_publish_time = None
+        self.status_last_time = time.monotonic()
+        self.status_last_received = 0
+        self.status_last_published = 0
 
         self.left_info = self._load_camera_info(
             str(self.get_parameter('left_calibration_file').value),
@@ -56,33 +68,40 @@ class StereoSplitter(Node):
         )
 
         input_topic = str(self.get_parameter('input_topic').value)
-        # image_proc 默认使用可靠订阅；左右图和 CameraInfo 必须采用 RELIABLE，
-        # 否则 DDS 会因 QoS 不兼容而切断校正、视差和深度整条处理链。
-        output_qos = QoSProfile(
+        # 可靠单帧队列保证 Image/CameraInfo 成对到达，同时不积压旧图。
+        image_qos_depth = 1
+        image_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
             history=HistoryPolicy.KEEP_LAST,
-            depth=10,
+            depth=image_qos_depth,
         )
+        info_qos = image_qos
         self.left_pub = self.create_publisher(
             Image, str(self.get_parameter('left_image_topic').value),
-            output_qos)
+            image_qos)
         self.right_pub = self.create_publisher(
             Image, str(self.get_parameter('right_image_topic').value),
-            output_qos)
+            image_qos)
         self.left_info_pub = self.create_publisher(
             CameraInfo, str(self.get_parameter('left_camera_info_topic').value),
-            output_qos)
+            info_qos)
         self.right_info_pub = self.create_publisher(
             CameraInfo, str(self.get_parameter('right_camera_info_topic').value),
-            output_qos)
+            info_qos)
+        self.status_pub = self.create_publisher(
+            String, str(self.get_parameter('status_topic').value), 10)
         self.create_subscription(
-            Image, input_topic, self.image_callback, qos_profile_sensor_data)
+            Image, input_topic, self.image_callback, image_qos)
+        self.create_timer(1.0, self._publish_status)
         self.get_logger().info(
             f'双目拆分已启动: {input_topic}, left_first={self.left_first}, '
-            f'frame_skip={self.frame_skip}')
+            f'recognition_rate={self.recognition_rate:.2f} Hz, '
+            f'frame_skip={self.frame_skip}, '
+            f'calibration_mode={self.calibration_mode}, '
+            f'image_qos_depth={image_qos_depth}')
 
     def _load_camera_info(self, path, frame_id, side):
-        """读取 camera_calibration 生成的 YAML；标定模式允许文件缺失。"""
+        """读取 camera_calibration 生成的 YAML；标定模式允许文件缺失."""
         if not path or not os.path.isfile(path):
             message = f'{side} 标定文件不存在: {path or "(空)"}'
             if self.calibration_mode:
@@ -134,7 +153,8 @@ class StereoSplitter(Node):
 
     def image_callback(self, msg):
         self.frame_count += 1
-        if (self.frame_count - 1) % (self.frame_skip + 1):
+        # 标定必须使用完整采集频率；正常运行才限制识别/校正分支为目标频率。
+        if not self.calibration_mode and not self._should_publish(msg):
             return
         if msg.width < 2 or msg.width % 2:
             self.get_logger().error(
@@ -182,6 +202,52 @@ class StereoSplitter(Node):
         self.right_pub.publish(right_msg)
         self._publish_info(self.left_info_pub, self.left_info, left_msg)
         self._publish_info(self.right_info_pub, self.right_info, right_msg)
+        self.published_count += 1
+
+    def _should_publish(self, msg):
+        """按采集时间选择最新帧，时钟异常时退回单调时钟."""
+        if (self.frame_count - 1) % (self.frame_skip + 1):
+            self.rate_dropped_count += 1
+            return False
+        if self.recognition_rate <= 0.0:
+            return True
+
+        stamp = (
+            float(msg.header.stamp.sec)
+            + float(msg.header.stamp.nanosec) * 1e-9
+        )
+        current = stamp if stamp > 0.0 else time.monotonic()
+        period = 1.0 / self.recognition_rate
+        tolerance = min(0.005, period * 0.1)
+        if self.next_publish_time is None or current + period < self.next_publish_time:
+            self.next_publish_time = current + period
+            return True
+        if current + tolerance < self.next_publish_time:
+            self.rate_dropped_count += 1
+            return False
+        while self.next_publish_time <= current + tolerance:
+            self.next_publish_time += period
+        return True
+
+    def _publish_status(self):
+        """发布轻量计数，避免用 ros2 topic hz 订阅大图干扰实测."""
+        now = time.monotonic()
+        elapsed = max(now - self.status_last_time, 1e-6)
+        payload = {
+            'state': 'ok' if self.published_count else 'waiting_image',
+            'target_fps': 0.0 if self.calibration_mode else self.recognition_rate,
+            'input_fps': round(
+                (self.frame_count - self.status_last_received) / elapsed, 2),
+            'output_fps': round(
+                (self.published_count - self.status_last_published) / elapsed, 2),
+            'received_frames': self.frame_count,
+            'published_pairs': self.published_count,
+            'rate_dropped_frames': self.rate_dropped_count,
+        }
+        self.status_pub.publish(String(data=json.dumps(payload)))
+        self.status_last_time = now
+        self.status_last_received = self.frame_count
+        self.status_last_published = self.published_count
 
     @staticmethod
     def _make_image(source, array, width, frame_id):

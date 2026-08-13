@@ -2,7 +2,7 @@
 """
 robot.launch 使用说明：
 本节点由 robot.launch.py 以 executable='pointcloud_obstacle_filter' 启动。
-它是仿真 PLY 点云和现实双目相机点云复用 Nav2 的关键转换层。
+它是仿真 PLY 点云和现实双目相机点云复用 Nav2 的转换层。
 
 输入：
 - /perception/points：统一点云输入，仿真来自 publish_ply，现实可来自双目摄像头。

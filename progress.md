@@ -1,5 +1,80 @@
 # 过程记录
 
+## 2026-08-10
+
+- 按分层架构要求完成 Python 实现代码的实体迁移，不再使用“根目录旧实现 + 子目录薄封装”
+  的结构。`src/robot/robot/` 根目录现在只保留包级 `__init__.py`，所有 ROS 节点和辅助模块
+  均位于 `sensing`、`perception`、`localization`、`mapping`、`mission`、`safety`、
+  `control`、`diagnostics` 对应目录中。
+- 将底盘控制、反馈和 Nav2 速度门控迁入 `control`；相机拆分、双目帧调度、虚拟 IMU 和
+  虚拟超声波迁入 `sensing`；深度、点云过滤、地形分析、高度图和地形物理迁入
+  `perception`；超声波转 Scan 和最终避障迁入 `safety`；PLY 发布器迁入 `mapping`；双目
+  性能工具迁入 `diagnostics`。`setup.py` 继续直接指向这些分层后的真实实现文件。
+- 同步修正地形模块内部导入和双目测试导入，避免任何代码继续依赖已经删除的根目录模块；
+  虚拟超声波文件同时移除原先绑定个人 Python 环境的 shebang，改为通用
+  `/usr/bin/env python3`。
+- 重新编写 README，仅保留项目目录结构、各功能层职责、关键节点、launch、配置文件、
+  地图模型、容器脚本、建图/预演使用流程和测试方法；移除历史诊断过程、重复背景和阶段性
+  性能记录，这些过程信息继续由 `progress.md` 和 `docs/` 保存。
+- 本次只调整代码组织和项目说明，没有改变节点话题、console executable 或 launch 使用
+  方式。迁移后 `robot_stereo_components`、`robot` 两包构建通过，地图和双目相关 8 项测试
+  全部通过，18 个 `robot` console entry point 均可从安装环境加载；Python 编译检查和
+  `git diff --check` 同时通过。
+- 当前卡点：没有新增功能卡点；实机相机建图、真实底盘、IMU 和超声波的现场接入与验收
+  状态仍与 2026-08-07 记录一致。
+- 排查 `stereo_mapping.launch.py` 启动后 Foxglove 无法连接：实测建图、视觉里程计和
+  RTAB-Map 正常运行，但 8765 没有监听且启动列表缺少 Bridge。除父子 launch 同名参数会
+  相互覆盖外，工作区 `install/robot` 还残留了 8 月 7 日普通复制版 launch，导致最新源码
+  修改没有进入运行环境；清理并重建 `build/robot`、`install/robot` 后恢复软链接安装。
+- 按要求从全部 launch、README 和标定指南中删除公开的 `foxglove_enabled` 参数。
+  `common_bringup`、独立相机和建图入口默认启动 Foxglove Bridge；组合入口通过不对用户
+  暴露的内部配置避免同一 8765 端口启动两个 Bridge。6 个 launch 的 `--show-args` 均确认
+  不再包含该参数。
+- 修复后使用真实 `/dev/video0` 启动双目建图入口，确认 `/foxglove_bridge` 节点存在，
+  宿主机 `0.0.0.0:8765` 正常监听。验证用后台 launch 已停止，端口已释放，用户可重新启动
+  正式建图进程。
+
+## 2026-08-07
+
+- 按“真实双目建图”和“已保存地图虚拟导航预演”两个互斥阶段完成首版架构。建图阶段不
+  启动虚拟底盘，使用左右校正图、RTAB-Map 双目视觉里程计和 SLAM 输出 `/visual_odom`、
+  `/map`、`/mapping/cloud_map`；当前不要求 IMU 或轮式里程计，`/sensors/imu/data` 仅保留
+  后续融合接口，头部 yaw/pitch 在当前无反馈条件下固定发布零位。
+- 新增 `stereo_mapping.launch.py`、`rtabmap_stereo_mapping.yaml` 和地图快照管理节点。
+  默认不自动保存；`/mapping/create_preview_snapshot` 生成
+  `/tmp/robot_preview/current.{pgm,yaml,ply,json}`，`/mapping/save_snapshot` 才把带时间戳的
+  持久快照写入 `/workspace/maps/`。修复 `OccupancyGrid=-1` 未知栅格被错误保存为空闲区域的
+  边界问题。
+- 新增 `stereo_navigation_preview.launch.py`、`navigation_preview.yaml`、静态点云局部观察器
+  和目标管理节点。预演加载快照二维地图与三维点云，在虚拟机器人当前位姿下生成
+  `/stereo/scan` 与局部障碍点，并把 Foxglove 的 `/goal_pose` 转发给 Nav2
+  `NavigateToPose`；任务状态和取消接口分别为 `/mission/status`、`/mission/cancel`。
+- 预演速度链按三级安全结构实现：Nav2 规划与代价地图、双目 Collision Monitor
+  减速/停车、8 路虚拟超声波最终紧急停车。虚拟超声波无点云或 TF 时发布无效量程，最终
+  安全层只接受有限且位于量程范围内的新数据，缺失或超时按停车处理。
+- 为约 49 万点的 `studyroom.ply` 增加静态源缓存和首次全局体素降采样，避免局部观察器及
+  虚拟超声波重复解析整幅点云造成安全 Scan 断流。预演生成的 Scan 已基于当前位姿，因此
+  仅在预演中关闭 Collision Monitor 的采集时延位姿补偿；真实在线双目配置保持原行为。
+- 在 `src/robot/robot/` 下按 `sensing`、`perception`、`localization`、`mapping`、`mission`、
+  `safety`、`control`、`diagnostics` 分层整理入口，保留原有 console executable 名称，便于
+  后续单层替换视觉里程计、SLAM、目标语义层或底盘实现。YOLO、人跟随、物体目标和自动
+  探索本轮没有提前实现，只保留后续接入层；未来探索约定仍是无前沿时原地转一圈后停止。
+- 新增独立 C++ 包 `robot_stereo_components`，默认用可靠 QoS 的 C++ 节点拆分 1280×480
+  双目拼接图，原 Python 拆分器可用 `splitter_backend:=python` 回退。构建脚本改用
+  `colcon build --packages-up-to robot`，确保依赖包一并构建。
+- Jazzy 镜像加入 RTAB-Map、camera_info_manager 和 joint_state_publisher。RTAB-Map 在
+  ARM64 上会连带 PCL/VTK 等大量依赖，构建期间曾因悬空中间镜像挤占磁盘而中断；只清理
+  未被容器使用的 dangling layers 后镜像成功构建，现有运行容器未被停止或替换。
+- 验证结果：`robot_stereo_components` 与 `robot` 两包构建通过；两个新 launch 的
+  `--show-args` 解析通过；地图和既有双目相关测试共 8 项全部通过；Python 编译检查、脚本
+  语法检查及 `git diff --check` 通过。隔离 ROS 域实测虚拟导航预演的 map、Nav2、三级安全
+  节点全部激活，启动预处理完成后连续运行无新增错误或 Scan 超时；无相机环境下建图入口
+  的 stereo_odometry、rtabmap、point_cloud_xyzrgb 均能启动并订阅预期话题。
+- 当前卡点：本轮没有可用于隔离容器的真实摄像头数据，尚未完成实机手持/推车建图、回环
+  质量、地图尺度与 Foxglove 现场显示验收；真实底盘里程计、ROS IMU 和超声波驱动也仍未
+  接入。可以在没有 IMU/轮速计时缓慢移动整车依靠视觉里程计建图，但快速转动、纹理不足、
+  强反光或只旋转不平移都可能丢失尺度/跟踪；不建议拆下相机随意手持后把结果当作整车地图。
+
 ## 2026-08-05
 
 - 根据 `robot.png` 中的实车结构，在车体前方中线增加独立两自由度头部；新增
@@ -138,6 +213,61 @@
   host IPC 和工作区挂载，但不执行 colcon 构建、不启动任何 launch；通过 `docker exec`
   进入时自动加载 Jazzy 和已有的工作区环境。脚本会识别已运行或停止的同名容器，避免
   静默覆盖用户容器；README 已补充启动、进入、停止和按需手动构建的命令。
+- 完成双目性能链路分频：UVC 仍以 1280×480 MJPEG 20 Hz 采集，splitter 正常模式只输出
+  最新左右原图 10 Hz，标定模式仍保留完整频率；左右校正图作为端侧识别的 640×480、
+  10 Hz 未压缩输入。新增 `stereo_pair_throttle_node`，按完全相同的采集时间戳选择最新
+  校正图对，以 4 Hz 送入 SGBM，旧帧不排队也不重复发布。
+- 处理链大消息队列统一收紧：splitter 和导航图像分支使用
+  `RELIABLE + KEEP_LAST(1)` 大图配合深度10的CameraInfo兼容 image_proc精确同步，4 Hz
+  最新帧调度输入/输出和米制深度、预览
+  使用传感器 `BEST_EFFORT + KEEP_LAST(1)`，避免慢SGBM、Foxglove或远程订阅反压识别和
+  深度计算。Foxglove Bridge
+  默认关闭，只有显式 `foxglove_enabled:=true` 时才启动校正图和深度预览压缩转发器。
+- 导航点云保持 640×480、128 px 视差范围和 0.25～4.0 m 深度约束；5 cm 体素内不再保留
+  任意首点，而是保留离 `base_link` 最近的点。点云过滤和 `/stereo/scan` 目标频率改为
+  4 Hz，Scan 周期改为 0.25 s，代价地图继续只消费 `/nav/stereo_obstacle_points`。
+- 加入 Nav2 Collision Monitor 和配置：`/stereo/scan` 进入 0.40 m 减速圆与 0.25 m
+  停车圆，减速比例为 50%，Scan 超过 0.75 s 未更新时停车。速度链改为
+  `/cmd_vel_nav -> /cmd_vel_stereo_safe -> /cmd_vel_safe -> chassis_controller`；未启用超声波
+  时 Collision Monitor 直接发布 `/cmd_vel_safe`。
+- 实机超声波接口已预留 `enable_ultrasonic_avoidance`，默认关闭；启用后复用现有8路
+  `sensor_msgs/Range` 安全节点、禁止自动倒车，并要求当前运动方向至少有一路未超时测距，
+  否则停车。当前实机超声波驱动尚未接入 ROS，因此三级安全链的最后一级仍是现场卡点。
+- 新增一次性 `stereo_pipeline_benchmark`，可在 Foxglove 关闭时统计各话题频率、帧间隔、
+  消息年龄和同时间戳阶段延迟并输出 JSON。README 和标定指南已把旧的 15 Hz/200 ms
+  标准改为识别图不低于 9 Hz、导航链不低于 3.5 Hz、P95 总延迟不超过 600 ms，同时保留
+  原深度尺度和极线质量要求。
+- Jazzy 镜像已加入并实际安装 `ros-jazzy-nav2-collision-monitor`，新镜像构建成功。
+  隔离 ROS 域测试确认参数可以配置并激活，0.35 m 合成障碍把 0.1 m/s、0.2 rad/s 分别
+  限制为 0.05 m/s、0.1 rad/s，0.24 m 障碍输出零速，Scan 超时也输出零速。
+- 构建 `robot` 包成功，双目功能测试由3项扩展为5项且全部通过；全包 flake8/pep257 仍因
+  仓库历史风格债务失败，本轮没有批量改写无关旧节点。当前还需在新容器中启动真实相机，
+  运行60秒基准和30分钟稳定性验收，才能填写真实4 Hz、延迟、CPU和温度成绩。
+- 踩坑：Docker 构建上下文会读取被标定容器写成 `0600 nobody` 的 launch 临时文件，导致
+  构建在安装依赖前失败；新增 `.dockerignore` 排除标定、build/install/log 等运行产物。
+  Collision Monitor 合成测试中的 LaserScan 必须使用当前时间戳并具有可用 TF，零时间戳
+  或不存在的 `base_link` 会被按无效源正确停车，不能误判为阈值配置错误。
+- 增加 `/stereo/splitter/status` 和 `/stereo/depth/status` 轻量JSON状态：前者报告UVC输入、
+  10 Hz输出和限频丢帧计数，后者报告深度FPS、节点处理P95以及采集到深度的P95年龄；日常
+  诊断不再依赖同时订阅多路大图的 `ros2 topic hz`。性能工具也改为串行阶段测量，降低
+  验收工具本身对板端链路的干扰。
+- 修正4 Hz门后的QoS边界：门前校正图订阅保持BEST_EFFORT，门后左右Image与CameraInfo
+  改为 `RELIABLE + KEEP_LAST(1)`；`disparity_node` 四个订阅通过官方QoS覆盖参数使用相同
+  策略，避免四路中任一路丢失后精确同步整组作废，同时不会把SGBM背压传回10 Hz识别链。
+- 真实相机短测确认 splitter 内部可达到UVC约20 Hz、输出10 Hz，最新帧门瞬时约3.94～4.01 Hz；
+  单帧SGBM到深度的处理约10 ms、此前同时间戳测试的SGBM约175～182 ms、采集到深度P95
+  曾测得约396 ms。但连续测试中再次复现 `image_proc` 只收到CameraInfo、大RGB Image大量
+  丢失，深度随后停止更新，因此当前不能把3.5 Hz导航输出判为通过。
+- 为排查大图DDS交付，短暂构建并实测Cyclone DDS；BEST_EFFORT和RELIABLE两种组合均未
+  消除 `rclpy splitter -> image_proc` 的大图丢失，已撤销全局中间件切换并恢复Fast DDS，
+  避免影响Nav2与底盘。当前卡点明确为拆分大图的DDS交付/校正同步，后续应优先将
+  splitter与校正改为同进程C++组件或实现零拷贝路径，再重新做60秒和30分钟验收。
+- 本轮踩坑：只看调度节点瞬时4 Hz不能证明深度链通过；必须同时看到 `/stereo/depth/status`
+  持续增长。`usb_cam` 的 combined CameraInfo 文件缺失警告不影响 splitter 加载正式左右
+  标定，但不能与真正的 Image/CameraInfo 同步丢帧混为一谈。
+- 最终恢复默认 Fast DDS 镜像并重新构建成功；5项双目功能测试全部通过，本轮7个核心
+  Python/launch文件的 `ament_flake8` 无问题，全部config YAML可解析，相机入口和完整实机
+  入口的launch参数均可展开。容器当前仅保留运行环境，未在验收不通过时后台启动相机链。
 
 ## 2026-07-09
 
@@ -508,3 +638,77 @@
 - `test_stereo_processing.py` 的 3 个双目功能测试全部通过；全包测试的 flake8/pep257
   仍因仓库既有的 306 条跨文件风格问题失败，属于历史 lint 债务，没有把它误报为本次
   标定功能失败，也未在本次任务中扩大范围批量改写旧节点。
+
+## 2026-08-12
+
+- 排查 `stereo_mapping.launch.py` 启动后画面偏暖、`/visual_odom` 无消息和地图不更新。
+  现场回读相机为手动曝光 `166`、关闭自动白平衡，但白平衡温度已被设为 `6500 K`；
+  `stereo_camera.yaml` 配置为不由 `usb_cam` 覆盖色温，因此当前偏色直接来自设备保留的
+  V4L2 控制值，而不是图像拆分、校正或 RTAB-Map 的颜色处理。项目固定参数基准为
+  `4600 K`，恢复前应先停止占用相机的 launch，再运行相机配置脚本并回读确认。
+- 当前容器同时残留两套完整的 `stereo_mapping`：最早一套已运行约 4 小时 44 分，最近
+  一套运行约 13 分钟；此前还连续启动并停止过三套。后启动实例的 `usb_cam` 因相机已被
+  占用以 `-6` 退出，第二个 Foxglove Bridge 因端口冲突以 `-6` 退出，但其拆分、校正、
+  里程计和 RTAB-Map 等节点仍在运行，形成同名节点和重复发布/订阅端点。
+- 运行态确认 `/stereo/image_raw`、左右 `/image_raw` 和左右 `camera_info` 有消息，但
+  `/stereo/left/image_rect` 与 `/stereo/right/image_rect` 当前发布者均为 0。
+  `stereo_odometry` 每 5 秒明确报告四路精确同步没有收到数据，RTAB-Map 同样报告缺少
+  左右校正图、CameraInfo 和 `/visual_odom_info`；因此故障链为“校正图断流 ->
+  `/visual_odom` 无输出 -> RTAB-Map 无里程计/图像输入 -> `/map` 不更新”。
+- 多次重复启动期间，左右 `image_proc/rectify_node` 曾出现 `-11` 段错误，也多次在停止时
+  无法响应 SIGINT/SIGTERM 而被 SIGKILL。当前新增的两个校正进程分别占用约 98% 和
+  51% 单核，旧实例的视觉里程计、RTAB-Map 和两路校正也继续占用 CPU，系统 load average
+  达到约 6.37；重复实例和资源争用会进一步放大精确同步丢组问题。
+- 建议恢复顺序：先只停止两套 `stereo_mapping` launch，确认相机、校正、里程计、
+  RTAB-Map 和 Foxglove 进程全部退出；相机空闲后用 `configure_stereo_camera.sh` 恢复并
+  回读 `4600 K`；随后只启动一套建图入口，依次验收左右 `image_rect`、`/visual_odom`、
+  `/rtabmap/mapData` 和 `/map`。如果干净单实例下校正图仍断流，再单独处理 image_proc
+  的同步/QoS 或改为组件内零拷贝链路，不能通过反复叠加 launch 规避。
+- 本轮仅做只读运行诊断并补充过程记录，没有终止用户正在运行的进程，也没有修改功能
+  代码。踩坑：ROS 话题名称和发布端点存在不代表实际有消息；重复启动真实相机入口时，
+  launch 不会因 `usb_cam` 或 Foxglove 单节点退出而自动停止其余节点，容易留下高负载的
+  半残实例。
+- 用户清理并重新启动后复查：容器内只剩一套 `stereo_mapping`，相机、拆分、左右校正、
+  `stereo_odometry`、RTAB-Map、快照和 Foxglove 节点均为单实例；左右校正图、
+  `/visual_odom`、`/visual_odom_info`、`/rtabmap/mapData` 和 `/map` 都能实际取到消息，
+  不再只是存在 DDS 端点。二维地图实测为 5 cm 分辨率、约 `97×71` 栅格，视觉里程计有
+  有效非零位姿，说明此前“完全无里程计、地图不更新”的主故障已随残留实例清理恢复。
+- `stereo_camera.yaml` 中 `auto_white_balance=true`、`autoexposure=true` 已进入
+  `/usb_cam` ROS 参数，但 V4L2 硬件回读仍为 `white_balance_automatic=0`、
+  `white_balance_temperature=6500`、`auto_exposure=1 (Manual)`、曝光 `166`，亮度还为
+  `50`。因此这款相机/当前 `usb_cam` 实现没有把通用 ROS 参数映射到设备实际控制名，
+  仅修改 YAML 不能证明自动控制生效，画面偏暖仍会保留。应在相机未被占用时用
+  `v4l2-ctl` 或现有板端脚本直接设置并回读真实控制项。
+- 当前视觉里程计能工作但连续性仍不稳定：一次有效样本为 701 个特征、241 个匹配、
+  113 个内点且 `lost=false`，但本次日志仍频繁出现 `Odometry lost` 和自动重置。左右校正
+  偶发 10 秒内同步对为 0 的警告，说明大图 DDS/image_proc 同步卡点尚未根治；地图虽会
+  更新，轨迹可能发生跳变，不能把“已有输出”视为稳定性验收通过。
+- 发现三维地图话题配置错误：RTAB-Map 本身已经在 `/cloud_map` 发布有效、持久化的
+  `PointCloud2`；`stereo_mapping.launch.py` 额外启动的 `point_cloud_xyzrgb` 实际订阅
+  RGB/深度/视差并发布 `/cloud`，没有 `mapData` 输入或 `cloud_map` 输出，所以当前
+  `mapData -> /mapping/cloud_map` remap 全部无效，`/mapping/cloud_map` 没有发布者。
+  后续应直接把 RTAB-Map 的 `cloud_map` 重映射到 `/mapping/cloud_map`，并删除错误的
+  `point_cloud_xyzrgb` 实例，或统一让快照和 Foxglove 使用现成的 `/cloud_map`。
+- `usb_cam` 报 combined 相机标定文件缺失只影响其自带的 combined `CameraInfo`；左右正式
+  标定仍由 splitter 正常加载，不是当前里程计故障根因。
+- 修复自动曝光/白平衡“ROS 参数为 true 但硬件仍为手动”的问题：
+  `stereo_camera.launch.py` 新增 `apply_auto_camera_controls` 开关；开启时先用相机实际的
+  V4L2 控制名写入 `brightness=0`、`white_balance_automatic=1` 和
+  `auto_exposure=3`，同时回读亮度、色温和曝光状态，控制命令退出后才启动 `usb_cam`，
+  避免设备被取流节点占用。独立相机入口默认关闭该动作以保护双目标定流程，建图入口默认
+  开启；需要固定曝光/色温时可显式传入 `apply_auto_camera_controls:=false`。
+- 修复三维地图错误链路：删除不具备 `MapData -> cloud_map` 功能的
+  `point_cloud_xyzrgb` 节点及无效参数，直接把 RTAB-Map 原生 `cloud_map` 重映射为
+  `/mapping/cloud_map`，让 Foxglove 和快照管理器继续使用既有公共话题。
+- README 补充 `/visual_odom` 与实车控制的边界：视觉里程计只发布估计位姿和
+  `odom -> base_link` TF，因此可视化中的 `robot_description` 会移动，但它不发布
+  `/cmd_vel`、不会直接驱动底盘；真实运动仍必须经过导航/安全/底盘控制链。
+- 修改后容器内 `colcon build --packages-up-to robot --symlink-install` 成功，建图 launch
+  参数展开成功，地图快照和双目处理测试共 8 项全部通过，本次两个 launch 文件的
+  `ament_flake8` 检查无问题。当前运行实例没有被重启，新控制和点云修复需下次重新启动
+  `stereo_mapping.launch.py` 后生效。
+- 用户已成功保存两组长期地图快照，最新目录为
+  `/workspace/maps/map_20260812_132450/`，其中 `map.yaml`、`map.pgm`、`map.ply` 和
+  `map.json` 完整。使用时应先停止在线建图，再把该目录的 YAML 和 PLY 同时传给
+  `stereo_navigation_preview.launch.py`；该入口驱动的是已保存环境中的虚拟机器人导航，
+  不会直接控制真实底盘。

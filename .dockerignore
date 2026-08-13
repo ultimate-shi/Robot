@@ -1,0 +1,11 @@
+# 运行时和标定输出通过卷挂载使用，不应进入 Jazzy 基础镜像构建上下文。
+.git
+build
+install
+log
+calibration_output
+__pycache__
+**/__pycache__
+src/robot/robot/__pycache__
+*.pyc
+core

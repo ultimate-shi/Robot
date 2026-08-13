@@ -2,7 +2,7 @@
 """
 robot.launch 使用说明：
 本节点由 robot.launch.py 以 executable='publish_ply' 启动。
-作用是把离线 iPhone 扫描得到的 PLY 点云文件转换成 ROS 2 的 PointCloud2 话题。
+作用是把离线 PLY 点云文件转换成 ROS 2 的 PointCloud2 话题。
 
 输入：
 - 参数 ply_file，默认指向 robot 包 share 目录下的 map/studyroom.ply。
@@ -47,10 +47,13 @@ class PLYPublisher(Node):
         self.declare_parameter('publish_period', 0.5)
         self.declare_parameter('display_topic', '/pointcloud')
         self.declare_parameter('perception_topic', '/perception/points')
+        self.declare_parameter('allow_fallback', True)
 
         requested_ply = str(self.get_parameter('ply_file').value).strip()
         self.ply_file = requested_ply if requested_ply else default_ply
         self.frame_id = self.get_parameter('frame_id').value
+        self.allow_fallback = bool(
+            self.get_parameter('allow_fallback').value)
         period = self.get_parameter('publish_period').value
         display_topic = self.get_parameter('display_topic').value
         perception_topic = self.get_parameter('perception_topic').value
@@ -67,6 +70,8 @@ class PLYPublisher(Node):
 
     def _load_points(self):
         if PlyData is None:
+            if not self.allow_fallback:
+                raise RuntimeError('plyfile 未安装，禁止用测试点云替代导航快照')
             self.get_logger().error('plyfile is not installed; publishing fallback test cloud')
             return np.array([[0.0, 0.0, 0.0], [0.1, 0.1, 0.1]], dtype=np.float32)
 
@@ -75,6 +80,8 @@ class PLYPublisher(Node):
             vertex = plydata['vertex']
             return np.column_stack((vertex['x'], vertex['y'], vertex['z'])).astype(np.float32)
         except Exception as exc:
+            if not self.allow_fallback:
+                raise RuntimeError(f'无法读取导航快照 PLY: {exc}') from exc
             self.get_logger().error(f'Failed to load PLY: {exc}')
             return np.array([[0.0, 0.0, 0.0], [0.1, 0.1, 0.1]], dtype=np.float32)
 
