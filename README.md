@@ -7,6 +7,7 @@ SLAM、Nav2 路径规划、局部避障和底盘控制。
 
 ```text
 Robot/
+├── AGENTS.md                      # 仓库开发约定和验证要求
 ├── docker/                         # ROS 2 Jazzy ARM64 容器镜像
 ├── docs/                           # 双目标定和验收文档
 ├── scripts/                        # 环境安装、镜像构建、相机配置和启动脚本
@@ -29,7 +30,7 @@ Robot/
 
 ## Python 功能分层
 
-Python 实现全部位于 `src/robot/robot/robot/` 的功能目录中，根目录不再放置具体节点。
+Python 实现全部位于 `src/robot/robot/` 的功能目录中，根目录不再放置具体节点。
 
 ### sensing：传感器接入层
 
@@ -305,3 +306,5 @@ python3 -m pytest -q \
 2. 在 `src/robot/setup.py` 的 `console_scripts` 中声明运行入口。
 3. 将可调参数放入 `src/robot/config/` 或 launch 参数。
 4. 更新 README 和当天的 `progress.md`。
+
+更完整但保持精简的开发约定见 `AGENTS.md`。

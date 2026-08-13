@@ -1,35 +1,37 @@
 # Repository Guidelines
 
-## 项目目标
+## 项目定位
 
-本项目基于现实中的机器人小车模型进行 ROS 2 仿真搭建。当前已有小车的现实模型，仓库目标是逐步构建对应的仿真环境，最终实现数字孪生效果：在仿真中尽可能还原现实小车的结构、传感器、运动控制、反馈状态和路径规划能力。
+本仓库是 ROS 2 Jazzy 机器人小车工作区，目标是让实机与仿真共用模型、传感器接口、运动控制和导航链路，逐步形成数字孪生。修改底盘、轮子、头部、传感器、TF、控制参数或地图时，应优先保证与实车结构和坐标关系一致。
 
-开发时应优先保持仿真模型与现实小车一致。涉及底盘、轮子、传感器、控制参数、地图和运动逻辑的改动，都应考虑是否会影响现实小车与仿真小车之间的对应关系。
+当前已具备默认虚拟机器人、双目视觉处理、RTAB-Map 建图、地图快照、Nav2 导航预演和分级避障；真实底盘、IMU、超声波仍待接入。固定在环境中的真实相机数据不得与运动中的虚拟机器人混用。
 
-## 代码目录结构
+## 主要目录
 
-- `src/robot/robot/`：ROS 2 Python 节点代码，例如底盘控制、手柄遥控、虚拟传感器、避障和地形相关节点。
-- `src/robot/launch/`：启动文件，用于组合运行仿真、RViz、Foxglove、底盘和地图等功能。
-- `src/robot/config/`：ROS 参数和控制器配置，例如手柄、控制器和地形参数。
-- `src/robot/urdf/`：机器人结构描述文件，主要使用 xacro 组织车体、轮子、雷达、IMU 等部件。
-- `src/robot/meshes/`：机器人模型网格资源，包括 OBJ 和 MTL 文件。
-- `src/robot/map/`：地图相关资源，例如 PGM、YAML 和 PLY 文件。
-- `src/robot/world/`：仿真世界文件，例如 SDF 场景。
-- `src/robot/test/`：测试与 lint 检查文件。
-- `src/robot/setup.py`：Python 包安装配置和 `ros2 run` 可执行入口声明。
+- `src/robot/robot/`：按 `sensing`、`perception`、`localization`、`mapping`、`mission`、`safety`、`control`、`diagnostics` 分层的 Python 节点。
+- `src/robot/{launch,config,urdf,meshes,map,world,test}/`：启动、参数、模型、地图、场景和测试。
+- `src/robot_stereo_components/`：高带宽双目处理 C++ 节点。
+- `scripts/`、`docker/`、`docs/`：运行脚本、Jazzy ARM64 容器和专项文档。
+- `README.md`：当前使用方法；`progress.md`：按日期记录开发过程。
 
-常用命令：
+## 开发约定
 
-- `colcon build --packages-select robot`：构建 `robot` 包。
-- `source install/setup.bash`：加载工作区环境。
-- `ros2 launch robot simulation.launch.py`：启动仿真入口。
+- 代码注释和修改说明使用中文；保持现有 ROS 话题、服务、Action、TF 和可执行入口兼容，确需变更时同步说明影响。
+- 新 Python 节点放入对应功能层，并在 `src/robot/setup.py` 的 `console_scripts` 注册；高带宽图像处理优先评估放入 C++ 包。
+- 设备路径、网络端口、阈值和控制参数放入 `src/robot/config/*.yaml` 或 launch 参数，不在节点中硬编码。
+- 实机与仿真实现尽量保持上游接口一致；任务层生成导航目标，安全层过滤速度，避免绕过 Nav2 或安全链直接控制底盘。
+- 不提交 `build/`、`install/`、`log/`、标定临时文件或运行生成的地图快照。
 
-## 代码规范
-写代码同时用中文写注释
+## 构建与验证
 
-完成代码修改后同时加上说明，并且要修改README.md文件
+```bash
+colcon build --packages-up-to robot --symlink-install
+source install/setup.bash
+ros2 launch robot robot.launch.py
+```
 
-新增 ROS 节点时，应在 `src/robot/robot/` 中实现，并在 `src/robot/setup.py` 的 `console_scripts` 中声明入口。配置项优先放入 `src/robot/config/*.yaml` 或 launch 参数中，不要把设备路径、控制参数、网络地址等机器相关内容硬编码到节点代码里。
+按修改范围运行相关测试；至少检查受影响的包可构建、launch 可解析、Python 测试通过，并执行 `git diff --check`。双目和地图核心测试见 README 的“测试”章节。
 
 ## 文档记录
-每个对话结束后把做了什么，当前卡在哪里，踩过的坑有哪些记录下来，形成项目的过程文档，记录到progress.md中，只需要修改当天的内容，再把本次修改的内容做一个简单的总结方便查看修改了什么
+
+每次修改都要同步更新 `README.md` 中受影响的现状或用法，并只编辑 `progress.md` 当天的记录，简要写明：本次修改、验证结果、当前卡点和踩坑；没有卡点或踩坑时明确写“无”。
