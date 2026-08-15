@@ -1,0 +1,16 @@
+# 使用方法：由 mission_preview.launch.py 加载；确认任务也只发布未来导航接口。
+brain_mission:
+  ros__parameters:
+    motion_enabled: false
+    request_topic: /brain/mission_request
+    detections_topic: /perception/semantic_detections
+    map_topic: /map
+    map_frame: map
+    base_frame: base_link
+    planner_service: /compute_path_to_pose
+    surface_clearance: 0.5
+    robot_radius: 0.25
+    follow_distance: 1.2
+    follow_update_distance: 0.4
+    person_lost_timeout: 2.0
+    frontier_min_cells: 8

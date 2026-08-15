@@ -1,0 +1,36 @@
+# 使用方法：由 robot_control 的 control/safety launch 加载，仅包含底盘与安全参数。
+chassis_controller:
+  ros__parameters:
+    wheelbase: 0.4
+    track: 0.2
+    radius: 0.05
+    motion_mode: four_ws
+    steering_limit: 1.57
+    ackermann_min_turning_speed: 0.04
+    terrain_check_enabled: true
+
+obstacle_avoidance:
+  ros__parameters:
+    front_stop_distance: 0.18
+    front_warn_distance: 0.35
+    side_stop_distance: 0.15
+    side_warn_distance: 0.30
+    range_timeout: 0.35
+    require_valid_ranges: false
+    escape_reverse_enabled: true
+    escape_trigger_time: 1.0
+    escape_reverse_duration: 2.0
+    escape_reverse_speed: -0.06
+    escape_cooldown: 1.5
+    rear_escape_clearance: 0.25
+    terrain_traversability_min: 0.20
+    update_rate: 20.0
+    cmd_vel_timeout: 0.3
+
+nav_controller_node:
+  ros__parameters:
+    update_rate: 20.0
+    cmd_vel_timeout: 0.5
+    require_active_nav_goal: false
+    nav_goal_status_timeout: 3.0
+    nav_cmd_active_threshold: 0.02

@@ -1,3 +1,4 @@
+<!-- 使用方法：按本文在 RK3588 上完成双目标定、启动和验收。 -->
 # 双目相机从接线到 Nav2 的完整操作指南
 
 本文适用于当前项目的“单个 UVC 设备输出横向拼接左右图”相机。默认总图为
@@ -92,15 +93,15 @@ ls -l /dev/stereo_camera
 
 ```bash
 cd /home/radxa/Robot
-sudo bash scripts/install_stereo_camera_udev.sh
+sudo bash scripts/stereo/install_stereo_camera_udev.sh
 # 重新插拔相机并确认 /dev/stereo_camera 存在
-bash scripts/build_jazzy_image.sh
+bash scripts/docker/build_jazzy_image.sh
 ```
 
 从 Debian 图形桌面打开终端，只启动原图拆分和左右预览，暂不启动视差和点云：
 
 ```bash
-bash scripts/run_stereo_calibration.sh preview
+bash scripts/stereo/run_stereo_calibration.sh preview
 ```
 
 脚本会固定亮度、曝光和白平衡，并同时弹出左右图像窗口。需要用 ROS CLI 检查时，保持
@@ -157,7 +158,7 @@ A3，或把 9×7 格子的统一边长缩小到 25 mm，并按打印后的真实
 
 ```bash
 cd /home/radxa/Robot
-bash scripts/run_stereo_calibration.sh calibrate 0.02982
+bash scripts/stereo/run_stereo_calibration.sh calibrate 0.02982
 ```
 
 脚本会重新启动 `calibration_mode:=true` 并打开标定 GUI，效果等同于在带图形界面的
@@ -210,15 +211,15 @@ ros2 run camera_calibration cameracalibrator \
 
 ```bash
 tar -tzf /tmp/calibrationdata.tar.gz
-mkdir -p src/robot/config/cameras/model_serial_640x480
+mkdir -p src/robot_perception/config/cameras/model_serial_640x480
 tar -xzf /tmp/calibrationdata.tar.gz -C /tmp/stereo_calibration
 ```
 
 从解压内容中找到左右相机 YAML，分别保存为：
 
 ```text
-src/robot/config/cameras/model_serial_640x480/left.yaml
-src/robot/config/cameras/model_serial_640x480/right.yaml
+src/robot_perception/config/cameras/model_serial_640x480/left.yaml
+src/robot_perception/config/cameras/model_serial_640x480/right.yaml
 ```
 
 如果输出文件名不是 `left.yaml`、`right.yaml`，按文件中的 `camera_name` 和左右投影矩阵
@@ -252,15 +253,15 @@ baseline_m = -P_right[3] / P_right[0]
 新增而不是覆盖模板：
 
 ```text
-src/robot/config/cameras/<型号_序列号_单目分辨率>/left.yaml
-src/robot/config/cameras/<型号_序列号_单目分辨率>/right.yaml
+src/robot_perception/config/cameras/<型号_序列号_单目分辨率>/left.yaml
+src/robot_perception/config/cameras/<型号_序列号_单目分辨率>/right.yaml
 ```
 
 矩阵数值全部来自 `camera_calibration`。不要手工把标称焦距或 65 mm 基线写进去。
 
 ### 2. 修改相机取流 profile
 
-检查 `src/robot/config/stereo_camera.yaml`：
+检查 `src/robot_perception/config/stereo_camera.yaml`：
 
 - `video_device`：应为 udev 稳定路径。
 - `framerate/pixel_format/image_width/image_height`：必须与实际取流和标定模式一致。
@@ -269,7 +270,7 @@ src/robot/config/cameras/<型号_序列号_单目分辨率>/right.yaml
 
 ### 3. 修改相机安装 TF
 
-编辑 `src/robot/urdf/robot.xacro` 中：
+编辑 `src/robot_description/urdf/robot.xacro` 中：
 
 ```xml
 <xacro:stereo_camera parent_link="base_link" xyz="0.20 0 0.30"
@@ -304,18 +305,18 @@ source install/setup.bash
 相机单测：
 
 ```bash
-ros2 launch robot stereo_camera.launch.py \
+ros2 launch robot_perception stereo_camera.launch.py \
   calibration_mode:=false \
-  left_calibration_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot/config/cameras/model_serial_640x480/left.yaml \
-  right_calibration_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot/config/cameras/model_serial_640x480/right.yaml
+  left_calibration_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot_perception/config/cameras/model_serial_640x480/left.yaml \
+  right_calibration_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot_perception/config/cameras/model_serial_640x480/right.yaml
 ```
 
 完整实机：
 
 ```bash
-ros2 launch robot stereo_robot.launch.py \
-  left_calibration_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot/config/cameras/model_serial_640x480/left.yaml \
-  right_calibration_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot/config/cameras/model_serial_640x480/right.yaml
+ros2 launch robot_navigation stereo_robot.launch.py \
+  left_calibration_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot_perception/config/cameras/model_serial_640x480/left.yaml \
+  right_calibration_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot_perception/config/cameras/model_serial_640x480/right.yaml
 ```
 
 只有再次 `colcon build` 后，profile 才会被安装到 `install/robot/share/robot/config/cameras`。
@@ -324,8 +325,8 @@ ros2 launch robot stereo_robot.launch.py \
 本机 `USB Camera 01.00.00` 的 640×480 单目 profile 已保存为：
 
 ```text
-src/robot/config/cameras/usb_camera_01_00_00_640x480/left.yaml
-src/robot/config/cameras/usb_camera_01_00_00_640x480/right.yaml
+src/robot_perception/config/cameras/usb_camera_01_00_00_640x480/left.yaml
+src/robot_perception/config/cameras/usb_camera_01_00_00_640x480/right.yaml
 ```
 
 两个实机启动入口已默认读取这组文件。2026-08-04 的离线验收数据见
@@ -429,7 +430,7 @@ CPU 超限时依次调整：
 话题，避免同时反序列化多路大消息；仍只应在验收时运行，同时间戳阶段差值用于定位瓶颈：
 
 ```bash
-ros2 run robot stereo_pipeline_benchmark --ros-args \
+ros2 run robot_perception stereo_pipeline_benchmark --ros-args \
   -p duration:=60.0 \
   -p output_file:=/tmp/stereo_pipeline_result.json
 ```
@@ -437,7 +438,7 @@ ros2 run robot stereo_pipeline_benchmark --ros-args \
 需要人工监测时再启动 Bridge：
 
 ```bash
-ros2 launch robot stereo_robot.launch.py
+ros2 launch robot_navigation stereo_robot.launch.py
 ```
 
 Foxglove 只显示左右校正压缩图、深度预览、过滤点云和 `/stereo/scan`，不要持续订阅

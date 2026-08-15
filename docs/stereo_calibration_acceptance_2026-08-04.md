@@ -1,3 +1,4 @@
+<!-- 使用方法：作为 2026-08-04 双目标定现场验收记录和复测基线。 -->
 # USB Camera 01.00.00 双目标定验收记录
 
 日期：2026-08-04  
@@ -18,7 +19,7 @@
 - 样本覆盖画面中心和四周，棋盘面积约占单目画面的 1.8%～48.2%，包含远近、俯仰、偏航
   和滚转姿态；抽样查看校正图后，同名角点及背景边缘基本沿同一水平线。
 - 正式 profile 已保存到
-  `src/robot/config/cameras/usb_camera_01_00_00_640x480/`，正常相机入口和完整实机入口默认
+  `src/robot_perception/config/cameras/usb_camera_01_00_00_640x480/`，正常相机入口和完整实机入口默认
   读取该 profile，不再默认读取占位模板。
 - Jazzy 容器中 `colcon build --packages-select robot --symlink-install` 通过；安装空间包含
   两个正式 YAML，更新后的 xacro 可正常展开。

@@ -1,0 +1,10 @@
+# 使用方法：由 robot_brain/brain.launch.py 加载；所有大模型和网页参数集中在此文件。
+brain_ros_bridge:
+  ros__parameters:
+    http_host: 0.0.0.0
+    http_port: 8080
+    inference_url: http://127.0.0.1:9100
+    frame_topic: /stereo/right/image_rect/compressed
+    chat_queue_size: 8
+    lease_grace_seconds: 10.0
+    motion_enabled: false

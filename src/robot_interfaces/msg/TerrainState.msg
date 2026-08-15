@@ -1,0 +1,11 @@
+# 使用方法：地形感知发布，底盘与安全层只消费评估结果，不重复计算点云。
+std_msgs/Header header
+bool is_blocked
+string block_reason
+float32 traversability
+float32 slip_factor
+float32 body_z
+float32 roll
+float32 pitch
+bool step_blocked
+bool dropoff_blocked

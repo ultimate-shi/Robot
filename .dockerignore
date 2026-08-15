@@ -3,6 +3,9 @@
 build
 install
 log
+model
+maps
+acceptance_dataset
 calibration_output
 __pycache__
 **/__pycache__

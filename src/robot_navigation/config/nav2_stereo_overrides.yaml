@@ -1,0 +1,39 @@
+# 使用方法：由所属 Package 的 launch 或节点加载，请通过参数覆盖现场配置。
+# 实机双目 Nav2 覆盖参数。点云负责代价地图，/stereo/scan 负责速度安全层。
+local_costmap:
+  local_costmap:
+    ros__parameters:
+      plugins: ["voxel_layer", "inflation_layer"]  # 局部层列表：双目体素障碍层和膨胀层
+      voxel_layer:
+        observation_sources: stereo_obstacle_points  # 当前 VoxelLayer 启用的观测源名称
+        stereo_obstacle_points:
+          topic: /nav/stereo_obstacle_points  # 双目过滤后的 PointCloud2 输入话题
+          data_type: "PointCloud2"  # Nav2 观测源消息类型
+          marking: true  # 用点云命中标记局部障碍
+          clearing: true  # 用传感器到点的射线清除旧障碍
+          obstacle_max_range: 3.0  # 局部障碍标记的最远距离，单位 m
+          obstacle_min_range: 0.25  # 局部障碍标记的最近距离，单位 m
+          raytrace_max_range: 4.0  # 局部射线清除的最远距离，单位 m
+          raytrace_min_range: 0.25  # 局部射线清除的最近距离，单位 m
+          min_obstacle_height: 0.05  # 局部障碍最低高度，单位 m
+          max_obstacle_height: 0.80  # 局部障碍最高高度，单位 m
+          tf_filter_tolerance: 0.5  # costmap 等待点云 TF 的容忍时间，单位 s
+
+global_costmap:
+  global_costmap:
+    ros__parameters:
+      plugins: ["static_layer", "global_obstacle_layer", "inflation_layer"]  # 全局静态图、双目障碍和膨胀层
+      global_obstacle_layer:
+        observation_sources: stereo_obstacle_points  # 当前全局障碍层启用的观测源名称
+        stereo_obstacle_points:
+          topic: /nav/stereo_obstacle_points  # 双目过滤后的 PointCloud2 输入话题
+          data_type: "PointCloud2"  # Nav2 观测源消息类型
+          marking: true  # 用点云命中标记全局动态障碍
+          clearing: true  # 用传感器射线清除已离开的动态障碍
+          obstacle_max_range: 3.0  # 全局障碍标记的最远距离，单位 m
+          obstacle_min_range: 0.25  # 全局障碍标记的最近距离，单位 m
+          raytrace_max_range: 4.0  # 全局射线清除的最远距离，单位 m
+          raytrace_min_range: 0.25  # 全局射线清除的最近距离，单位 m
+          min_obstacle_height: 0.05  # 全局障碍最低高度，单位 m
+          max_obstacle_height: 0.80  # 全局障碍最高高度，单位 m
+          tf_filter_tolerance: 0.5  # costmap 等待点云 TF 的容忍时间，单位 s

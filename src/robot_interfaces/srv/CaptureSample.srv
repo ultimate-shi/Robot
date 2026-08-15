@@ -1,0 +1,7 @@
+# 使用方法：现场验收网页调用，服务端保存同一时刻的图像、深度、标定、TF和检测结果。
+string request_id
+string scene_id
+---
+bool success
+string message
+string output_path

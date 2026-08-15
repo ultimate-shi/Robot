@@ -1,0 +1,27 @@
+# 使用方法：由所属 Package 的 launch 或节点加载，请通过参数覆盖现场配置。
+# 已保存地图导航预演参数，不读取位置固定的真实相机。
+snapshot_local_observer:
+  ros__parameters:
+    input_topic: /perception/points
+    cloud_output_topic: /nav/stereo_obstacle_points
+    scan_output_topic: /stereo/scan
+    target_frame: base_link
+    publish_rate: 4.0
+    min_range: 0.25
+    max_range: 4.0
+    min_height: 0.05
+    max_height: 0.80
+    horizontal_fov_deg: 120.0
+    scan_angle_increment_deg: 2.0
+    source_voxel_size: 0.05
+    voxel_size: 0.05
+    max_points: 20000
+    cache_static_source: true
+    source_timeout: 0.0  # 已保存点云不会随时间失效，加载后常驻内存
+
+goal_manager:
+  ros__parameters:
+    goal_topic: /goal_pose
+    map_frame: map
+    action_name: /navigate_to_pose
+    server_timeout: 1.0

@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>机器人本地大脑</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <p class="eyebrow">RK3588 · LOCAL ROBOT BRAIN</p>
+      <h1>机器人本地大脑</h1>
+    </div>
+    <div class="top-actions">
+      <span id="connectionBadge" class="badge warning">正在连接</span>
+      <button id="stopButton" class="danger">立即停止</button>
+    </div>
+  </header>
+
+  <div class="notice">当前为局域网 HTTP 开放模式，无登录和传输加密；首版只预演目标与路径，不驱动底盘。</div>
+
+  <main class="workspace">
+    <section class="visual-column">
+      <article class="panel camera-panel">
+        <div class="panel-heading">
+          <div><span class="panel-index">01</span><h2>双目视觉</h2></div>
+          <span id="detectionCount" class="muted">等待识别</span>
+        </div>
+        <div class="canvas-wrap">
+          <canvas id="cameraCanvas" width="640" height="480"></canvas>
+          <div id="cameraEmpty" class="empty-state">等待左目校正画面</div>
+        </div>
+        <div class="chip-row">
+          <button id="captureButton" class="secondary">保存验收样本</button>
+          <div id="detectionChips" class="chip-row"></div>
+        </div>
+      </article>
+
+      <article class="panel map-panel">
+        <div class="panel-heading">
+          <div><span class="panel-index">02</span><h2>实时地图</h2></div>
+          <span id="mapState" class="muted">等待 RTAB-Map</span>
+        </div>
+        <div class="canvas-wrap map-wrap">
+          <canvas id="mapCanvas" width="640" height="360"></canvas>
+          <div id="mapEmpty" class="empty-state">地图生成后将在这里显示</div>
+        </div>
+      </article>
+    </section>
+
+    <section class="control-column">
+      <article class="panel status-panel">
+        <div class="panel-heading">
+          <div><span class="panel-index">03</span><h2>任务与控制权</h2></div>
+          <span id="leaseBadge" class="badge">空闲</span>
+        </div>
+        <p id="missionMessage" class="status-message">系统已停止</p>
+        <dl class="status-grid">
+          <div><dt>当前任务</dt><dd id="taskValue">无</dd></div>
+          <div><dt>控制者</dt><dd id="controllerValue">无</dd></div>
+          <div><dt>运行模式</dt><dd>路径预演</dd></div>
+          <div><dt>我的页面</dt><dd id="clientValue">—</dd></div>
+        </dl>
+        <div class="button-row">
+          <button id="exploreButton">预演自主探索</button>
+          <button id="followButton">预演跟随人员</button>
+          <button id="cancelButton" class="secondary">取消我的任务</button>
+          <button id="releaseButton" class="secondary">释放控制权</button>
+        </div>
+      </article>
+
+      <article class="panel chat-panel">
+        <div class="panel-heading">
+          <div><span class="panel-index">04</span><h2>文字对话</h2></div>
+          <span id="queueState" class="muted">推理队列空闲</span>
+        </div>
+        <div id="chatLog" class="chat-log" aria-live="polite">
+          <div class="message robot">可以问我“画面里有什么”，也可以输入“跟随这个人”“前往杯子”或“开始自主探索”。</div>
+        </div>
+        <form id="chatForm" class="chat-form">
+          <label for="chatInput" class="sr-only">输入消息</label>
+          <textarea id="chatInput" rows="2" placeholder="输入问题或机器人任务…" required></textarea>
+          <button type="submit">发送</button>
+        </form>
+      </article>
+
+      <article id="previewPanel" class="panel preview-panel hidden">
+        <div class="panel-heading">
+          <div><span class="panel-index">05</span><h2>任务确认</h2></div>
+          <button id="closePreview" class="icon-button" aria-label="关闭任务预览">×</button>
+        </div>
+        <p id="previewText"></p>
+        <div id="candidateList" class="candidate-list"></div>
+        <button id="confirmButton" class="primary wide">确认并取得控制权</button>
+      </article>
+
+      <article class="panel health-panel">
+        <div class="panel-heading">
+          <div><span class="panel-index">06</span><h2>系统健康</h2></div>
+        </div>
+        <div id="healthGrid" class="health-grid"></div>
+      </article>
+    </section>
+  </main>
+  <script src="/app.js" defer></script>
+</body>
+</html>

@@ -53,10 +53,17 @@ setup(
             os.path.join('share', package_name, 'map'),
             glob(os.path.join('map', '*.*')),
         ),
+        (
+            os.path.join('share', package_name, 'web'),
+            glob(os.path.join('web', '*.*')),
+        ),
         *camera_profiles,
     ],
     # PLY 点云读取依赖由板端容器固定版本安装，此处同时声明 Python 包元数据。
-    install_requires=['setuptools', 'plyfile>=1.0,<2'],
+    install_requires=[
+        'setuptools', 'plyfile>=1.0,<2',
+        'fastapi>=0.110,<1', 'uvicorn>=0.29,<1',
+    ],
     zip_safe=True,
     maintainer='shijiahao',
     maintainer_email='shijiahao@todo.todo',
@@ -89,6 +96,12 @@ setup(
             'snapshot_local_observer = '
             'robot.perception.snapshot_local_observer:main',
             'goal_manager = robot.mission.goal_manager:main',
+            'semantic_perception = '
+            'robot.perception.semantic_perception:main',
+            'brain_mission = robot.mission.brain_mission:main',
+            'brain_web = robot.web.brain_web:main',
+            'acceptance_sampler = '
+            'robot.diagnostics.acceptance_sampler:main',
         ],
     },
 )

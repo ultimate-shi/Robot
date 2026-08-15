@@ -1,0 +1,86 @@
+<?xml version="1.0"?>
+<!-- 使用方法：由 robot_description/urdf/robot.xacro 组合，通常不要单独启动。 -->
+<robot name="robot_hardware" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <ros2_control name="RobotHardware" type="system">
+    <hardware>
+      <!-- 🔥 官方自带插件，无需安装任何依赖！ -->
+      <plugin>mock_components/GenericSystem</plugin>
+    </hardware>
+
+    <joint name="lap_body_joint_fr">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+    <joint name="lap_body_joint_fl">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+    <joint name="lap_body_joint_rr">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+    <joint name="lap_body_joint_rl">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+
+    <joint name="shin_lap_fr_joint_fr">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+    <joint name="shin_lap_fl_joint_fl">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+    <joint name="shin_lap_rr_joint_rr">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+    <joint name="shin_lap_rl_joint_rl">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+
+    <!-- 转向关节（和你的 motor.xacro 完全匹配） -->
+    <joint name="front_right_steer_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+    <joint name="front_left_steer_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+    <joint name="rear_right_steer_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+    <joint name="rear_left_steer_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+
+    <!-- 轮子关节（和你的 wheel.xacro 完全匹配） -->
+    <joint name="front_right_wheel_joint">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="front_left_wheel_joint">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rear_right_wheel_joint">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="rear_left_wheel_joint">
+      <command_interface name="velocity"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+</robot>

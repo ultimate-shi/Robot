@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<!-- 使用方法：colcon 构建后通过 robot_control 的 launch 或 ros2 run 启动底盘节点。 -->
+<package format="3">
+  <name>robot_control</name><version>0.1.0</version>
+  <description>机器人四轮独立转向、里程计、速度门控和最终安全层</description>
+  <maintainer email="shijiahao@todo.todo">shijiahao</maintainer><license>TODO: License declaration</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>ament_index_python</depend><depend>launch</depend><depend>launch_ros</depend>
+  <depend>rclpy</depend><depend>robot_interfaces</depend><depend>action_msgs</depend>
+  <depend>geometry_msgs</depend><depend>nav_msgs</depend><depend>sensor_msgs</depend>
+  <depend>std_msgs</depend><depend>tf2_ros</depend>
+  <exec_depend>controller_manager</exec_depend><exec_depend>joint_state_broadcaster</exec_depend>
+  <exec_depend>position_controllers</exec_depend><exec_depend>velocity_controllers</exec_depend>
+  <exec_depend>robot_description</exec_depend>
+  <exec_depend>nav2_collision_monitor</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

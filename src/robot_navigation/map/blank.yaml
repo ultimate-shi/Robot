@@ -1,0 +1,11 @@
+# 使用方法：作为 robot_navigation/nav2.launch.py 的空白测试地图加载。
+# 空白 2D 地图，用于先排查 Foxglove 目标点、Nav2 和 chassis_controller_node 的速度链路。
+# 该地图全部为自由区域，不包含 studyroom.pgm 的墙体和障碍物。
+# 删除风险：无法用 map_yaml_file:=.../blank.yaml 启动空白地图调试模式。
+image: blank.pgm
+mode: trinary
+resolution: 0.05
+origin: [-5.0, -5.0, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196

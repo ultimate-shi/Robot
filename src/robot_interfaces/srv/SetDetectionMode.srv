@@ -1,0 +1,8 @@
+# 使用方法：跟随确认后切到 CONTINUOUS，取消、停止或丢失目标后切回 ON_DEMAND。
+uint8 ON_DEMAND=0
+uint8 CONTINUOUS=1
+uint8 mode
+string target_id
+---
+bool success
+string message

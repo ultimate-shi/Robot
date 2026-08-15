@@ -1,0 +1,62 @@
+# 使用方法：由 robot_perception 虚拟传感器和地形节点加载，不包含底盘控制参数。
+virtual_imu:
+  ros__parameters:
+    publish_rate: 20.0
+    orientation_noise_std: 0.0087
+    angular_vel_noise_std: 0.005
+    linear_accel_noise_std: 0.02
+    gravity: 9.81
+
+pointcloud_obstacle_filter:
+  ros__parameters:
+    input_topic: /perception/points
+    output_topic: /nav/obstacle_points
+    target_frame: map
+    robot_base_frame: base_link
+    min_obstacle_height: 0.0
+    max_obstacle_height: 0.8
+    local_radius: 4.0
+    voxel_size: 0.05
+    max_points: 20000
+
+terrain_analyzer:
+  ros__parameters:
+    input_topic: /perception/points
+    publish_rate: 10.0
+    grid_resolution: 0.02
+    ground_tolerance: 0.05
+    terrain_voxel_size: 0.03
+    max_grade_deg: 35.0
+    step_threshold: 0.03
+    dropoff_threshold: 0.05
+    look_ahead_distance: 0.10
+    look_ahead_samples: 5
+    ground_to_base_height: 0.15
+    wheelbase: 0.4
+    track: 0.2
+
+virtual_ultrasonic:
+  ros__parameters:
+    input_topic: /perception/points
+    max_range: 4.0
+    min_range: 0.02
+    fov_half_deg: 15.0
+    min_height: 0.03
+    max_height: 0.8
+    voxel_size: 0.03
+    publish_period: 0.03
+
+range_to_scan:
+  ros__parameters:
+    target_frame: base_link
+    joint_state_topic: /joint_states
+    publish_period: 0.03
+    angle_increment_deg: 2.5
+    range_timeout: 0.35
+    range_min: 0.02
+    range_max: 4.0
+    cmd_vel_topic: /cmd_vel_nav_smoothed
+    cmd_vel_timeout: 0.3
+    ignore_steering_ultrasonic_on_pure_rotation: true
+    rotation_linear_threshold: 0.01
+    rotation_angular_threshold: 0.05

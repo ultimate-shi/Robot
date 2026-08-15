@@ -1,3 +1,4 @@
+<!-- 使用方法：所有在 /home/radxa/Robot 内工作的开发者和代理必须遵守本文件。 -->
 # Repository Guidelines
 
 ## 项目定位
@@ -8,8 +9,9 @@
 
 ## 主要目录
 
-- `src/robot/robot/`：按 `sensing`、`perception`、`localization`、`mapping`、`mission`、`safety`、`control`、`diagnostics` 分层的 Python 节点。
-- `src/robot/{launch,config,urdf,meshes,map,world,test}/`：启动、参数、模型、地图、场景和测试。
+- `src/robot_{brain,perception,navigation,control}/`：按职责拆分的 Python 节点、launch、配置和测试。
+- `src/robot_interfaces/`、`src/robot_description/`：跨包 ROS 接口与静态机器人模型资源。
+- `src/robot/`：迁移期兼容 launch 和旧节点，只允许兼容修复，不再新增功能实现。
 - `src/robot_stereo_components/`：高带宽双目处理 C++ 节点。
 - `scripts/`、`docker/`、`docs/`：运行脚本、Jazzy ARM64 容器和专项文档。
 - `README.md`：当前使用方法；`progress.md`：按日期记录开发过程。
@@ -17,17 +19,19 @@
 ## 开发约定
 
 - 代码注释和修改说明使用中文；保持现有 ROS 话题、服务、Action、TF 和可执行入口兼容，确需变更时同步说明影响。
-- 新 Python 节点放入对应功能层，并在 `src/robot/setup.py` 的 `console_scripts` 注册；高带宽图像处理优先评估放入 C++ 包。
-- 设备路径、网络端口、阈值和控制参数放入 `src/robot/config/*.yaml` 或 launch 参数，不在节点中硬编码。
+- 新 Python 节点放入对应领域 Package，并在所属 `setup.py` 的 `console_scripts` 注册；高带宽图像处理优先评估放入 C++ 包。
+- 创建或修改文件以后在文件的头部写上该文件的使用方法。
+- launch文件应在每个参数写上描述。
+- 设备路径、网络端口、阈值和控制参数放入所属 Package 的 `config/*.yaml` 或 launch 参数，不在节点中硬编码。
 - 实机与仿真实现尽量保持上游接口一致；任务层生成导航目标，安全层过滤速度，避免绕过 Nav2 或安全链直接控制底盘。
 - 不提交 `build/`、`install/`、`log/`、标定临时文件或运行生成的地图快照。
 
 ## 构建与验证
 
 ```bash
-colcon build --packages-up-to robot --symlink-install
+colcon build --symlink-install
 source install/setup.bash
-ros2 launch robot robot.launch.py
+ros2 launch robot_navigation robot.launch.py
 ```
 
 按修改范围运行相关测试；至少检查受影响的包可构建、launch 可解析、Python 测试通过，并执行 `git diff --check`。双目和地图核心测试见 README 的“测试”章节。

@@ -1,0 +1,7 @@
+# 使用方法：用户取得租约后确认已生成的任务预览；服务端必须重新检查预览有效性。
+string mission_id
+---
+bool accepted
+string error_code
+string message
+geometry_msgs/PoseStamped navigation_goal

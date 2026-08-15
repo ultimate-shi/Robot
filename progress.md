@@ -1,6 +1,103 @@
+<!-- 使用方法：按日期记录每次代码修改、验证结果、当前卡点和踩坑。 -->
 # 过程记录
 
+## 2026-08-15
+
+- 将单一 `robot` 逐步拆为 `robot_interfaces`、`robot_brain`、`robot_perception`、
+  `robot_navigation`、`robot_control`、`robot_description` 六个领域 Package；现有
+  `robot_stereo_components` 继续作为高带宽 C++ 感知组件，旧 `robot` 暂时保留兼容 launch
+  和直接运行入口。
+- 新增语义目标、地形状态、任务状态消息，以及按需检测、检测模式、验收采样、任务确认
+  Service 和只做路径预演的 `PlanMission` Action。语义与地形节点保留迁移期 JSON 输出，
+  新 Package 间已使用类型化接口。
+- 拆分本地大脑为 Qwen 客户端、严格 Action Schema、白名单 Tool Dispatcher、ROS Bridge、
+  Mission Manager、多用户租约和 Web Server。Qwen 只能建议前往物体、跟随人员和探索；
+  动作只生成预览，确认仍需用户取得租约。
+- 新任务规划节点把 `/mission/plan` 与 `/mission/confirm` 分开；确认只发布
+  `/mission/navigation_goal`，没有调用 `NavigateToPose`，大脑入口继续强制
+  `motion_enabled=false`。跟随仅在确认后切换持续检测，取消、停止和丢失目标后恢复按需。
+- 将 URDF/mesh、相机与感知配置、Nav2/RTAB-Map地图配置、ros2_control参数和 Web资源迁入
+  各自 Package；兼容 launch 改为转发新入口，Docker日常脚本改为统一构建整个工作区。
+- 验证结果：Jazzy 容器内 8 个 Package 全工作区构建通过，全部新旧兼容 launch 参数可解析，
+  19 项 Python 测试通过；接口可由 `ros2 interface show` 查询，任务预演节点和 Web 大脑均
+  完成短时启动检查。Python 编译、Shell语法、XML/YAML解析和差异格式检查均通过。
+- 当前卡点：无。踩坑：Jazzy 的 `ComputePathToPose` 是 Nav2 Action，不是 Service，已改用
+  Action Client；同名 Topic 不能发布两种消息类型，因此语义检测旧 JSON 改到 `_json`
+  后缀，任务和地形则继续使用原有独立 JSON Topic完成迁移期兼容。
+- 修复地图快照目录时间受容器 UTC 时区影响的问题：快照节点新增可配置的
+  `snapshot_timezone`，双目建图配置明确设为 `Asia/Shanghai`，目录名与 `map.json` 时间
+  统一使用北京时间。验证结果：新增 UTC 到北京时间转换测试，差异格式检查通过。
+  当前卡点：无；踩坑：无。
+- 修复完整大脑入口中左右校正压缩图重复发布：删除左右显式 compressed 转发器，改由
+  `rectify_node` 的 image_transport 插件按需发布，只保留深度预览转发。相机、建图、完整
+  大脑、真实双目机器人及旧兼容入口的 `apply_auto_camera_controls` 统一默认 `true` 并逐层
+  透传；标定模式自动跳过控制写入，标定脚本同时显式传入 `false`。验证结果：Jazzy 容器内
+  8 个 Package 构建和全部受影响 launch 参数解析通过；真实相机左右压缩图均只有 1 个发布者，
+  网页取帧返回 HTTP 200，V4L2 回读为自动曝光和自动白平衡开启，相机与 SLAM 健康状态为
+  `ok`。当前卡点：双目特征拒绝警告仍存在，需另行检查现场纹理、距离和标定质量。踩坑：
+  组合 launch 必须逐层声明并透传参数，仅修改最底层默认值会使顶层无法显式覆盖。
+- 修复局域网纯 HTTP 页面加载后无画面且按钮全部失效：前端不再直接依赖安全上下文限定的
+  `crypto.randomUUID()`，增加 `getRandomValues` 和普通随机回退；相机 JPEG 在浏览器不支持
+  `createImageBitmap` 时改用 `Image` 解码。Web静态资源响应增加 `Cache-Control: no-store`，
+  防止浏览器继续使用旧脚本。验证结果：`robot_brain` 重新构建成功，11 项大脑测试和
+  JavaScript语法检查通过，短时HTTP启动确认首页与脚本均返回 200、`no-store` 且包含随机
+  ID回退。当前卡点：无。踩坑：`localhost` 上可用的浏览器 API 不代表通过局域网 IP 的纯
+  HTTP 页面也可用。
+- 改进按需识别反馈：Web后端记录语义检测时间戳，点击识别后最多等待5秒获取本次新结果，
+  REST响应直接返回目标明细；前端新增固定结果区，逐项显示中文名称、置信度和距离，并在
+  按钮上显示识别中状态。最新 launch 日志确认完整系统均正常启动，最后均由用户 `Ctrl+C`
+  停止，未发现Web服务崩溃；Safari可访问而Chrome无法访问时服务端未留下异常，README新增
+  显式HTTP、健康接口、HTTPS升级和代理检查说明。当前卡点：需要在用户Chrome现场确认其
+  安全连接或代理设置。踩坑：ROS按需检测Service只安排下一帧并立即返回旧缓存，Web层必须
+  依据检测时间戳等待真正的新结果。
+- 真实浏览器联调发现镜像只安装 `uvicorn`，未安装任何WebSocket实现，Uvicorn明确记录
+  `No supported WebSocket library detected` 并把 `/ws/state` 返回404，导致检测明细、框和
+  状态不更新。Docker镜像和 `robot_brain` 依赖补充固定版本 `websockets`；前端增加仅在
+  WebSocket断开时启用的2秒HTTP健康状态轮询，并显示“HTTP轮询模式”。验证结果：当前容器
+  安装依赖后WebSocket成功返回 `state` 且相机为 `ok`；真实YOLO网页接口返回
+  `refreshed=true`、模型、延迟和目标明细数组，`robot_brain` 构建及11项测试通过。当前卡点：
+  Chrome仍需在现场使用完整 `http://192.168.0.115:8080/` 排除其HTTPS升级或代理设置。
+  踩坑：HTTP视频轮询正常并不代表WebSocket状态通道正常，必须同时检查101升级响应。
+- 首次固化镜像时发现 `.dockerignore` 未排除约5GB的 `model/`，Docker构建在发送超过2GB
+  上下文时未生成新镜像；新增模型、地图和验收数据排除规则。这些运行资源继续通过工作区
+  卷挂载使用，不复制进只提供ROS依赖的基础镜像。验证结果：构建上下文降至约60MB，新镜像
+  `sha256:a4795b...` 构建成功，并由全新临时容器确认 `websockets 15.0.1` 可导入。
+- 将用户视觉入口统一切换为右目：网页订阅右目压缩校正图，语义感知、YOLO、Qwen共享帧和
+  验收采样改用右目校正图及右目 CameraInfo。深度节点新增 `/stereo/depth/right/image`，按
+  `x_right=x_left-disparity` 前向映射左目视差并在像素冲突时保留最近表面，使右目检测框仍
+  能安全计算距离和地图位置；样本文件同步改名为 `right_rect.jpg`。验证结果：感知与大脑
+  构建成功、全领域21项测试通过；真实运行确认Web Bridge参数为右目压缩Topic，右目压缩图为1个
+  发布者/1个订阅者，右目深度为1个发布者/2个订阅者，网页JPEG返回200。真实YOLO在右目
+  画面识别到9个目标并返回名称、框、右目对齐距离和map位置。当前卡点：双目链仍偶发报告
+  右图与CameraInfo同步不足，这是已有相机时序问题，不影响本次右目切换正确性。踩坑：仅
+  切换图片Topic会使原左目深度与右目检测框错位，必须同时切换标定并生成右目对齐深度。
+
 ## 2026-08-13
+
+- 实现首版 RK3588 机器人本地大脑：新增 `stereo_brain.launch.py`，组合真实双目在线建图、
+  Nav2 规划服务、语义感知、路径预演、多用户 HTTP 网页和现场验收采集；首版
+  `motion_enabled=false`，没有接入或旁路 `/cmd_vel_safe`，不会驱动真实底盘。
+- 新增宿主机推理网关，使用单锁串行调度 YOLOv8n RKNN 检测和 Qwen2.5-VL-3B RKLLM
+  问答，并支持 InternVL3-1B 兼容端点回退。模型适配器未配置时健康状态为 degraded，检测
+  和问答返回明确错误，不生成伪造结果；模型文件和 Runtime 仍需按实际版本人工部署。
+- 新增二维检测与双目深度融合：在检测框中心区域取有效深度中值，反投影后通过 TF 转到
+  `map`，发布稳定目标 ID、中文名称、置信度、距离和地图坐标。新增前沿提取、人员丢失
+  2 秒停止更新，以及机器人外轮廓距物体表面 0.5 m 的停靠位姿和 Nav2 路径预演。
+- 实现局域网无认证的多用户网页：共享视频、地图和任务状态，聊天结果按浏览器私发；
+  `client_id` 存入 `sessionStorage`。运动类预演采用原子控制权租约，其他用户只能预览；
+  控制者断线 10 秒自动停止并释放，任意用户均可立即停止。网页明确提示 HTTP 和无鉴权
+  仅适合可信局域网，端口映射本身不能提供公网安全。
+- 新增现场样本采集器和网页按钮，同步保存左目图、深度、CameraInfo、TF、自动预标注、
+  `annotation_manifest.csv` 和 `vqa_template.jsonl`；README 写明 CVAT/Label Studio 人工
+  修框、跨电脑标注、问答标准集和无人工真值时不得宣称准确率的边界。
+- 验证结果：Jazzy 容器内 `robot_stereo_components` 与 `robot` 构建通过；新增大脑、地图
+  和双目共 14 项测试通过；`stereo_brain.launch.py --show-args` 可解析；HTTP 服务在测试
+  端口实际启动，验证控制者独占、第二用户无法覆盖以及任意用户立即停止；无模型推理网关
+  `/health` 返回 degraded 且检测返回 503；新增代码 flake8 问题已清理，最终差异检查通过。
+- 当前卡点：Qwen2.5-VL-3B、InternVL3-1B、YOLOv8n 的模型文件、RKLLM Runtime 和具体
+  RKNN 检测适配函数尚未提供，无法在本轮报告真实识别帧率、VQA 准确率或 8 GB 并发内存
+  成绩。踩坑：当前运行容器最初没有 FastAPI/Uvicorn，已临时安装完成验证并同步写入镜像；
+  宿主机代理变量会干扰本机 curl，验证改为在 host-network 容器内访问测试端口。
 
 - 根据当前 README 和仓库结构精简并重写 `AGENTS.md`：补充 ROS 2 Jazzy 实机/仿真统一定位、现有双目建图与导航预演能力，以及真实底盘、IMU、超声波尚未接入的边界。
 - 明确 Python 节点位于实际的 `src/robot/robot/` 分层目录，并同步修正 README 中多写一层 `robot/` 的路径；构建改为包含双目 C++ 依赖包的 `--packages-up-to robot --symlink-install`，默认启动改为 `robot.launch.py`。
@@ -720,3 +817,50 @@
   `map.json` 完整。使用时应先停止在线建图，再把该目录的 YAML 和 PLY 同时传给
   `stereo_navigation_preview.launch.py`；该入口驱动的是已保存环境中的虚拟机器人导航，
   不会直接控制真实底盘。
+
+## 2026-08-15
+
+- 为当前 `robot-jazzy` 旧容器补装 `fastapi==0.116.1`、`uvicorn==0.35.0` 及其传递依赖；
+  `brain.launch.py` 已实际启动并监听 `0.0.0.0:8080`，未再发现缺失模块。Dockerfile 已有
+  相同固定版本，新镜像重建后会自动具备。当前卡点：无；踩坑：仓库已声明依赖不代表
+  已创建的旧容器会自动获得后来加入镜像的模块。
+- 统一容器内双目入口的设备默认值：宿主机稳定路径 `/dev/stereo_camera` 由 Docker 脚本
+  映射为容器内 `/dev/video0`，因此在线建图、完整机器人、本地大脑及兼容 launch 现均
+  默认使用 `/dev/video0`，同时保留 `video_device` 参数供自定义设备映射覆盖。当前卡点：
+  无；踩坑：不能把宿主机设备路径直接作为容器内 launch 的默认路径。
+- 修复 `semantic_perception` 把推理线程池赋给 `rclpy.Node.executor` 保留属性、启动时因
+  `ThreadPoolExecutor` 不具备 `add_node()` 而崩溃的问题，改用独立的
+  `inference_pool` 属性；同时为在线双目入口及其控制、安全、感知、Nav2 和模型子入口
+  统一传递默认 `warn` 日志级别，避免 `robot_control` 节点继续输出 INFO。launch 框架的
+  进程生命周期 INFO 提示不属于 ROS 节点日志，仍会正常显示。验证结果：Jazzy 容器内
+  5 个受影响 Package 构建成功，完整入口参数可展开，双目处理 5 项测试通过，语义节点
+  短时启动不再崩溃，Python 编译与差异空白检查通过。当前卡点：无；踩坑：`executor`
+  是 rclpy 节点已有属性，不能用于保存普通线程池。
+- 新建与 `docs/`、`scripts/` 同级的 `model/`，下载 RK3588 预转换 YOLOv8n RKNN 以及
+  Qwen2.5-VL-3B 的视觉 RKNN、W8A8 RKLLM；大模型和临时文件加入 Git 忽略。
+- 新增 `rknn_yolov8_detector.py`，使用 RKNNLite2 常驻加载模型，实现黑边 letterbox、
+  三尺度 DFL 解码、分类过滤、逐类别 NMS、原图坐标还原和中英文类别输出。
+- 新增 YOLO 网关、Qwen 图像问答和模型下载脚本。Qwen 程序与匹配 Runtime 放在模型
+  私有目录，通过 `LD_LIBRARY_PATH` 使用，不覆盖系统库。
+- 实测 RKNPU 驱动为 0.9.8、系统 RKNN Runtime 为 2.3.0；YOLO 成功加载 NPU，示例图
+  正确返回 `person`、置信度及原图像素框。Qwen2.5-VL 也完成真实 NPU 图像问答：初始化
+  约 15.1 秒，生成约 7.32 token/s，峰值内存约 4.69 GB，能正确描述示例图主要内容。
+- 在 `model/python-venv/` 创建复用系统 OpenCV/RKNNLite2 的隔离环境并安装 FastAPI、
+  Uvicorn；YOLO 网关健康接口与 `/v1/detect` 端到端请求均通过。当前卡点只剩 Qwen
+  交互程序还不是支持 OpenAI `image_url` 的 HTTP 服务。踩坑：RKNNLite2 输入必须显式带
+  批次维度 `[1,640,640,3]`；另外导入 RKNNLite2 会改写 Python logging 名称映射，检测
+  插件必须延迟导入，否则 Uvicorn 会因无法识别 `INFO` 日志级别而启动失败。
+- 将 `scripts/` 按用途整理为 `docker/`、`stereo/`、`inference/` 三个子目录，并同步
+  修正脚本内部仓库根目录计算、互相调用路径及 README/标定指南/模型说明中的命令。
+  Shell 语法、Python 编译、仓库路径引用和 `git diff --check` 验证通过。当前卡点：无；
+  踩坑：脚本增加一级目录后，原先基于 `SCRIPT_DIR/..` 定位仓库根目录的逻辑必须同步调整。
+- 修复 `robot_description/urdf/` 下全部 xacro 把使用说明注释放在 XML 声明之前、导致
+  `stereo_mapping.launch.py` 启动时 xacro 报 `XML or text declaration not at start of
+  entity` 的问题；XML 声明现为文件第一行。验证结果：XML 结构检查和差异空白检查通过。
+  当前卡点：无；踩坑：XML 文件可以在根元素前放注释，但不能放在 XML 声明之前。
+- 为 16 个含对外参数的 launch 文件补齐全部 48 个 `DeclareLaunchArgument` 中文描述，
+  包括领域 Package 与 `robot` 兼容入口；现在通过 `ros2 launch <包名> <launch文件>
+  --show-args` 可查看参数用途和默认值。验证结果：AST 检查确认缺失描述为 0；在独立
+  Jazzy 容器中逐个检查全部 21 个 launch 入口，均能展开且没有参数显示为缺少描述；隔离
+  构建 8 个相关 Package 成功，并通过 Python 编译与差异空白检查。当前卡点：无；踩坑：
+  宿主机没有 ROS 2 环境，需在现有 Jazzy 镜像中执行真实的 `--show-args` 验证。

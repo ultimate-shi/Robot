@@ -1,0 +1,82 @@
+# 使用方法：由 robot_control/control.launch.py 加载四轮控制器参数。
+# 本文件由 robot.launch.py 中的 spawner 传给各 ros2_control 控制器。
+# 它定义了 joint_state_broadcaster、四个大腿位置控制器、四个小腿位置控制器、
+# steering_controller 和 wheel_controller。
+# joint 名称必须与 robot.xacro/hardware.xacro 中的关节完全一致。
+# 删除风险：控制器无法启动，/joint_states、/steering_controller/commands、/wheel_controller/commands 会失效。
+
+# 关节状态广播器
+joint_state_broadcaster:
+  ros__parameters:
+    type: joint_state_broadcaster/JointStateBroadcaster  # 关节状态广播器插件类型
+    publish_rate: 10.0                                   # /joint_states 发布频率，单位 Hz
+    use_system_time: true                                # 是否使用系统时间发布关节状态
+
+
+lap_fr_position_controller:
+  ros__parameters:
+    type: position_controllers/JointGroupPositionController  # 右前大腿关节位置控制器插件类型
+    joints: [lap_body_joint_fr]                              # 右前大腿位置控制器控制的关节列表
+    pid: {p: 100.0, i: 0.01, d: 10.0}                        # 右前大腿位置控制 PID 参数
+
+lap_fl_position_controller:
+  ros__parameters:
+    type: position_controllers/JointGroupPositionController  # 左前大腿关节位置控制器插件类型
+    joints: [lap_body_joint_fl]                              # 左前大腿位置控制器控制的关节列表
+    pid: {p: 100.0, i: 0.01, d: 10.0}                        # 左前大腿位置控制 PID 参数
+
+lap_rr_position_controller:
+  ros__parameters:
+    type: position_controllers/JointGroupPositionController  # 右后大腿关节位置控制器插件类型
+    joints: [lap_body_joint_rr]                              # 右后大腿位置控制器控制的关节列表
+    pid: {p: 100.0, i: 0.01, d: 10.0}                        # 右后大腿位置控制 PID 参数
+
+lap_rl_position_controller:
+  ros__parameters:
+    type: position_controllers/JointGroupPositionController  # 左后大腿关节位置控制器插件类型
+    joints: [lap_body_joint_rl]                              # 左后大腿位置控制器控制的关节列表
+    pid: {p: 100.0, i: 0.01, d: 10.0}                        # 左后大腿位置控制 PID 参数
+
+shin_fr_position_controller:
+  ros__parameters:
+    type: position_controllers/JointGroupPositionController  # 右前小腿关节位置控制器插件类型
+    joints: [shin_lap_fr_joint_fr]                           # 右前小腿位置控制器控制的关节列表
+    pid: {p: 80.0, i: 0.01, d: 8.0}                          # 右前小腿位置控制 PID 参数
+
+shin_fl_position_controller:
+  ros__parameters:
+    type: position_controllers/JointGroupPositionController  # 左前小腿关节位置控制器插件类型
+    joints: [shin_lap_fl_joint_fl]                           # 左前小腿位置控制器控制的关节列表
+    pid: {p: 80.0, i: 0.01, d: 8.0}                          # 左前小腿位置控制 PID 参数
+
+shin_rr_position_controller:
+  ros__parameters:
+    type: position_controllers/JointGroupPositionController  # 右后小腿关节位置控制器插件类型
+    joints: [shin_lap_rr_joint_rr]                           # 右后小腿位置控制器控制的关节列表
+    pid: {p: 80.0, i: 0.01, d: 8.0}                          # 右后小腿位置控制 PID 参数
+
+shin_rl_position_controller:
+  ros__parameters:
+    type: position_controllers/JointGroupPositionController  # 左后小腿关节位置控制器插件类型
+    joints: [shin_lap_rl_joint_rl]                           # 左后小腿位置控制器控制的关节列表
+    pid: {p: 80.0, i: 0.01, d: 8.0}                          # 左后小腿位置控制 PID 参数
+
+
+
+steering_controller:
+  ros__parameters:
+    type: position_controllers/JointGroupPositionController  # 四轮转向位置控制器插件类型
+    joints:                                                  # 四个转向关节名称列表，顺序需与底盘控制输出一致
+      - front_left_steer_joint                               # 左前轮转向关节
+      - front_right_steer_joint                              # 右前轮转向关节
+      - rear_left_steer_joint                                # 左后轮转向关节
+      - rear_right_steer_joint                               # 右后轮转向关节
+
+wheel_controller:
+  ros__parameters:
+    type: velocity_controllers/JointGroupVelocityController  # 四轮轮速控制器插件类型
+    joints:                                                  # 四个驱动轮关节名称列表，顺序需与底盘控制输出一致
+      - front_left_wheel_joint                               # 左前驱动轮关节
+      - front_right_wheel_joint                              # 右前驱动轮关节
+      - rear_left_wheel_joint                                # 左后驱动轮关节
+      - rear_right_wheel_joint                               # 右后驱动轮关节

@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<!-- 使用方法：colcon 构建后 ros2 launch robot_brain brain.launch.py 启动网页和 ROS Bridge。 -->
+<package format="3">
+  <name>robot_brain</name><version>0.1.0</version>
+  <description>机器人 Qwen 文字交互、任务白名单、多用户租约和 ROS Bridge</description>
+  <maintainer email="shijiahao@todo.todo">shijiahao</maintainer><license>TODO: License declaration</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>ament_index_python</depend><depend>launch</depend><depend>launch_ros</depend>
+  <depend>rclpy</depend><depend>robot_interfaces</depend><depend>nav_msgs</depend>
+  <depend>sensor_msgs</depend><depend>std_srvs</depend>
+  <exec_depend>python3-fastapi</exec_depend>
+  <exec_depend>python3-uvicorn</exec_depend>
+  <exec_depend>python3-websockets</exec_depend>
+  <exec_depend>robot_navigation</exec_depend><exec_depend>robot_perception</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

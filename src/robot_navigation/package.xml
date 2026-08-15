@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!-- 使用方法：构建后通过 mapping、nav2 或 navigation_preview launch 启动导航能力。 -->
+<package format="3">
+  <name>robot_navigation</name><version>0.1.0</version>
+  <description>机器人建图、Nav2、停靠点、跟随目标和探索路径预演</description>
+  <maintainer email="shijiahao@todo.todo">shijiahao</maintainer><license>TODO: License declaration</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>ament_index_python</depend><depend>launch</depend><depend>launch_ros</depend>
+  <depend>rclpy</depend><depend>robot_interfaces</depend><depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend><depend>nav2_msgs</depend><depend>sensor_msgs</depend>
+  <depend>std_msgs</depend><depend>std_srvs</depend><depend>tf2_ros</depend>
+  <exec_depend>nav2_map_server</exec_depend><exec_depend>nav2_planner</exec_depend>
+  <exec_depend>nav2_lifecycle_manager</exec_depend><exec_depend>rtabmap_odom</exec_depend>
+  <exec_depend>rtabmap_slam</exec_depend><exec_depend>robot_description</exec_depend>
+  <exec_depend>robot_perception</exec_depend><exec_depend>robot_control</exec_depend>
+  <exec_depend>foxglove_bridge</exec_depend><exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>nav2_behaviors</exec_depend><exec_depend>nav2_bt_navigator</exec_depend>
+  <exec_depend>nav2_controller</exec_depend><exec_depend>nav2_smoother</exec_depend>
+  <exec_depend>nav2_velocity_smoother</exec_depend><exec_depend>nav2_waypoint_follower</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

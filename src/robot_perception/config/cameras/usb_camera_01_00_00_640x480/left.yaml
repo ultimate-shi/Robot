@@ -1,0 +1,29 @@
+# 使用方法：由所属 Package 的 launch 或节点加载，请通过参数覆盖现场配置。
+# USB Camera 01.00.00 左目双目标定结果，单目分辨率 640×480。
+# 数据由 camera_calibration 生成；禁止用标称值手工替换矩阵。
+image_width: 640
+image_height: 480
+camera_name: usb_camera_01_00_00_640x480/left
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [461.39929, 0.0, 316.42472,
+         0.0, 463.97884, 212.82656,
+         0.0, 0.0, 1.0]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [-0.056398, 0.013828, -0.004805, 0.002254, 0.0]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [0.99997204, 0.00416180, -0.00621316,
+         -0.00413762, 0.99998383, 0.00390077,
+         0.00622930, -0.00387495, 0.99997309]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [465.89191, 0.0, 316.11546, 0.0,
+         0.0, 465.89191, 205.36842, 0.0,
+         0.0, 0.0, 1.0, 0.0]

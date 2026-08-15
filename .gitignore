@@ -5,3 +5,5 @@ calibration_output/
 __pycache__/
 *.pyc
 maps/
+acceptance_dataset/
+model/

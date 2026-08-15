@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<!-- 使用方法：colcon 构建后通过 stereo_camera.launch.py 或 stereo_perception.launch.py 启动。 -->
+<package format="3">
+  <name>robot_perception</name><version>0.1.0</version>
+  <description>机器人双目视觉、语义定位、地形分析和虚拟传感器</description>
+  <maintainer email="shijiahao@todo.todo">shijiahao</maintainer><license>TODO: License declaration</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>ament_index_python</depend><depend>launch</depend><depend>launch_ros</depend>
+  <depend>rclpy</depend><depend>robot_interfaces</depend><depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend><depend>sensor_msgs</depend><depend>sensor_msgs_py</depend>
+  <depend>std_msgs</depend><depend>std_srvs</depend><depend>stereo_msgs</depend><depend>tf2_ros</depend>
+  <exec_depend>cv_bridge</exec_depend><exec_depend>python3-numpy</exec_depend><exec_depend>python3-scipy</exec_depend>
+  <exec_depend>python3-yaml</exec_depend><exec_depend>usb_cam</exec_depend><exec_depend>image_proc</exec_depend>
+  <exec_depend>stereo_image_proc</exec_depend><exec_depend>image_transport</exec_depend>
+  <exec_depend>compressed_image_transport</exec_depend><exec_depend>robot_stereo_components</exec_depend>
+  <exec_depend>foxglove_bridge</exec_depend><exec_depend>pointcloud_to_laserscan</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

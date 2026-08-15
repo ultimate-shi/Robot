@@ -19,6 +19,13 @@
   <depend>std_srvs</depend>
   <depend>stereo_msgs</depend>
   <depend>tf2_ros</depend>
+  <!-- 兼容 launch 已转发到新的领域 Package；旧节点暂留一个迁移周期。 -->
+  <exec_depend>robot_brain</exec_depend>
+  <exec_depend>robot_control</exec_depend>
+  <exec_depend>robot_description</exec_depend>
+  <exec_depend>robot_interfaces</exec_depend>
+  <exec_depend>robot_navigation</exec_depend>
+  <exec_depend>robot_perception</exec_depend>
   <exec_depend>controller_manager</exec_depend>
   <exec_depend>foxglove_bridge</exec_depend>
   <exec_depend>joint_state_broadcaster</exec_depend>
@@ -38,6 +45,8 @@
   <exec_depend>python3-numpy</exec_depend>
   <exec_depend>python3-scipy</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>python3-fastapi</exec_depend>
+  <exec_depend>python3-uvicorn</exec_depend>
   <exec_depend>position_controllers</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
   <exec_depend>ros2controlcli</exec_depend>

@@ -1,0 +1,17 @@
+# 使用方法：robot_brain 通过 /mission/plan 请求路径预演；此 Action 只规划，不执行导航。
+uint8 GOTO_OBJECT=1
+uint8 FOLLOW_PERSON=2
+uint8 EXPLORE=3
+string mission_id
+uint8 mission_type
+string target_id
+string target_label
+---
+bool success
+string error_code
+string message
+geometry_msgs/PoseStamped goal
+nav_msgs/Path path
+---
+string phase
+string message

@@ -1,0 +1,30 @@
+# 使用方法：由 stereo_perception.launch.py 加载语义检测和现场验收采样参数。
+semantic_perception:
+  ros__parameters:
+    image_topic: /stereo/right/image_rect
+    depth_topic: /stereo/depth/right/image
+    camera_info_topic: /stereo/right/camera_info
+    output_topic: /perception/semantic_detections
+    legacy_output_topic: /perception/semantic_detections_json
+    inference_url: http://127.0.0.1:9100/v1/detect
+    map_frame: map
+    detection_mode: on_demand
+    max_inference_rate: 5.0
+    request_timeout: 2.0
+    jpeg_quality: 80
+    min_confidence: 0.35
+    depth_center_ratio: 0.4
+    min_valid_depth_pixels: 12
+    track_match_distance: 0.5
+    track_timeout: 3.0
+
+acceptance_sampler:
+  ros__parameters:
+    output_directory: /workspace/acceptance_dataset
+    image_topic: /stereo/right/image_rect
+    depth_topic: /stereo/depth/right/image
+    camera_info_topic: /stereo/right/camera_info
+    detections_topic: /perception/semantic_detections
+    map_frame: map
+    base_frame: base_link
+    jpeg_quality: 95

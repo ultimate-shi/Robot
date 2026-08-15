@@ -1,0 +1,479 @@
+"""
+使用方法：由 robot_control/control.launch.py 启动底盘运动学节点。
+本节点由 robot.launch.py 以 executable='chassis_controller_node' 启动，节点名为 chassis_controller。
+它是当前仿真底盘主控制节点，接收安全速度并输出 ros2_control 控制命令。
+
+输入：
+- /cmd_vel：在 launch 中被 remap 到 /cmd_vel_safe，因此只接收 obstacle_avoidance 过滤后的速度。
+- /wheel_states：chassis_feedback_node 从 /joint_states 解析出的四轮转向角和轮速。
+- terrain_params.yaml：轮距、轴距、轮半径和 terrain_status 使能等参数。
+
+输出：
+- /steering_controller/commands：四个转向关节的位置命令。
+- /wheel_controller/commands：四个轮子的速度命令。
+- /odom：积分出的 6DOF 里程计，供 TF、IMU、Nav2 使用。
+- odom -> base_link TF：机器人位姿变换。
+- /terrain_status：由 terrain_analyzer_node 发布，本节点订阅后用于 z/roll/pitch、打滑和阻挡处理。
+- /chassis_mode：当前运动模式，供调试显示。
+
+支持的三种运动模式：
+- crab：四轮同向，支持 linear.x 和 linear.y 平移。
+- four_ws：四轮转向，使用 linear.x + angular.z。
+- ackermann：近似阿克曼转向，使用 linear.x + angular.z。
+
+为什么不能删除：
+删除后 /cmd_vel_safe 无法转成轮速/转角，小车不会运动，也不会发布 /odom 和 TF。
+"""
+
+import json
+import math
+import numpy as np
+import rclpy
+from rclpy.node import Node
+from rclpy.executors import ExternalShutdownException
+
+from geometry_msgs.msg import Twist, TransformStamped
+from nav_msgs.msg import Odometry
+from std_msgs.msg import Float64MultiArray, String
+from robot_interfaces.msg import TerrainState
+from tf2_ros import TransformBroadcaster
+from rcl_interfaces.msg import SetParametersResult
+
+
+class ChassisController3D(Node):
+
+    def __init__(self):
+        super().__init__('chassis_controller')
+
+        # ==================== Parameters ====================
+        self.declare_parameter("wheelbase", 0.4)
+        self.declare_parameter("track", 0.2)
+        self.declare_parameter("radius", 0.05)
+        self.declare_parameter("motion_mode", "crab")
+        self.declare_parameter("steering_limit", 1.57)
+        self.declare_parameter("ackermann_min_turning_speed", 0.04)
+        # Terrain parameters
+        self.declare_parameter("terrain_check_enabled", True)
+        self.declare_parameter("grid_resolution", 0.02)
+        self.declare_parameter("ground_tolerance", 0.05)
+        self.declare_parameter("ground_to_base_height", 0.15)
+        self.declare_parameter("max_grade_deg", 35.0)
+        self.declare_parameter("step_threshold", 0.03)
+        self.declare_parameter("dropoff_threshold", 0.05)
+        self.declare_parameter("look_ahead_distance", 0.10)
+        self.declare_parameter("look_ahead_samples", 5)
+
+        self.wheel_base = self.get_parameter("wheelbase").value
+        self.wheel_track = self.get_parameter("track").value
+        self.wheel_radius = self.get_parameter("radius").value
+        self.valid_motion_modes = {"crab", "four_ws", "ackermann"}
+        configured_mode = str(self.get_parameter("motion_mode").value).strip()
+        if configured_mode not in self.valid_motion_modes:
+            self.get_logger().error(
+                f"Invalid motion_mode '{configured_mode}'. "
+                "Valid values: crab, four_ws, ackermann. Fallback to four_ws."
+            )
+            configured_mode = "four_ws"
+        self.motion_mode = configured_mode
+        self.steering_limit = float(self.get_parameter("steering_limit").value)
+        self.ackermann_min_turning_speed = float(
+            self.get_parameter("ackermann_min_turning_speed").value
+        )
+        self.terrain_enabled = self.get_parameter("terrain_check_enabled").value
+
+        self.Lx = self.wheel_base / 2.0
+        self.Ly = self.wheel_track / 2.0
+
+        # Dynamic parameter callback
+        self.add_on_set_parameters_callback(self.parameter_callback)
+
+        # Control rate
+        self.control_rate = 0.1  # 10Hz
+        self.latest_cmd_vel = Twist()
+
+        # ==================== ROS interfaces ====================
+        self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
+        self.create_subscription(Float64MultiArray, '/wheel_states', self.wheel_state_callback, 10)
+        self.create_subscription(
+            TerrainState, '/perception/terrain_state',
+            self.terrain_status_callback, 10)
+
+        self.steer_pub = self.create_publisher(Float64MultiArray, '/steering_controller/commands', 10)
+        self.speed_pub = self.create_publisher(Float64MultiArray, '/wheel_controller/commands', 10)
+        self.mode_pub = self.create_publisher(String, '/chassis_mode', 10)
+        self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
+        self.tf_broadcaster = TransformBroadcaster(self)
+
+        # 10Hz control loop
+        self.control_timer = self.create_timer(self.control_rate, self.control_loop)
+
+        # ==================== State variables ====================
+        self.last_time = self.get_clock().now()
+        self.x = 0.0
+        self.y = 0.0
+        self.z = 0.0
+        self.roll = 0.0
+        self.pitch = 0.0
+        self.yaw = 0.0
+
+        self.vx_filtered = 0.0
+        self.vy_filtered = 0.0
+        self.w_filtered = 0.0
+        self.filter_alpha = 0.2
+
+        self.prev_angles = [0.0, 0.0, 0.0, 0.0]
+
+        self.last_cmd_vel_time = self.get_clock().now()
+        self.cmd_vel_timeout = 0.5
+        self.has_received_cmd = False
+
+        # Terrain state
+        self.slip_factor = 1.0
+        self.slip_factor_filtered = 1.0
+        self.terrain_blocked = False
+        self.block_reason = ""
+
+        # Previous position for rollback
+        self.prev_x = 0.0
+        self.prev_y = 0.0
+
+        # Publish initial mode
+        self.mode_pub.publish(String(data=self.motion_mode))
+        self.get_logger().info(
+            f"ChassisController3D started | mode: {self.motion_mode} | "
+            f"terrain_status_subscription: {'ON' if self.terrain_enabled else 'OFF'}"
+        )
+
+    def validate_motion_mode(self, mode):
+        """检查运动模式名称，拼写错误时给出明确提示，不自动改成其他模式。"""
+        mode_name = str(mode).strip()
+        if mode_name in self.valid_motion_modes:
+            return mode_name, ""
+        reason = (
+            f"Invalid motion_mode '{mode_name}'. "
+            "Valid values: crab, four_ws, ackermann."
+        )
+        return None, reason
+
+    # ==================== Parameter callback ====================
+    def parameter_callback(self, params):
+        for param in params:
+            if param.name == "motion_mode":
+                mode_name, reason = self.validate_motion_mode(param.value)
+                if mode_name is None:
+                    self.get_logger().error(reason)
+                    return SetParametersResult(successful=False, reason=reason)
+                self.motion_mode = mode_name
+                self.prev_angles = [0.0, 0.0, 0.0, 0.0]
+                self.get_logger().info(f"Mode changed: {self.motion_mode}")
+                self.mode_pub.publish(String(data=self.motion_mode))
+            elif param.name == "steering_limit":
+                self.steering_limit = float(param.value)
+                self.get_logger().info(f"Steering limit changed: {self.steering_limit:.3f} rad")
+            elif param.name == "ackermann_min_turning_speed":
+                self.ackermann_min_turning_speed = float(param.value)
+                self.get_logger().info(
+                    f"Ackermann min turning speed changed: {self.ackermann_min_turning_speed:.3f} m/s"
+                )
+        return SetParametersResult(successful=True)
+
+    # ==================== cmd_vel callback ====================
+    def cmd_vel_callback(self, msg):
+        self.latest_cmd_vel = msg
+        self.has_received_cmd = True
+        self.last_cmd_vel_time = self.get_clock().now()
+
+    def terrain_status_callback(self, msg):
+        """Apply terrain state published by terrain_analyzer_node."""
+        if not self.terrain_enabled:
+            return
+        self.terrain_blocked = bool(msg.is_blocked)
+        self.block_reason = msg.block_reason
+        self.slip_factor = float(msg.slip_factor)
+        self.z = float(msg.body_z)
+        self.roll = float(msg.roll)
+        self.pitch = float(msg.pitch)
+
+    # ==================== 10Hz control loop ====================
+    def control_loop(self):
+        current_time = self.get_clock().now()
+        if (current_time - self.last_cmd_vel_time).nanoseconds * 1e-9 > self.cmd_vel_timeout:
+            self.send_stop()
+            return
+        if not self.has_received_cmd:
+            self.send_stop()
+            return
+
+        vx = self.latest_cmd_vel.linear.x
+        vy = self.latest_cmd_vel.linear.y
+        w = self.latest_cmd_vel.angular.z
+
+        # Mode kinematics
+        if self.motion_mode == "crab":
+            angles, speeds = self.mode_crab(vx, vy, w)
+        elif self.motion_mode == "four_ws":
+            angles, speeds = self.mode_four_ws(vx, w)
+        elif self.motion_mode == "ackermann":
+            angles, speeds = self.mode_ackermann(vx, w)
+        else:
+            angles, speeds = self.stop_command()
+
+        # 三种运动模式统一经过转向限幅，保证不超过 URDF 中的 ±90° 机械范围。
+        opt_angles = []
+        opt_speeds = []
+        for i in range(4):
+            a, s = self.optimize_steering(angles[i], speeds[i], self.prev_angles[i])
+            opt_angles.append(a)
+            opt_speeds.append(s)
+        self.prev_angles = opt_angles
+
+        # Apply terrain slip to wheel speeds
+        if self.terrain_enabled and self.slip_factor_filtered < 1.0:
+            opt_speeds = [s * self.slip_factor_filtered for s in opt_speeds]
+
+        # If terrain blocked, stop
+        if self.terrain_blocked:
+            opt_speeds = [0.0, 0.0, 0.0, 0.0]
+
+        # Publish
+        self.steer_pub.publish(Float64MultiArray(data=opt_angles))
+        self.speed_pub.publish(Float64MultiArray(data=opt_speeds))
+
+    # ==================== Motion modes ====================
+    def mode_crab(self, vx, vy, w):
+        if abs(vx) < 1e-3 and abs(vy) < 1e-3 and abs(w) < 1e-3:
+            return self.stop_command()
+        if abs(w) > 1e-3 and abs(vy) < 1e-3:
+            # Nav2 会输出 angular.z 调整朝向；crab 模式保留平移能力，
+            # 但遇到转向命令时复用四轮转向刚体运动学，否则导航会原地不动。
+            return self.mode_four_ws(vx, w)
+        angle = math.atan2(vy, vx)
+        speed = math.hypot(vx, vy) / self.wheel_radius
+        return [angle] * 4, [speed] * 4
+
+    def mode_four_ws(self, vx, w):
+        if abs(vx) < 1e-3 and abs(w) < 1e-3:
+            return self.stop_command()
+
+        # Nav2 输出的是 base_link 下的线速度 vx 和角速度 w。
+        # 四轮独立转向按刚体速度场计算每个轮心的目标速度，
+        # 这样原地旋转时四个轮子的方向和速度符号会与里程计公式一致。
+        wheel_positions = [
+            (self.Lx, self.Ly),    # front_left
+            (self.Lx, -self.Ly),   # front_right
+            (-self.Lx, self.Ly),   # rear_left
+            (-self.Lx, -self.Ly),  # rear_right
+        ]
+
+        angles = []
+        speeds = []
+        for x_i, y_i in wheel_positions:
+            wheel_vx = vx - w * y_i
+            wheel_vy = w * x_i
+            if abs(wheel_vx) < 1e-6 and abs(wheel_vy) < 1e-6:
+                angles.append(0.0)
+                speeds.append(0.0)
+                continue
+            angles.append(math.atan2(wheel_vy, wheel_vx))
+            speeds.append(math.hypot(wheel_vx, wheel_vy) / self.wheel_radius)
+        return angles, speeds
+
+    def mode_ackermann(self, vx, w):
+        if abs(vx) < 1e-3 and abs(w) < 1e-3:
+            return self.stop_command()
+        if abs(vx) < 1e-3:
+            # Ackermann 结构不能原地旋转。Nav2 若请求原地调整朝向，
+            # 给一个很小的前进速度让车以最小半径缓慢转向，避免完全不动。
+            vx = math.copysign(self.ackermann_min_turning_speed, w)
+        if abs(w) < 1e-3:
+            return [0.0, 0.0, 0.0, 0.0], [vx / self.wheel_radius] * 4
+
+        R_icr = vx / w
+        left_radius = R_icr - self.wheel_track / 2.0
+        right_radius = R_icr + self.wheel_track / 2.0
+        delta_l = math.atan2(self.wheel_base, left_radius)
+        delta_r = math.atan2(self.wheel_base, right_radius)
+
+        v_fl = w * math.hypot(left_radius, self.wheel_base)
+        v_fr = w * math.hypot(right_radius, self.wheel_base)
+        v_rl = w * left_radius
+        v_rr = w * right_radius
+
+        angles = [delta_l, delta_r, 0.0, 0.0]
+        speeds = [
+            v_fl / self.wheel_radius,
+            v_fr / self.wheel_radius,
+            v_rl / self.wheel_radius,
+            v_rr / self.wheel_radius
+        ]
+        return angles, speeds
+
+    def optimize_steering(self, target_angle, target_speed, prev_angle):
+        del prev_angle
+        if abs(target_speed) < 1e-6:
+            return 0.0, 0.0
+
+        # 转向电机在 URDF 中限制为 ±90°。超过范围的目标角不能直接发布，
+        # 等价转换为反向轮速 + 限幅内舵角，避免前进时轮子转到 180°。
+        angle = math.atan2(math.sin(target_angle), math.cos(target_angle))
+        speed = target_speed
+        if angle > math.pi / 2.0:
+            angle -= math.pi
+            speed = -speed
+        elif angle < -math.pi / 2.0:
+            angle += math.pi
+            speed = -speed
+
+        angle = max(-self.steering_limit, min(self.steering_limit, angle))
+        return angle, speed
+
+    def stop_command(self):
+        return [0.0] * 4, [0.0] * 4
+
+    def send_stop(self):
+        ang, spd = self.stop_command()
+        self.prev_angles = ang
+        self.steer_pub.publish(Float64MultiArray(data=ang))
+        self.speed_pub.publish(Float64MultiArray(data=spd))
+
+    # ==================== Odometry with terrain ====================
+    def wheel_state_callback(self, msg):
+        if len(msg.data) < 8:
+            self.get_logger().warn(
+                f"Ignoring /wheel_states with {len(msg.data)} values; expected 8"
+            )
+            return
+
+        current_time = self.get_clock().now()
+        dt = (current_time - self.last_time).nanoseconds * 1e-9
+        self.last_time = current_time
+        if dt <= 0.0:
+            return
+
+        fl_s, fr_s, rl_s, rr_s = msg.data[0:4]
+        fl_v, fr_v, rl_v, rr_v = np.array(msg.data[4:8]) * self.wheel_radius
+
+        # Chassis velocity decomposition
+        vx = np.mean([
+            fl_v * math.cos(fl_s), fr_v * math.cos(fr_s),
+            rl_v * math.cos(rl_s), rr_v * math.cos(rr_s)
+        ])
+        vy = np.mean([
+            fl_v * math.sin(fl_s), fr_v * math.sin(fr_s),
+            rl_v * math.sin(rl_s), rr_v * math.sin(rr_s)
+        ])
+
+        # Angular velocity (4WIS kinematics)
+        w = ((-fl_v * math.cos(fl_s) * self.Ly + fl_v * math.sin(fl_s) * self.Lx) +
+             (-fr_v * math.cos(fr_s) * (-self.Ly) + fr_v * math.sin(fr_s) * self.Lx) +
+             (-rl_v * math.cos(rl_s) * self.Ly + rl_v * math.sin(rl_s) * (-self.Lx)) +
+             (-rr_v * math.cos(rr_s) * (-self.Ly) + rr_v * math.sin(rr_s) * (-self.Lx))) / \
+            (4.0 * (self.Lx ** 2 + self.Ly ** 2))
+
+        # Low-pass filter
+        self.vx_filtered = self.filter_alpha * vx + (1 - self.filter_alpha) * self.vx_filtered
+        self.vy_filtered = self.filter_alpha * vy + (1 - self.filter_alpha) * self.vy_filtered
+        self.w_filtered = self.filter_alpha * w + (1 - self.filter_alpha) * self.w_filtered
+
+        # Save previous position for rollback
+        self.prev_x = self.x
+        self.prev_y = self.y
+
+        # 2D pose integration
+        self.yaw += self.w_filtered * dt
+        self.yaw = math.atan2(math.sin(self.yaw), math.cos(self.yaw))
+
+        dx = (self.vx_filtered * math.cos(self.yaw) - self.vy_filtered * math.sin(self.yaw)) * dt
+        dy = (self.vx_filtered * math.sin(self.yaw) + self.vy_filtered * math.cos(self.yaw)) * dt
+
+        # Apply slip factor
+        dx *= self.slip_factor_filtered
+        dy *= self.slip_factor_filtered
+
+        self.x += dx
+        self.y += dy
+
+        # ==================== Terrain status application ====================
+        if self.terrain_enabled:
+            slip_alpha = 0.3
+            self.slip_factor_filtered = (slip_alpha * self.slip_factor +
+                                         (1 - slip_alpha) * self.slip_factor_filtered)
+            if self.terrain_blocked:
+                self.x = self.prev_x
+                self.y = self.prev_y
+        else:
+            self.z = 0.0
+            self.roll = 0.0
+            self.pitch = 0.0
+
+        # Publish 6DOF odometry and TF
+        self.publish_odom(current_time)
+
+    # ==================== 6DOF Odometry publishing ====================
+    def publish_odom(self, time):
+        # Convert roll, pitch, yaw to quaternion
+        qx, qy, qz, qw = self._euler_to_quaternion(self.roll, self.pitch, self.yaw)
+
+        # Odometry message
+        odom = Odometry()
+        odom.header.stamp = time.to_msg()
+        odom.header.frame_id = "odom"
+        odom.child_frame_id = "base_link"
+        odom.pose.pose.position.x = self.x
+        odom.pose.pose.position.y = self.y
+        odom.pose.pose.position.z = self.z
+        odom.pose.pose.orientation.x = qx
+        odom.pose.pose.orientation.y = qy
+        odom.pose.pose.orientation.z = qz
+        odom.pose.pose.orientation.w = qw
+        odom.twist.twist.linear.x = self.vx_filtered
+        odom.twist.twist.linear.y = self.vy_filtered
+        odom.twist.twist.angular.z = self.w_filtered
+        self.odom_pub.publish(odom)
+
+        # TF broadcast
+        tf = TransformStamped()
+        tf.header.stamp = time.to_msg()
+        tf.header.frame_id = "odom"
+        tf.child_frame_id = "base_link"
+        tf.transform.translation.x = self.x
+        tf.transform.translation.y = self.y
+        tf.transform.translation.z = self.z
+        tf.transform.rotation.x = qx
+        tf.transform.rotation.y = qy
+        tf.transform.rotation.z = qz
+        tf.transform.rotation.w = qw
+        self.tf_broadcaster.sendTransform(tf)
+
+    def _euler_to_quaternion(self, roll, pitch, yaw):
+        """Convert euler angles (roll, pitch, yaw) to quaternion (x, y, z, w)."""
+        cr = math.cos(roll / 2)
+        sr = math.sin(roll / 2)
+        cp = math.cos(pitch / 2)
+        sp = math.sin(pitch / 2)
+        cy = math.cos(yaw / 2)
+        sy = math.sin(yaw / 2)
+
+        qw = cr * cp * cy + sr * sp * sy
+        qx = sr * cp * cy - cr * sp * sy
+        qy = cr * sp * cy + sr * cp * sy
+        qz = cr * cp * sy - sr * sp * cy
+
+        return qx, qy, qz, qw
+
+
+def main(args=None):
+    rclpy.init(args=args)
+    node = ChassisController3D()
+    try:
+        rclpy.spin(node)
+    except (KeyboardInterrupt, ExternalShutdownException):
+        pass
+    finally:
+        node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+if __name__ == '__main__':
+    main()

@@ -1,0 +1,11 @@
+# 使用方法：调用 /perception/detect_objects 获取最近结果或强制刷新一帧。
+string request_id
+string[] class_filter
+float32 min_confidence
+bool require_map_position
+bool force_refresh
+---
+bool success
+string error_code
+string message
+SemanticDetectionArray detections

@@ -60,7 +60,8 @@ RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" \
         ros-jazzy-xacro \
         v4l-utils \
     && python3 -m pip install --break-system-packages --no-cache-dir \
-        --index-url "${PYPI_MIRROR}" plyfile==1.1.3 \
+        --index-url "${PYPI_MIRROR}" \
+        plyfile==1.1.3 fastapi==0.116.1 uvicorn==0.35.0 websockets==15.0.1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace

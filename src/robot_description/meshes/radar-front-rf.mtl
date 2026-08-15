@@ -1,0 +1,5 @@
+newmtl purple
+Kd 0.6 0.1 0.8
+Ns 250
+d 1.0
+illum 2
