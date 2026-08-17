@@ -1,3 +1,0 @@
-# 公共 bringup 的空参数覆盖层；仿真默认保持 nav2_params.yaml 的现有行为。
-/**:
-  ros__parameters: {}

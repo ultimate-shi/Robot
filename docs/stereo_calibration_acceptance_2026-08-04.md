@@ -21,8 +21,8 @@
 - 正式 profile 已保存到
   `src/robot_perception/config/cameras/usb_camera_01_00_00_640x480/`，正常相机入口和完整实机入口默认
   读取该 profile，不再默认读取占位模板。
-- Jazzy 容器中 `colcon build --packages-select robot --symlink-install` 通过；安装空间包含
-  两个正式 YAML，更新后的 xacro 可正常展开。
+- Jazzy 容器中当时的全工作区构建通过；安装空间包含两个正式 YAML，更新后的 xacro 可正常
+  展开。记录中的旧 `robot` 兼容包现已退役。
 - 使用保存的左右图以 20 Hz 合成回放，正常处理模式正确发布左右 `CameraInfo`、校正图、
   视差、深度和点云。回读的左目 `K[0]=461.39929`、右目 `P[3]=-28.48706`，frame_id
   分别为 `stereo_left_optical_frame` 和 `stereo_right_optical_frame`。

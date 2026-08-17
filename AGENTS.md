@@ -11,7 +11,6 @@
 
 - `src/robot_{brain,perception,navigation,control}/`：按职责拆分的 Python 节点、launch、配置和测试。
 - `src/robot_interfaces/`、`src/robot_description/`：跨包 ROS 接口与静态机器人模型资源。
-- `src/robot/`：迁移期兼容 launch 和旧节点，只允许兼容修复，不再新增功能实现。
 - `src/robot_stereo_components/`：高带宽双目处理 C++ 节点。
 - `scripts/`、`docker/`、`docs/`：运行脚本、Jazzy ARM64 容器和专项文档。
 - `README.md`：当前使用方法；`progress.md`：按日期记录开发过程。

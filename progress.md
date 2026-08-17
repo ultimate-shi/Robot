@@ -1,6 +1,18 @@
 <!-- 使用方法：按日期记录每次代码修改、验证结果、当前卡点和踩坑。 -->
 # 过程记录
 
+## 2026-08-17
+
+- 正式退役并删除 `src/robot/` 兼容包；旧 `ros2 launch robot ...` 和
+  `ros2 run robot ...` 入口不再提供，统一使用 `robot_brain`、`robot_perception`、
+  `robot_navigation`、`robot_control`、`robot_description` 与 `robot_interfaces`。
+- 同步更新 README、仓库开发约定和双目标定文档中的当前结构、构建命令及安装路径。
+- 验证结果：Jazzy 容器内仅发现 7 个现行 Package，全工作区构建通过；大脑、导航和感知的
+  21 项 Python 测试全部通过，默认导航、双目相机和大脑三个关键 launch 参数均可解析，
+  `git diff --check` 通过。当前卡点：无。踩坑：旧包目录内存在容器用户生成的缓存文件，
+  普通用户无法直接删除，最终通过原 Jazzy 容器清理；统一 `colcon test` 仍因四个 Python
+  Package 未配置测试发现而返回 pytest 退出码 5，本次改为直接运行现有测试目录。
+
 ## 2026-08-15
 
 - 将单一 `robot` 逐步拆为 `robot_interfaces`、`robot_brain`、`robot_perception`、

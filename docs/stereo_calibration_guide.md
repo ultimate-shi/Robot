@@ -296,7 +296,7 @@ AprilTag/棋盘格求相机到车体的外参。无论使用哪种方法，都�
 修改 xacro 后重新构建并加载：
 
 ```bash
-colcon build --packages-select robot
+colcon build --packages-select robot_description robot_perception
 source install/setup.bash
 ```
 
@@ -319,7 +319,8 @@ ros2 launch robot_navigation stereo_robot.launch.py \
   right_calibration_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot_perception/config/cameras/model_serial_640x480/right.yaml
 ```
 
-只有再次 `colcon build` 后，profile 才会被安装到 `install/robot/share/robot/config/cameras`。
+只有再次 `colcon build` 后，profile 才会被安装到
+`install/robot_perception/share/robot_perception/config/cameras`。
 直接传源码目录绝对路径可以立即测试，但正式部署建议构建后使用安装空间中的文件。
 
 本机 `USB Camera 01.00.00` 的 640×480 单目 profile 已保存为：

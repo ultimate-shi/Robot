@@ -19,7 +19,6 @@ Robot/
 │   ├── robot_navigation/           # RTAB-Map、Nav2、停靠点、跟随和探索预演
 │   ├── robot_control/              # 四轮转向、里程计、速度门控和最终安全层
 │   ├── robot_description/          # URDF、ros2_control 描述和 mesh
-│   ├── robot/                      # 迁移期兼容 launch 和旧可执行入口
 │   └── robot_stereo_components/    # 高带宽双目处理 C++ 节点
 ├── progress.md                     # 按日期记录开发过程、卡点和踩坑
 └── README.md
@@ -27,9 +26,9 @@ Robot/
 
 ## 多 Package 架构
 
-工作区现在按领域拆分，但仍使用同一个 `src/`、`build/` 和 `install/`。所有 Package 统一
-通过根目录 `colcon build --symlink-install` 构建。`robot` 暂时保留为兼容包，旧 launch
-会转发到新 Package；新增代码不要继续放入兼容包。
+工作区按领域拆分，但仍使用同一个 `src/`、`build/` 和 `install/`。所有 Package 统一
+通过根目录 `colcon build --symlink-install` 构建。旧 `robot` 兼容包已经退役，启动和单独
+运行节点时应直接使用对应的领域 Package。
 
 依赖方向固定为：`robot_brain` 只依赖 `robot_interfaces` 并通过 ROS Bridge 调用感知和
 导航；`robot_navigation` 通过类型化消息消费感知结果；`robot_control` 不依赖 Qwen、相机
@@ -45,10 +44,10 @@ Robot/
 - `/mission/state`：类型化任务状态；旧 `/mission/status` JSON 暂时兼容。
 - `/perception/terrain_state`：感知到控制的类型化地形约束。
 
-## 兼容包中的原 Python 功能分层
+## Python 功能分层
 
-以下说明用于理解旧实现的来源。节点已经迁入对应的新 Package，`src/robot/robot/` 暂时保留
-一个迁移周期，供旧 `ros2 run robot ...` 命令回退。
+Python 节点按职责分别位于 `robot_perception`、`robot_navigation`、`robot_control` 和
+`robot_brain`，不再提供旧 `robot` 包的运行入口。
 
 ### sensing：传感器接入层
 
@@ -146,7 +145,7 @@ Nav2
 
 ## 关键启动文件
 
-启动文件按领域位于各 Package 的 `launch/` 目录，`src/robot/launch/` 只保留兼容入口。
+启动文件按领域位于各 Package 的 `launch/` 目录。
 每个对外 launch 参数都带有中文说明，可在启动前查看参数、用途和默认值：
 
 ```bash
@@ -380,7 +379,6 @@ WebSocket运行依赖 `websockets`，Jazzy镜像已固定安装对应版本；�
 - `src/robot_navigation/map/studyroom.*`：默认二维地图和三维 PLY 点云。
 - `src/robot_navigation/map/obstacle_test.*`：避障测试地图。
 - `src/robot_navigation/map/blank.*`：基础运动链调试使用的空白地图。
-- `src/robot/world/`：仿真世界文件。
 
 二维地图的 `.yaml` 和 `.pgm` 必须配套；需要三维局部观察或虚拟超声波时，还要提供同一
 坐标系下的 `.ply`。
