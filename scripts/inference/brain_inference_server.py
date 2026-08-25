@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""用法：由 scripts/inference/start_yolo_gateway.sh 启动宿主机推理网关."""
+"""使用方法：由 start_yolo_gateway.sh 启动。
+
+本程序串行调度 YOLO 与常驻纯文本 Qwen。
+"""
 
 import asyncio
 import base64
@@ -10,40 +13,49 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from fastapi import FastAPI, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 import uvicorn
 
 
 class DetectRequest(BaseModel):
-    """检测请求只传一张已经压缩的左目图."""
+    """检测请求只传一张已经压缩的右目图。"""
 
     image_base64: str
     min_confidence: float = 0.35
 
 
 class ChatRequest(BaseModel):
-    """视觉问答请求；图像可省略以执行纯文字问答."""
+    """文本决策请求；image_base64 仅为旧客户端兼容字段，不会发送给 LLM。"""
 
     request_id: str = ''
+    system: str = ''
     text: str
     image_base64: str | None = None
-    detections: list = []
+    detections: list = Field(default_factory=list)
 
 
 class InferenceGateway:
-    """用同一把异步锁避免多个模型同时抢占 RK3588 NPU 和内存."""
+    """用同一把异步锁避免 YOLO 与 Qwen 同时使用 RK3588 NPU。"""
 
     def __init__(self):
         self.lock = asyncio.Lock()
         self.detector_name = os.environ.get('ROBOT_DETECTOR_PLUGIN', '')
         self.detector = self._load_detector(self.detector_name)
-        self.vlm_endpoint = os.environ.get('ROBOT_VLM_ENDPOINT', '').rstrip('/')
-        self.vlm_fallback_endpoint = os.environ.get(
-            'ROBOT_VLM_FALLBACK_ENDPOINT', '').rstrip('/')
-        self.vlm_model = os.environ.get(
-            'ROBOT_VLM_MODEL', 'qwen2.5-vl-3b-w8a8')
-        self.vlm_fallback_model = os.environ.get(
-            'ROBOT_VLM_FALLBACK_MODEL', 'internvl3-1b-w8a8')
+        self.llm_endpoint = os.environ.get(
+            'ROBOT_LLM_ENDPOINT', os.environ.get(
+                'ROBOT_VLM_ENDPOINT', '')).rstrip('/')
+        self.llm_fallback_endpoint = os.environ.get(
+            'ROBOT_LLM_FALLBACK_ENDPOINT', os.environ.get(
+                'ROBOT_VLM_FALLBACK_ENDPOINT', '')).rstrip('/')
+        self.llm_model = os.environ.get(
+            'ROBOT_LLM_MODEL', os.environ.get(
+                'ROBOT_VLM_MODEL', 'qwen2.5-3b-instruct-w8a8-rk3588'))
+        self.llm_fallback_model = os.environ.get(
+            'ROBOT_LLM_FALLBACK_MODEL', os.environ.get(
+                'ROBOT_VLM_FALLBACK_MODEL', 'qwen2.5-3b-instruct'))
+        self.max_tokens = int(os.environ.get('ROBOT_LLM_MAX_TOKENS', '96'))
+        self.timeout = float(os.environ.get('ROBOT_LLM_TIMEOUT', '180'))
+        self.last_llm_metrics = {}
 
     @staticmethod
     def _load_detector(specification):
@@ -58,8 +70,13 @@ class InferenceGateway:
 
     async def detect(self, request):
         if self.detector is None:
-            raise HTTPException(
-                503, '未配置 ROBOT_DETECTOR_PLUGIN，不能伪造物体识别结果')
+            raise HTTPException(503, '未配置检测插件，不能伪造识别结果')
+        if self.lock.locked():
+            raise HTTPException(503, {
+                'code': 'NPU_BUSY_LLM',
+                'message': 'NPU 正在执行 Qwen 问答，实时检测已暂停',
+                'retryable': True,
+            })
         try:
             image = base64.b64decode(request.image_base64, validate=True)
         except ValueError as exc:
@@ -70,76 +87,84 @@ class InferenceGateway:
                     self.detector, image, request.min_confidence)
             except Exception as exc:
                 raise HTTPException(500, f'RKNN 检测失败: {exc}') from exc
-        return {
-            'model': self.detector_name,
-            'detections': detections,
-        }
+        return {'model': self.detector_name, 'detections': detections}
 
     async def chat(self, request):
-        if not self.vlm_endpoint and not self.vlm_fallback_endpoint:
-            raise HTTPException(
-                503, '未配置 ROBOT_VLM_ENDPOINT，不能伪造大模型回答')
+        if not self.llm_endpoint and not self.llm_fallback_endpoint:
+            raise HTTPException(503, '未配置 ROBOT_LLM_ENDPOINT')
         async with self.lock:
-            try:
-                answer = await asyncio.to_thread(
-                    self._call_openai_compatible,
-                    self.vlm_endpoint, self.vlm_model, request)
-                model = self.vlm_model
-            except Exception as primary_error:
-                if not self.vlm_fallback_endpoint:
-                    raise HTTPException(
-                        502, f'主视觉模型调用失败: {primary_error}') from primary_error
+            failures = []
+            for endpoint, model, label in (
+                    (self.llm_endpoint, self.llm_model, '主模型'),
+                    (self.llm_fallback_endpoint, self.llm_fallback_model,
+                     '回退模型')):
+                if not endpoint:
+                    continue
                 try:
                     answer = await asyncio.to_thread(
-                        self._call_openai_compatible,
-                        self.vlm_fallback_endpoint,
-                        self.vlm_fallback_model, request)
-                    model = self.vlm_fallback_model
-                except Exception as fallback_error:
-                    raise HTTPException(
-                        502, f'主模型和回退模型均失败: {fallback_error}') from fallback_error
-        return {'answer': answer, 'model': model}
+                        self._call_openai_compatible, endpoint, model, request)
+                    return {
+                        'answer': answer, 'model': model,
+                        'metrics': self.last_llm_metrics,
+                    }
+                except Exception as exc:
+                    failures.append(f'{label}: {exc}')
+            raise HTTPException(502, '；'.join(failures))
 
-    @staticmethod
-    def _call_openai_compatible(endpoint, model, request):
-        content = [{'type': 'text', 'text': request.text}]
-        if request.image_base64:
-            content.insert(0, {
-                'type': 'image_url',
-                'image_url': {
-                    'url': 'data:image/jpeg;base64,' + request.image_base64,
-                },
-            })
-        system = (
-            '你是机器人本地视觉助手。只描述当前输入中有证据的内容；'
-            '看不清或画面外的信息必须明确说无法判断。你不能直接控制机器人。')
+    def _call_openai_compatible(self, endpoint, model, request):
+        """只发送 system 和纯文本 user 内容，兼容字段中的图片始终忽略。"""
+        self.last_llm_metrics = {}
         body = json.dumps({
             'model': model,
             'messages': [
-                {'role': 'system', 'content': system},
-                {'role': 'user', 'content': content},
+                {'role': 'system', 'content': request.system},
+                {'role': 'user', 'content': request.text},
             ],
-            'max_tokens': 256,
-            'temperature': 0.2,
+            'stream': False,
+            'max_tokens': self.max_tokens,
+            'temperature': 0.1,
+            'top_p': 0.1,
+            'top_k': 1,
+            'enable_thinking': False,
         }).encode('utf-8')
         target = endpoint
         if not target.endswith('/chat/completions'):
             target += '/v1/chat/completions'
         http_request = Request(
-            target, data=body,
-            headers={'Content-Type': 'application/json'}, method='POST')
+            target, data=body, headers={'Content-Type': 'application/json'},
+            method='POST')
         try:
-            with urlopen(http_request, timeout=30.0) as response:
+            with urlopen(http_request, timeout=self.timeout) as response:
                 payload = json.loads(response.read().decode('utf-8'))
         except (HTTPError, URLError, TimeoutError) as exc:
             raise RuntimeError(str(exc)) from exc
         try:
             content = payload['choices'][0]['message']['content']
         except (KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError('RKLLM 返回格式不兼容 OpenAI Chat Completions') from exc
+            raise RuntimeError('LLM 返回格式不兼容 Chat Completions') from exc
         if isinstance(content, list):
             content = ''.join(str(item.get('text', '')) for item in content)
+        metrics = payload.get('robot_metrics', {})
+        self.last_llm_metrics = metrics if isinstance(metrics, dict) else {}
         return str(content).strip()
+
+    @staticmethod
+    def endpoint_health(endpoint):
+        if not endpoint:
+            return {'state': 'unconfigured'}
+        base = endpoint.split('/v1/', 1)[0].rstrip('/')
+        failures = []
+        for path in ('/health', '/v1/models'):
+            try:
+                with urlopen(Request(base + path, method='GET'),
+                             timeout=2.0) as response:
+                    payload = json.loads(response.read().decode('utf-8'))
+                    if path == '/health':
+                        return payload
+                    return {'state': 'ok', 'source': 'v1/models'}
+            except Exception as exc:
+                failures.append(f'{path}: {exc}')
+        return {'state': 'error', 'message': '；'.join(failures)}
 
 
 gateway = InferenceGateway()
@@ -148,12 +173,25 @@ app = FastAPI(title='Robot RK3588 Inference Gateway', docs_url=None)
 
 @app.get('/health')
 async def health():
-    """明确报告模型是否配置，不把进程存活误报为模型可用."""
+    llm_health = await asyncio.to_thread(
+        gateway.endpoint_health, gateway.llm_endpoint)
+    fallback_health = await asyncio.to_thread(
+        gateway.endpoint_health, gateway.llm_fallback_endpoint)
+    llm_ok = (llm_health.get('state') == 'ok'
+              or fallback_health.get('state') == 'ok')
     return {
-        'state': 'ok' if gateway.detector and gateway.vlm_endpoint else 'degraded',
+        'state': 'ok' if gateway.detector and llm_ok else 'degraded',
         'detector_configured': gateway.detector is not None,
-        'vlm_configured': bool(gateway.vlm_endpoint),
-        'vlm_fallback_configured': bool(gateway.vlm_fallback_endpoint),
+        'llm_configured': bool(gateway.llm_endpoint),
+        'llm_ready': llm_ok,
+        'llm_process_resident': bool(llm_health.get('resident')),
+        'llm_runtime': llm_health,
+        'llm_fallback_runtime': fallback_health,
+        'llm_fallback_configured': bool(gateway.llm_fallback_endpoint),
+        'local_llm_model': gateway.llm_model,
+        # 兼容现有网页健康检查字段，后续版本再移除。
+        'vlm_configured': bool(gateway.llm_endpoint),
+        'local_qwen_model': gateway.llm_model,
         'serialization': 'single_queue',
     }
 
@@ -170,7 +208,6 @@ async def chat(request: ChatRequest):
 
 if __name__ == '__main__':
     uvicorn.run(
-        app,
-        host=os.environ.get('ROBOT_INFERENCE_HOST', '127.0.0.1'),
+        app, host=os.environ.get('ROBOT_INFERENCE_HOST', '127.0.0.1'),
         port=int(os.environ.get('ROBOT_INFERENCE_PORT', '9100')),
     )

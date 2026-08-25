@@ -20,13 +20,19 @@ def generate_launch_description():
             'inference_url', default_value='http://127.0.0.1:9100',
             description='语义感知节点调用的本地推理服务基础 URL'),
         DeclareLaunchArgument(
+            'detection_mode', default_value='on_demand',
+            description='YOLO 检测模式：on_demand 按需识别，continuous 按限频持续识别'),
+        DeclareLaunchArgument(
             'log_level', default_value='warn',
             description='双目障碍与语义感知节点的 ROS 日志级别'),
         Node(package='robot_perception', executable='stereo_pointcloud_filter',
              parameters=[pointcloud, {'use_sim_time': False}],
              arguments=ros_args, output='screen'),
         Node(package='robot_perception', executable='semantic_perception',
-             parameters=[semantic, {'inference_url': inference_url}],
+             parameters=[semantic, {
+                 'inference_url': inference_url,
+                 'detection_mode': LaunchConfiguration('detection_mode'),
+             }],
              arguments=ros_args, output='screen'),
         Node(package='robot_perception', executable='acceptance_sampler',
              parameters=[semantic], arguments=ros_args, output='screen'),

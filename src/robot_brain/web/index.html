@@ -26,19 +26,19 @@
       <article class="panel camera-panel">
         <div class="panel-heading">
           <div><span class="panel-index">01</span><h2>双目视觉</h2></div>
-          <span id="detectionCount" class="muted">等待识别</span>
+          <span id="detectionCount" class="muted">实时识别启动中</span>
         </div>
         <div class="canvas-wrap">
           <canvas id="cameraCanvas" width="640" height="480"></canvas>
           <div id="cameraEmpty" class="empty-state">等待右目校正画面</div>
         </div>
         <div class="chip-row">
-          <button id="detectButton">识别当前画面</button>
+          <button id="detectButton">立即刷新识别</button>
           <button id="captureButton" class="secondary">保存验收样本</button>
           <div id="detectionChips" class="chip-row"></div>
         </div>
         <div id="detectionSummary" class="detection-summary" aria-live="polite">
-          点击“识别当前画面”后，这里会列出物体名称、置信度和距离。
+          YOLO 正在持续识别；这里会实时列出物体名称、置信度和距离。
         </div>
       </article>
 
@@ -100,12 +100,6 @@
         <button id="confirmButton" class="primary wide">确认并取得控制权</button>
       </article>
 
-      <article class="panel health-panel">
-        <div class="panel-heading">
-          <div><span class="panel-index">06</span><h2>系统健康</h2></div>
-        </div>
-        <div id="healthGrid" class="health-grid"></div>
-      </article>
     </section>
   </main>
   <script src="/app.js" defer></script>

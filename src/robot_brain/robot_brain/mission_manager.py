@@ -13,12 +13,14 @@ class MissionManager:
         self.lease = MultiUserMissionState(grace_seconds=grace_seconds)
         self.previews = {}
 
-    def create_preview(self, client_id, task, label='', target_id=''):
+    def create_preview(self, client_id, task, label='', target_id='',
+                       snapshot_id='', scene_stamp_ns=None):
         mission_id = str(uuid.uuid4())
         preview = {
             'mission_id': mission_id, 'client_id': client_id,
             'task': task, 'label': label, 'selected_target_id': target_id,
-            'candidates': [], 'created_at': time.time(),
+            'candidates': [], 'snapshot_id': str(snapshot_id),
+            'scene_stamp_ns': scene_stamp_ns, 'created_at': time.time(),
         }
         self.previews[mission_id] = preview
         cutoff = time.time() - 300.0

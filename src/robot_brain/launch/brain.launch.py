@@ -17,11 +17,17 @@ def generate_launch_description():
             description='机器人网页与 ROS Bridge 监听的 HTTP 端口'),
         DeclareLaunchArgument(
             'inference_url', default_value='http://127.0.0.1:9100',
-            description='本地视觉语言模型推理服务的基础 URL'),
+            description='本地 YOLO 与纯文本 Qwen 推理网关的基础 URL'),
+        DeclareLaunchArgument(
+            'log_level', default_value='warn',
+            description='ROS Bridge 与网页服务器的日志级别'),
         Node(package='robot_brain', executable='brain_web', name='brain_ros_bridge',
              parameters=[config, {
                  'http_port': LaunchConfiguration('http_port'),
                  'inference_url': LaunchConfiguration('inference_url'),
                  'motion_enabled': False,
-             }], output='screen'),
+                 'web_log_level': LaunchConfiguration('log_level'),
+             }], arguments=[
+                 '--ros-args', '--log-level', LaunchConfiguration('log_level')],
+             output='screen'),
     ])

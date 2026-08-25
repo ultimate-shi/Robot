@@ -14,3 +14,5 @@ brain_mission:
     follow_update_distance: 0.4
     person_lost_timeout: 2.0
     frontier_min_cells: 8
+    goal_boundary_margin: 0.3
+    idle_detection_mode: on_demand

@@ -1,4 +1,4 @@
-"""使用方法：MissionManager 调用 dispatch，把已校验的模型动作转换为固定任务参数。"""
+"""使用方法：Web 层只把 CommandPolicy 已授权的动作传给 dispatch 生成固定任务参数。"""
 
 from robot_brain.action_schema import ModelAction
 

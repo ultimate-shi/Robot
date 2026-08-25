@@ -1,11 +1,15 @@
-"""使用方法：web_server 创建 RosBridge；只有本模块能够调用机器人 ROS Service 和 Action。"""
+"""
+使用方法：web_server 创建 RosBridge。
+
+只有本模块能够调用机器人 ROS Service 和 Action。
+"""
 
 from copy import deepcopy
+import json
 import threading
 import time
 
 from nav_msgs.msg import OccupancyGrid
-import rclpy
 from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, qos_profile_sensor_data, QoSProfile
@@ -13,7 +17,11 @@ from robot_interfaces.action import PlanMission
 from robot_interfaces.msg import MissionState, SemanticDetectionArray
 from robot_interfaces.srv import CaptureSample, ConfirmMission, DetectObjects
 from sensor_msgs.msg import CompressedImage
+from std_msgs.msg import String
 from std_srvs.srv import Trigger
+
+from robot_brain.frame_cache import TimestampedFrameCache
+from robot_brain.scene_coordinator import SceneCoordinator
 
 
 class SharedRobotState:
@@ -21,23 +29,41 @@ class SharedRobotState:
 
     def __init__(self):
         self.lock = threading.RLock()
-        self.detections = {'detections': []}
+        self.detections = {'state': 'waiting', 'detections': []}
+        self.perception_status = {
+            'state': 'waiting', 'reason_code': '', 'message': ''}
         self.mission = {'state': 'stopped', 'message': '等待任务'}
         self.health = {
             'camera': {'state': 'waiting'}, 'slam': {'state': 'waiting'},
             'semantic': {'state': 'waiting'}, 'navigation': {'state': 'waiting'},
+            'qwen': {'state': 'waiting'},
         }
         self.frame = None
+        # detection_frame 只供聊天审计使用，不能进入 WebSocket JSON 状态。
+        self.detection_frame = None
+        self.detection_frame_stamp_ns = None
         self.map = None
+        self.scene_coordinator = SceneCoordinator(self.lock)
 
     def snapshot(self):
         with self.lock:
             return {
                 'detections': deepcopy(self.detections),
+                'perception_status': deepcopy(self.perception_status),
                 'mission': deepcopy(self.mission),
                 'health': deepcopy(self.health),
                 'server_time': time.time(),
             }
+
+    def freeze_scene(self):
+        """冻结当前场景；图片字节仍由调用者在同一把锁内读取。"""
+        with self.lock:
+            # coordinator 已与每次检测回调同步，图像后到时也会补齐时间戳。
+            return self.scene_coordinator.snapshot()
+
+    def wait_for_detection_after(self, stamp_ns, timeout):
+        """等待一次真正完成且时间戳变化的 YOLO 场景，暂停状态不算新结果。"""
+        return self.scene_coordinator.wait_after(stamp_ns, timeout)
 
 
 class RosBridge(Node):
@@ -53,7 +79,12 @@ class RosBridge(Node):
         super().__init__('brain_ros_bridge')
         self.declare_parameter(
             'frame_topic', '/stereo/right/image_rect/compressed')
+        self.declare_parameter('frame_cache_size', 30)
+        self.declare_parameter('frame_cache_age_seconds', 3.0)
         self.shared = shared
+        self.frame_cache = TimestampedFrameCache(
+            self.get_parameter('frame_cache_size').value,
+            self.get_parameter('frame_cache_age_seconds').value)
         self.notify = None
         self.plan_client = ActionClient(self, PlanMission, '/mission/plan')
         self.confirm_client = self.create_client(ConfirmMission, '/mission/confirm')
@@ -64,6 +95,9 @@ class RosBridge(Node):
         self.create_subscription(
             SemanticDetectionArray, '/perception/semantic_detections',
             self._detections_callback, 10)
+        self.create_subscription(
+            String, '/perception/semantic_status',
+            self._semantic_status_callback, 10)
         self.create_subscription(
             MissionState, '/mission/state', self._mission_callback, 20)
         self.create_subscription(
@@ -123,16 +157,52 @@ class RosBridge(Node):
                     'frame_id': item.map_position.header.frame_id,
                 } if item.has_map_position else None),
             })
+        stamp_ns = (msg.header.stamp.sec * 1_000_000_000
+                    + msg.header.stamp.nanosec)
+        paired_frame = self.frame_cache.get(stamp_ns)
         with self.shared.lock:
             self.shared.detections = {
+                'state': 'valid' if values else 'valid_empty',
                 'model': msg.model, 'latency_ms': msg.latency_ms,
-                'stamp_ns': (msg.header.stamp.sec * 1_000_000_000
-                             + msg.header.stamp.nanosec),
+                'stamp_ns': stamp_ns,
                 'image': {'width': msg.image_width, 'height': msg.image_height},
                 'detections': values,
             }
+            self.shared.detection_frame = paired_frame
+            self.shared.detection_frame_stamp_ns = (
+                stamp_ns if paired_frame is not None else None)
             self.shared.health['semantic'] = {
                 'state': 'ok', 'count': len(values), 'model': msg.model}
+            self.shared.perception_status = {
+                'state': 'ok', 'reason_code': '',
+                'message': f'识别到 {len(values)} 个目标'}
+            self.shared.scene_coordinator.update_detection(
+                self.shared.detections,
+                self.shared.detection_frame_stamp_ns)
+        self._changed()
+
+    def _semantic_status_callback(self, msg):
+        """暂停或错误只更新状态，不用空数组覆盖最后一次真实 YOLO 场景。"""
+        try:
+            value = json.loads(msg.data)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            value = {'state': 'error', 'message': '语义状态不是有效 JSON'}
+        state = str(value.get('state', 'error'))
+        if state == 'ok':
+            return
+        with self.shared.lock:
+            self.shared.perception_status = {
+                'state': state,
+                'reason_code': str(value.get('reason_code', '')),
+                'message': str(value.get('message', '')),
+            }
+            previous = self.shared.health.get('semantic', {})
+            self.shared.health['semantic'] = {
+                **previous, 'state': state,
+                'reason_code': str(value.get('reason_code', '')),
+                'message': str(value.get('message', '')),
+            }
+            self.shared.scene_coordinator.wake()
         self._changed()
 
     def _mission_callback(self, msg):
@@ -147,8 +217,17 @@ class RosBridge(Node):
         self._changed()
 
     def _frame_callback(self, msg):
+        stamp_ns = (msg.header.stamp.sec * 1_000_000_000
+                    + msg.header.stamp.nanosec)
+        frame = bytes(msg.data)
+        self.frame_cache.add(stamp_ns, frame)
         with self.shared.lock:
-            self.shared.frame = bytes(msg.data)
+            self.shared.frame = frame
+            # 压缩图和检测回调可能乱序到达；后到的同时间戳帧补全配对。
+            if self.shared.detections.get('stamp_ns') == stamp_ns:
+                self.shared.detection_frame = frame
+                self.shared.detection_frame_stamp_ns = stamp_ns
+                self.shared.scene_coordinator.pair_image(stamp_ns)
             self.shared.health['camera'] = {'state': 'ok'}
         self._changed()
 

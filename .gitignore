@@ -6,4 +6,5 @@ __pycache__/
 *.pyc
 maps/
 acceptance_dataset/
+qwen_logs/
 model/

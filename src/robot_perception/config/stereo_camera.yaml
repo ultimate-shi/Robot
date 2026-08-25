@@ -34,7 +34,7 @@ stereo_splitter:
     right_frame_id: "stereo_right_optical_frame"  # 右目 ROS optical 坐标系，z 前、x 右、y 下
     left_first: true  # true 表示拼接图左半幅是左目；必须通过遮挡镜头确认
     frame_skip: 0  # 处理抽帧数；0 每帧处理，1 每两帧处理一帧，2 每三帧处理一帧
-    recognition_rate: 10.0  # 正常模式输出给极线校正和识别模型的双目频率；标定模式忽略此限制
+    recognition_rate: 5.0  # 完整大脑实测 10 Hz 会积压约 0.7 s；5 Hz 优先保证双目同步与里程计实时性
     output_encoding: "passthrough"  # 保持 usb_cam 输出编码；本节点不做颜色空间转换
 
 stereo_pair_throttle:

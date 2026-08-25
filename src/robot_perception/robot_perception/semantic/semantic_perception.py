@@ -25,6 +25,10 @@ from std_msgs.msg import String
 from tf2_ros import Buffer, TransformListener
 
 
+class InferencePaused(RuntimeError):
+    """Qwen 正常占用共享 NPU；该状态不能伪装成 YOLO 零检测。"""
+
+
 class SemanticPerception(Node):
     """低频调用YOLO服务，高带宽图像仍留在本机ROS进程内."""
 
@@ -161,7 +165,18 @@ class SemanticPerception(Node):
         try:
             with urlopen(request, timeout=self.request_timeout) as response:
                 payload = json.loads(response.read().decode('utf-8'))
-        except (HTTPError, URLError, TimeoutError) as exc:
+        except HTTPError as exc:
+            try:
+                error_payload = json.loads(exc.read().decode('utf-8'))
+            except (UnicodeDecodeError, json.JSONDecodeError):
+                error_payload = {}
+            detail = error_payload.get('detail', {})
+            if (isinstance(detail, dict)
+                    and detail.get('code') == 'NPU_BUSY_LLM'):
+                raise InferencePaused(str(detail.get(
+                    'message', 'Qwen 正在占用 NPU'))) from exc
+            raise RuntimeError(f'检测服务不可用: {exc}') from exc
+        except (URLError, TimeoutError) as exc:
             raise RuntimeError(f'检测服务不可用: {exc}') from exc
         depth = self._depth_array(depth_msg)
         detections = []
@@ -185,12 +200,22 @@ class SemanticPerception(Node):
     def _inference_finished(self, future):
         try:
             payload = future.result()
+        except InferencePaused as exc:
+            # 暂停不等于成功检测到零目标，保留上一份有效语义消息。
+            self._publish_status(
+                'paused', str(exc), reason_code='NPU_BUSY_LLM',
+                retryable=True)
         except Exception as exc:
-            self._publish_status('error', str(exc))
+            # 真实错误也不发布伪造空场景；消费者通过状态判断旧结果是否可用。
+            self._publish_status(
+                'error', str(exc), reason_code='DETECTOR_FAILED',
+                retryable=True)
         else:
             self._publish_payload(payload)
             self._publish_status(
                 'ok', f"识别到 {len(payload['detections'])} 个目标",
+                scene_state=('valid' if payload['detections']
+                             else 'valid_empty'),
                 latency_ms=payload['latency_ms'], model=payload['model'])
         finally:
             with self.lock:

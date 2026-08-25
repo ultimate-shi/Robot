@@ -1,4 +1,4 @@
-// 使用方法：由 robot_brain 网页加载，负责相机、聊天、任务预览和多用户控制交互。
+// 使用方法：由 robot_brain 网页加载，负责实时识别、聊天、任务预览和多用户控制交互。
 function randomId() {
   // randomUUID 在部分浏览器的局域网纯 HTTP 页面中不可用；租约只需随机区分标签页。
   if (globalThis.crypto?.randomUUID) return globalThis.crypto.randomUUID();
@@ -24,8 +24,7 @@ const elements = Object.fromEntries([
   'exploreButton', 'followButton', 'previewPanel', 'previewText',
   'candidateList', 'confirmButton', 'closePreview', 'cameraCanvas',
   'cameraEmpty', 'mapCanvas', 'mapEmpty', 'mapState', 'detectionCount',
-  'detectionChips', 'detectionSummary', 'healthGrid', 'captureButton',
-  'detectButton'
+  'detectionChips', 'detectionSummary', 'captureButton', 'detectButton'
 ].map(id => [id, document.getElementById(id)]));
 
 elements.clientValue.textContent = clientId.slice(0, 8);
@@ -35,6 +34,7 @@ let reconnectTimer;
 let latestDetections = [];
 let activePreview = null;
 let latestCameraBitmap = null;
+const thinkingMessages = new Map();
 
 function requestId() { return randomId(); }
 
@@ -90,10 +90,16 @@ async function updateStateByHttp() {
 function handleSocketMessage(message) {
   if (message.type === 'state') updateSharedState(message);
   if (message.type === 'chat_status') {
-    elements.queueState.textContent = message.state === 'queued'
-      ? `排队第 ${message.position} 位` : '模型正在回答';
+    const label = message.state === 'queued'
+      ? `Qwen 正在排队（第 ${message.position} 位）`
+      : (message.state === 'refreshing_vision'
+        ? 'Qwen 已完成，正在刷新最新 YOLO 场景'
+        : 'Qwen 正在分析结构化场景');
+    elements.queueState.textContent = label;
+    showThinking(message.request_id, label);
   }
   if (message.type === 'chat_result') {
+    clearThinking(message.request_id);
     appendMessage('robot', message.answer);
     if (message.preview) showPreview(message.preview);
     elements.queueState.textContent = message.state === 'completed' ? '推理队列空闲' : '模型调用失败';
@@ -103,7 +109,12 @@ function handleSocketMessage(message) {
 function updateSharedState(state) {
   const lease = state.lease || {};
   const mission = state.mission || {};
-  latestDetections = state.detections?.detections || [];
+  const detectionState = state.detections || {};
+  const semanticHealth = state.health?.semantic || {};
+  const detectionMode = semanticHealth.state === 'paused'
+    ? 'YOLO 暂停 · 显示上次结果'
+    : (semanticHealth.state === 'error' ? 'YOLO 异常 · 显示上次结果' : '实时');
+  latestDetections = detectionState.detections || [];
   elements.leaseBadge.textContent = lease.controller_short_id
     ? `控制者 ${lease.controller_short_id}` : '控制权空闲';
   elements.leaseBadge.className = `badge ${lease.controller_short_id ? 'warning' : ''}`;
@@ -111,9 +122,15 @@ function updateSharedState(state) {
   elements.taskValue.textContent = translateTask(lease.task || mission.task) || '无';
   elements.controllerValue.textContent = lease.controller_short_id || '无';
   elements.detectionCount.textContent = latestDetections.length
-    ? `${latestDetections.length} 个目标` : '未识别到目标';
+    ? `${detectionMode} · ${latestDetections.length} 个目标`
+    : `${detectionMode} · 未识别到目标`;
   drawDetectionChips();
-  drawHealth(state.health || {});
+  const details = latestDetections.map(detectionDescription);
+  const latency = Number.isFinite(detectionState.latency_ms)
+    ? ` · ${Number(detectionState.latency_ms).toFixed(0)} ms` : '';
+  elements.detectionSummary.textContent = details.length
+    ? `${detectionMode}${latency}\n${details.join('\n')}`
+    : `${detectionMode}${latency}\n当前画面未识别到目标`;
 }
 
 function translateTask(task) {
@@ -146,17 +163,6 @@ function showDetectionResults(message = '') {
     : `${message || '识别完成'}\n当前画面未识别到目标`;
 }
 
-function drawHealth(health) {
-  const labels = {web: '网页', camera: '相机', semantic: '语义', slam: '建图', nav2: '规划'};
-  elements.healthGrid.replaceChildren(...Object.entries(labels).map(([key, label]) => {
-    const state = health[key]?.state || 'waiting';
-    const item = document.createElement('div');
-    item.className = `health-item ${state === 'ok' ? 'ok' : (state === 'error' ? 'error' : '')}`;
-    item.innerHTML = `<strong>${label}</strong><span>${state}</span>`;
-    return item;
-  }));
-}
-
 function appendMessage(kind, text) {
   const message = document.createElement('div');
   message.className = `message ${kind}`;
@@ -165,16 +171,45 @@ function appendMessage(kind, text) {
   elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
 }
 
+function showThinking(id, label = 'Qwen 正在思考') {
+  let message = thinkingMessages.get(id);
+  if (!message) {
+    message = document.createElement('div');
+    message.className = 'message robot thinking';
+    const text = document.createElement('span');
+    text.className = 'thinking-label';
+    const dots = document.createElement('span');
+    dots.className = 'thinking-dots';
+    dots.innerHTML = '<i></i><i></i><i></i>';
+    message.append(text, dots);
+    elements.chatLog.appendChild(message);
+    thinkingMessages.set(id, message);
+  }
+  message.querySelector('.thinking-label').textContent = label;
+  elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
+}
+
+function clearThinking(id) {
+  const message = thinkingMessages.get(id);
+  if (message) message.remove();
+  thinkingMessages.delete(id);
+}
+
 elements.chatForm.addEventListener('submit', async event => {
   event.preventDefault();
   const text = elements.chatInput.value.trim();
   if (!text) return;
   elements.chatInput.value = '';
   appendMessage('user', text);
+  const id = requestId();
+  showThinking(id, '正在提交给 Qwen');
   try {
-    const result = await api('/api/chat', {client_id: clientId, request_id: requestId(), text});
+    const result = await api('/api/chat', {client_id: clientId, request_id: id, text});
     if (result.kind === 'mission_preview') showPreview(result);
-  } catch (error) { appendMessage('system', error.message); }
+  } catch (error) {
+    clearThinking(id);
+    appendMessage('system', error.message);
+  }
 });
 
 elements.chatInput.addEventListener('keydown', event => {
@@ -200,7 +235,11 @@ function showPreview(preview) {
   activePreview = preview;
   elements.previewPanel.classList.remove('hidden');
   const candidates = preview.candidates || [];
-  elements.previewText.textContent = `${translateTask(preview.task)}：确认后将取得控制权。当前版本只生成目标和路径，不会运动。`;
+  const plan = preview.plan || {};
+  const planText = plan.success
+    ? `路径已验证，共 ${plan.path_points || 0} 个路径点。`
+    : (plan.message ? `路径尚未就绪：${plan.message}。确认时会使用最新地图重试。` : '');
+  elements.previewText.textContent = `${translateTask(preview.task)}：确认前会重新验证路径。当前版本只发布目标，不会运动。${planText}`;
   elements.candidateList.replaceChildren(...candidates.map((item, index) => {
     const label = document.createElement('label');
     label.className = 'candidate';

@@ -1,8 +1,12 @@
 """使用方法：pytest 运行本文件，验证不依赖相机硬件的双目核心处理。"""
 
+import threading
+
 import numpy as np
 
 from robot_perception.diagnostics.stereo_pipeline_benchmark import percentile
+from robot_perception.semantic.semantic_perception import (
+    InferencePaused, SemanticPerception)
 from robot_perception.stereo.stereo_depth import StereoDepth
 from robot_perception.stereo.stereo_pointcloud_filter import StereoPointCloudFilter
 from robot_perception.stereo.stereo_splitter import StereoSplitter
@@ -149,3 +153,25 @@ def test_benchmark_percentile_is_stable_for_small_samples():
     assert percentile([], 0.95) is None
     assert percentile([10.0, 20.0, 30.0], 0.5) == 20.0
     assert percentile([10.0, 20.0, 30.0], 0.95) == 30.0
+
+
+def test_semantic_pause_does_not_publish_fake_empty_result():
+    """NPU 被 Qwen 占用时只发布暂停状态，不能伪造 YOLO 零目标。"""
+    fake = type('FakeSemantic', (), {})()
+    fake.lock = threading.Lock()
+    fake.in_flight = True
+    statuses = []
+    fake._publish_status = lambda *args, **kwargs: statuses.append(
+        (args, kwargs))
+    fake._publish_payload = lambda *_: (_ for _ in ()).throw(
+        AssertionError('暂停时不应发布检测数组'))
+
+    class Future:
+        def result(self):
+            raise InferencePaused('Qwen 正在占用 NPU')
+
+    SemanticPerception._inference_finished(fake, Future())
+
+    assert fake.in_flight is False
+    assert statuses[0][0][0] == 'paused'
+    assert statuses[0][1]['reason_code'] == 'NPU_BUSY_LLM'

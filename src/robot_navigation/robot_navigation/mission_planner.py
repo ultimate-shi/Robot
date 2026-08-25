@@ -44,6 +44,8 @@ class BrainMission(Node):
             'follow_update_distance': 0.4,
             'person_lost_timeout': 2.0,
             'frontier_min_cells': 8,
+            'goal_boundary_margin': 0.3,
+            'idle_detection_mode': 'on_demand',
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -63,6 +65,14 @@ class BrainMission(Node):
             self.get_parameter('person_lost_timeout').value)
         self.frontier_min_cells = int(
             self.get_parameter('frontier_min_cells').value)
+        self.goal_boundary_margin = float(
+            self.get_parameter('goal_boundary_margin').value)
+        self.idle_detection_mode = str(
+            self.get_parameter('idle_detection_mode').value)
+        if self.idle_detection_mode not in ('on_demand', 'continuous'):
+            self.get_logger().warning(
+                'idle_detection_mode 无效，已回退为 on_demand')
+            self.idle_detection_mode = 'on_demand'
 
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
@@ -213,6 +223,7 @@ class BrainMission(Node):
             {'id': 'frontier', 'label_zh': '探索前沿', **target})
 
     def _request_path(self, target, mission_id, semantic_target):
+        target = self._bound_target_to_map(target)
         goal = self._pose(target['x'], target['y'], target['yaw'])
         self.goal_pub.publish(goal)
         self.plan_generation += 1
@@ -337,6 +348,39 @@ class BrainMission(Node):
         pose.pose.orientation.w = math.cos(float(yaw) / 2.0)
         return pose
 
+    def _bound_target_to_map(self, target):
+        """将贴近 OccupancyGrid 外缘的目标收进安全边界内。"""
+        grid = self.latest_map
+        if grid is None:
+            return dict(target)
+        resolution = float(grid.info.resolution)
+        width = int(grid.info.width)
+        height = int(grid.info.height)
+        if resolution <= 0.0 or width <= 0 or height <= 0:
+            return dict(target)
+        margin = max(resolution, self.goal_boundary_margin)
+        origin_x = float(grid.info.origin.position.x)
+        origin_y = float(grid.info.origin.position.y)
+        lower_x = origin_x + margin
+        lower_y = origin_y + margin
+        upper_x = origin_x + width * resolution - margin
+        upper_y = origin_y + height * resolution - margin
+        # 极小地图还容不下两侧边界时，只保留一个像素的内缩量。
+        if lower_x > upper_x:
+            lower_x = upper_x = origin_x + width * resolution / 2.0
+        if lower_y > upper_y:
+            lower_y = upper_y = origin_y + height * resolution / 2.0
+        bounded = dict(target)
+        bounded['x'] = min(max(float(target['x']), lower_x), upper_x)
+        bounded['y'] = min(max(float(target['y']), lower_y), upper_y)
+        if (bounded['x'] != float(target['x'])
+                or bounded['y'] != float(target['y'])):
+            self.get_logger().warning(
+                '预演目标贴近地图边界，已由 '
+                f"({float(target['x']):.3f}, {float(target['y']):.3f}) "
+                f"调整为 ({bounded['x']:.3f}, {bounded['y']:.3f})")
+        return bounded
+
     @staticmethod
     def _pose_dict(pose):
         return {
@@ -354,7 +398,8 @@ class BrainMission(Node):
         self.mission_confirmed = False
         self.plan_generation += 1
         self.path_pub.publish(Path())
-        self._set_detection_mode(False)
+        self._set_detection_mode(
+            self.idle_detection_mode == 'continuous')
         self._publish_status(state, message)
 
     def _publish_status(self, state, message, **extra):
@@ -433,6 +478,7 @@ class BrainMission(Node):
             self.active_target_id = str(semantic_target['id'])
             clearance = self.follow_distance if task == 'follow_person' else self.surface_clearance
             target = standoff_pose(robot_xy, target_xy, clearance, self.robot_radius)
+        target = self._bound_target_to_map(target)
         pose = self._pose(target['x'], target['y'], target['yaw'])
         self.goal_pub.publish(pose)
         feedback.phase = 'planning'

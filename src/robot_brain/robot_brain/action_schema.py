@@ -1,4 +1,4 @@
-"""使用方法：QwenClient 对每轮模型输出调用 parse_model_response，校验失败时绝不执行工具。"""
+"""使用方法：QwenClient 调用本模块生成不可信提案，策略授权前绝不执行工具。"""
 
 from dataclasses import dataclass
 import json
@@ -9,7 +9,7 @@ ALLOWED_ACTIONS = {'goto_object', 'follow_person', 'explore'}
 
 @dataclass(frozen=True)
 class ModelAction:
-    """通过严格白名单校验的模型动作。"""
+    """通过格式白名单的模型动作提案，仍需 CommandPolicy 授权。"""
 
     name: str
     arguments: dict

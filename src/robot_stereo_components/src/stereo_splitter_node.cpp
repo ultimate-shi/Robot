@@ -54,16 +54,16 @@ public:
       throw std::runtime_error("双目标定文件未正确加载，拒绝发布未标定图像");
     }
 
-    // 大图输入采用传感器 QoS，输出使用 RELIABLE + KEEP_LAST(1)，兼容 image_proc 精确同步。
+    // 大图输入采用传感器 QoS；图像和 CameraInfo 使用完全相同的可靠单帧队列，
+    // 避免处理链繁忙时 CameraInfo 独自积压并触发 image_proc 不同步告警。
     const auto input_qos = rclcpp::SensorDataQoS().keep_last(1);
-    const auto image_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable();
-    const auto info_qos = rclcpp::QoS(rclcpp::KeepLast(10)).reliable();
-    left_image_pub_ = create_publisher<sensor_msgs::msg::Image>(left_topic_, image_qos);
-    right_image_pub_ = create_publisher<sensor_msgs::msg::Image>(right_topic_, image_qos);
+    const auto output_qos = rclcpp::QoS(rclcpp::KeepLast(1)).reliable();
+    left_image_pub_ = create_publisher<sensor_msgs::msg::Image>(left_topic_, output_qos);
+    right_image_pub_ = create_publisher<sensor_msgs::msg::Image>(right_topic_, output_qos);
     left_info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>(
-      left_info_topic_, info_qos);
+      left_info_topic_, output_qos);
     right_info_pub_ = create_publisher<sensor_msgs::msg::CameraInfo>(
-      right_info_topic_, info_qos);
+      right_info_topic_, output_qos);
     subscription_ = create_subscription<sensor_msgs::msg::Image>(
       input_topic_, input_qos,
       std::bind(&StereoSplitterNode::image_callback, this, std::placeholders::_1));
