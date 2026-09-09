@@ -37,13 +37,13 @@ def generate_launch_description():
             description='Nav2 地图服务器加载的工作区二维占据栅格 YAML 文件路径'),
         DeclareLaunchArgument(
             'nav2_params_file',
-            default_value=os.path.join(share, 'config', 'nav2_params.yaml'),
+            default_value=os.path.join(share, 'config', 'nav2.yaml'),
             description='Nav2 各节点使用的基础参数 YAML 文件路径'),
         DeclareLaunchArgument(
             'nav2_overrides_file',
             default_value=os.path.join(
-                share, 'config', 'nav2_empty_overrides.yaml'),
-            description='叠加到基础配置上的 Nav2 参数覆盖 YAML 文件路径'),
+                share, 'config', 'nav2.yaml'),
+            description='叠加到基础配置上的 Nav2 参数 YAML；默认重复加载基础配置'),
         DeclareLaunchArgument(
             'use_map_server', default_value='true',
             description='是否加载静态地图并发布固定 map 到 odom；在线 RTAB-Map 导航时关闭'),

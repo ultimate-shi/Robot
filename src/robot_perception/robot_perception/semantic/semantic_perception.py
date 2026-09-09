@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
-"""使用方法：由 stereo_perception.launch.py 调用板端 YOLO 并发布地图语义目标。"""
+"""使用方法：由 stereo_perception.launch.py 调用板端视觉网关并发布语义感知。"""
 
 import base64
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 import json
 import math
@@ -18,7 +19,7 @@ from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
-from sensor_msgs.msg import CameraInfo, Image
+from sensor_msgs.msg import CameraInfo, CompressedImage, Image, PointCloud2, PointField
 from robot_interfaces.msg import SemanticDetection, SemanticDetectionArray
 from robot_interfaces.srv import DetectObjects, SetDetectionMode
 from std_msgs.msg import String
@@ -30,7 +31,7 @@ class InferencePaused(RuntimeError):
 
 
 class SemanticPerception(Node):
-    """低频调用YOLO服务，高带宽图像仍留在本机ROS进程内."""
+    """调用 YOLO/SegFormer，并把分割与同帧深度融合成 Nav2 点云。"""
 
     def __init__(self):
         super().__init__('semantic_perception')
@@ -51,6 +52,23 @@ class SemanticPerception(Node):
             'track_match_distance': 0.5,
             'track_timeout': 3.0,
             'detection_mode': 'on_demand',
+            'start_segmentation': True,
+            'enable_semantic_navigation': True,
+            'segmentation_rate': 5.0,
+            'segmentation_fallback_rate': 1.0,
+            'segmentation_deadline_ms': 500.0,
+            'segmentation_recovery_successes': 10,
+            'segmentation_confidence': 0.60,
+            'segmentation_max_depth_skew': 0.10,
+            'segmentation_max_range': 3.0,
+            'segmentation_point_stride': 4,
+            'traversable_erode_pixels': 5,
+            'obstacle_dilate_pixels': 3,
+            'semantic_mask_topic': '/perception/semantic_mask',
+            'semantic_overlay_topic': '/perception/semantic_overlay/compressed',
+            'semantic_obstacle_topic': '/nav/semantic_obstacle_points',
+            'semantic_clear_topic': '/nav/semantic_clear_points',
+            'segmentation_status_topic': '/perception/segmentation_status',
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -73,6 +91,30 @@ class SemanticPerception(Node):
             self.get_parameter('track_match_distance').value)
         self.track_timeout = float(
             self.get_parameter('track_timeout').value)
+        self.start_segmentation = bool(
+            self.get_parameter('start_segmentation').value)
+        self.enable_semantic_navigation = bool(
+            self.get_parameter('enable_semantic_navigation').value)
+        self.segmentation_rate = max(0.1, float(
+            self.get_parameter('segmentation_rate').value))
+        self.segmentation_fallback_rate = max(0.1, float(
+            self.get_parameter('segmentation_fallback_rate').value))
+        self.segmentation_deadline_ms = float(
+            self.get_parameter('segmentation_deadline_ms').value)
+        self.segmentation_recovery_successes = max(1, int(
+            self.get_parameter('segmentation_recovery_successes').value))
+        self.segmentation_confidence = float(
+            self.get_parameter('segmentation_confidence').value)
+        self.max_depth_skew = float(
+            self.get_parameter('segmentation_max_depth_skew').value)
+        self.segmentation_max_range = float(
+            self.get_parameter('segmentation_max_range').value)
+        self.segmentation_point_stride = max(1, int(
+            self.get_parameter('segmentation_point_stride').value))
+        self.traversable_erode_pixels = max(0, int(
+            self.get_parameter('traversable_erode_pixels').value))
+        self.obstacle_dilate_pixels = max(0, int(
+            self.get_parameter('obstacle_dilate_pixels').value))
 
         self.bridge = CvBridge()
         self.tf_buffer = Buffer()
@@ -80,8 +122,11 @@ class SemanticPerception(Node):
         self.lock = threading.Lock()
         self.latest_image = None
         self.latest_depth = None
+        self.depth_frames = deque(maxlen=20)
         self.latest_info = None
         self.in_flight = False
+        self.in_flight_detection = False
+        self.in_flight_segmentation = False
         # Node.executor 是 rclpy 用于绑定 ROS 执行器的保留属性，线程池需使用独立名称。
         self.inference_pool = ThreadPoolExecutor(max_workers=1)
         self.track_counter = 0
@@ -91,6 +136,10 @@ class SemanticPerception(Node):
         self.force_pending = False
         self.latest_payload = None
         self.latest_typed = SemanticDetectionArray()
+        self.last_segmentation_request = 0.0
+        self.last_segmentation_stamp_ns = None
+        self.segmentation_degraded = False
+        self.segmentation_recovery_count = 0
 
         self.create_subscription(
             Image, str(self.get_parameter('image_topic').value),
@@ -109,6 +158,20 @@ class SemanticPerception(Node):
             String, str(self.get_parameter('legacy_output_topic').value), 10)
         self.status_pub = self.create_publisher(
             String, '/perception/semantic_status', 10)
+        self.mask_pub = self.create_publisher(
+            Image, str(self.get_parameter('semantic_mask_topic').value), 2)
+        self.overlay_pub = self.create_publisher(
+            CompressedImage,
+            str(self.get_parameter('semantic_overlay_topic').value), 2)
+        self.obstacle_pub = self.create_publisher(
+            PointCloud2,
+            str(self.get_parameter('semantic_obstacle_topic').value), 2)
+        self.clear_pub = self.create_publisher(
+            PointCloud2,
+            str(self.get_parameter('semantic_clear_topic').value), 2)
+        self.segmentation_status_pub = self.create_publisher(
+            String,
+            str(self.get_parameter('segmentation_status_topic').value), 10)
         self.create_service(
             DetectObjects, '/perception/detect_objects',
             self._detect_service)
@@ -128,26 +191,65 @@ class SemanticPerception(Node):
             return
         with self.lock:
             self.latest_depth = msg
+            self.depth_frames.append(msg)
 
     def _info_callback(self, msg):
         with self.lock:
             self.latest_info = msg
 
+    @staticmethod
+    def _stamp_ns(msg):
+        return msg.header.stamp.sec * 1_000_000_000 + msg.header.stamp.nanosec
+
+    def _matching_depth_locked(self, image_msg):
+        """选择与图像时间最接近的深度帧，超过安全时间差则拒绝融合。"""
+        if not self.depth_frames:
+            return None
+        image_stamp = self._stamp_ns(image_msg)
+        best = min(
+            self.depth_frames,
+            key=lambda value: abs(self._stamp_ns(value) - image_stamp))
+        skew = abs(self._stamp_ns(best) - image_stamp) / 1_000_000_000.0
+        return best if skew <= self.max_depth_skew else None
+
     def _schedule_inference(self):
+        now = time.monotonic()
         with self.lock:
-            if self.detection_mode != 'continuous' and not self.force_pending:
+            run_detection = (
+                self.detection_mode == 'continuous' or self.force_pending)
+            current_rate = (self.segmentation_fallback_rate
+                            if self.segmentation_degraded
+                            else self.segmentation_rate)
+            has_new_segmentation_frame = (
+                self.latest_image is not None
+                and self._stamp_ns(self.latest_image)
+                != self.last_segmentation_stamp_ns)
+            run_segmentation = (
+                self.start_segmentation
+                and has_new_segmentation_frame
+                and now - self.last_segmentation_request >= 1.0 / current_rate)
+            if not run_detection and not run_segmentation:
                 return
             if self.in_flight or self.latest_image is None:
                 return
             self.in_flight = True
-            self.force_pending = False
+            self.in_flight_detection = run_detection
+            self.in_flight_segmentation = run_segmentation
+            if run_detection:
+                self.force_pending = False
+            if run_segmentation:
+                self.last_segmentation_request = now
+                self.last_segmentation_stamp_ns = self._stamp_ns(
+                    self.latest_image)
             image = self.latest_image
-            depth = self.latest_depth
+            depth = self._matching_depth_locked(image)
             info = self.latest_info
-        future = self.inference_pool.submit(self._infer, image, depth, info)
+        future = self.inference_pool.submit(
+            self._infer, image, depth, info, run_detection, run_segmentation)
         future.add_done_callback(self._inference_finished)
 
-    def _infer(self, image_msg, depth_msg, info_msg):
+    def _infer(self, image_msg, depth_msg, info_msg,
+               run_detection=True, run_segmentation=False):
         started = time.perf_counter()
         image = self.bridge.imgmsg_to_cv2(image_msg, desired_encoding='bgr8')
         success, encoded = cv2.imencode(
@@ -158,9 +260,16 @@ class SemanticPerception(Node):
         request_body = json.dumps({
             'image_base64': base64.b64encode(encoded).decode('ascii'),
             'min_confidence': self.min_confidence,
+            'include_segmentation': bool(run_segmentation),
         }).encode('utf-8')
+        target_url = self.inference_url
+        if not run_detection:
+            target_url = self.inference_url.rsplit('/v1/detect', 1)[0] + '/v1/segment'
+            request_body = json.dumps({
+                'image_base64': base64.b64encode(encoded).decode('ascii'),
+            }).encode('utf-8')
         request = Request(
-            self.inference_url, data=request_body,
+            target_url, data=request_body,
             headers={'Content-Type': 'application/json'}, method='POST')
         try:
             with urlopen(request, timeout=self.request_timeout) as response:
@@ -179,12 +288,14 @@ class SemanticPerception(Node):
         except (URLError, TimeoutError) as exc:
             raise RuntimeError(f'检测服务不可用: {exc}') from exc
         depth = self._depth_array(depth_msg)
-        detections = []
-        for raw in payload.get('detections', []):
-            detection = self._project_detection(
-                raw, image.shape[:2], depth, info_msg, image_msg)
-            if detection is not None:
-                detections.append(detection)
+        detections = None
+        if run_detection:
+            detections = []
+            for raw in payload.get('detections', []):
+                detection = self._project_detection(
+                    raw, image.shape[:2], depth, info_msg, image_msg)
+                if detection is not None:
+                    detections.append(detection)
         return {
             'stamp': {
                 'sec': image_msg.header.stamp.sec,
@@ -193,33 +304,62 @@ class SemanticPerception(Node):
             'image': {'width': image.shape[1], 'height': image.shape[0]},
             'model': payload.get('model', 'unknown'),
             'detections': detections,
+            'segmentation': payload.get('segmentation'),
+            'segmentation_context': {
+                'image': image, 'image_msg': image_msg,
+                'depth': depth, 'info': info_msg,
+                'depth_matched': depth_msg is not None,
+            } if run_segmentation else None,
             'latency_ms': round(
                 (time.perf_counter() - started) * 1000.0, 1),
         }
 
     def _inference_finished(self, future):
+        run_detection = getattr(self, 'in_flight_detection', True)
+        run_segmentation = getattr(self, 'in_flight_segmentation', False)
         try:
             payload = future.result()
         except InferencePaused as exc:
             # 暂停不等于成功检测到零目标，保留上一份有效语义消息。
-            self._publish_status(
-                'paused', str(exc), reason_code='NPU_BUSY_LLM',
-                retryable=True)
+            if run_detection:
+                self._publish_status(
+                    'paused', str(exc), reason_code='NPU_BUSY_LLM',
+                    retryable=True)
+            if run_segmentation:
+                self._publish_segmentation_status(
+                    'paused', str(exc), reason_code='NPU_BUSY_LLM',
+                    retryable=True)
         except Exception as exc:
             # 真实错误也不发布伪造空场景；消费者通过状态判断旧结果是否可用。
-            self._publish_status(
-                'error', str(exc), reason_code='DETECTOR_FAILED',
-                retryable=True)
+            if run_detection:
+                self._publish_status(
+                    'error', str(exc), reason_code='DETECTOR_FAILED',
+                    retryable=True)
+            if run_segmentation:
+                self.segmentation_degraded = True
+                self.segmentation_recovery_count = 0
+                self._publish_segmentation_status(
+                    'error', str(exc), reason_code='SEGMENTER_FAILED',
+                    retryable=True)
         else:
-            self._publish_payload(payload)
-            self._publish_status(
-                'ok', f"识别到 {len(payload['detections'])} 个目标",
-                scene_state=('valid' if payload['detections']
-                             else 'valid_empty'),
-                latency_ms=payload['latency_ms'], model=payload['model'])
+            if payload['detections'] is not None:
+                self._publish_payload(payload)
+                self._publish_status(
+                    'ok', f"识别到 {len(payload['detections'])} 个目标",
+                    scene_state=('valid' if payload['detections']
+                                 else 'valid_empty'),
+                    latency_ms=payload['latency_ms'], model=payload['model'])
+            if payload.get('segmentation_context') is not None:
+                self._publish_segmentation(
+                    payload.get('segmentation'),
+                    payload['segmentation_context'])
         finally:
             with self.lock:
                 self.in_flight = False
+                if hasattr(self, 'in_flight_detection'):
+                    self.in_flight_detection = False
+                if hasattr(self, 'in_flight_segmentation'):
+                    self.in_flight_segmentation = False
 
     def _detect_service(self, request, response):
         """返回最近检测；force_refresh 会安排下一帧，不在 ROS 回调中阻塞 NPU。"""
@@ -300,8 +440,229 @@ class SemanticPerception(Node):
         self.latest_payload = payload
         self.latest_typed = typed
         self.output_pub.publish(typed)
+        legacy_payload = {
+            key: payload[key] for key in (
+                'stamp', 'image', 'model', 'detections', 'latency_ms')}
         self.legacy_output_pub.publish(String(data=json.dumps(
-            payload, ensure_ascii=False)))
+            legacy_payload, ensure_ascii=False)))
+
+    @staticmethod
+    def _decode_segmentation_png(value, name):
+        try:
+            encoded = base64.b64decode(value, validate=True)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f'{name} base64 无效') from exc
+        image = cv2.imdecode(np.frombuffer(encoded, dtype=np.uint8),
+                             cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            raise ValueError(f'{name} PNG 无法解码')
+        return image
+
+    def _publish_segmentation(self, segmentation, context):
+        """发布标签、叠加图和独立 marking/clearing 点云。"""
+        if not isinstance(segmentation, dict) or segmentation.get('state') != 'ok':
+            reason = ((segmentation or {}).get('reason_code')
+                      if isinstance(segmentation, dict) else 'NO_RESULT')
+            message = ((segmentation or {}).get('message')
+                       if isinstance(segmentation, dict) else '分割服务没有返回结果')
+            self.segmentation_degraded = True
+            self.segmentation_recovery_count = 0
+            self._publish_segmentation_status(
+                'error', str(message), reason_code=str(reason or 'SEGMENTER_FAILED'))
+            return
+        try:
+            mask = self._decode_segmentation_png(
+                segmentation.get('mask_png_base64'), '类别掩码')
+            confidence = self._decode_segmentation_png(
+                segmentation.get('confidence_png_base64'), '置信度掩码')
+            image = context['image']
+            if mask.shape != image.shape[:2] or confidence.shape != mask.shape:
+                raise ValueError(
+                    f'分割尺寸不匹配: mask={mask.shape}, image={image.shape[:2]}')
+            latency_ms = float(segmentation.get('latency_ms', 0.0))
+            self._update_segmentation_rate(latency_ms)
+            image_msg = context['image_msg']
+            mask_msg = self.bridge.cv2_to_imgmsg(mask, encoding='mono8')
+            mask_msg.header = image_msg.header
+            self.mask_pub.publish(mask_msg)
+            overlay = self._segmentation_overlay(image, mask, confidence)
+            success, encoded = cv2.imencode(
+                '.jpg', overlay, [cv2.IMWRITE_JPEG_QUALITY, self.jpeg_quality])
+            if not success:
+                raise ValueError('分割叠加图 JPEG 编码失败')
+            overlay_msg = CompressedImage()
+            overlay_msg.header = image_msg.header
+            overlay_msg.format = 'jpeg'
+            overlay_msg.data = encoded.tobytes()
+            self.overlay_pub.publish(overlay_msg)
+
+            obstacle_count = clear_count = 0
+            if self.enable_semantic_navigation and context['depth_matched']:
+                obstacles, clear = self._segmentation_points(
+                    mask, confidence, context['depth'], context['info'])
+                self.obstacle_pub.publish(self._point_cloud(
+                    obstacles, image_msg.header))
+                self.clear_pub.publish(self._point_cloud(
+                    clear, image_msg.header))
+                obstacle_count, clear_count = len(obstacles), len(clear)
+            self._publish_segmentation_status(
+                'ok', 'SegFormer 分割已更新',
+                model=str(segmentation.get('model', 'unknown')),
+                latency_ms=latency_ms,
+                target_rate=(self.segmentation_fallback_rate
+                             if self.segmentation_degraded
+                             else self.segmentation_rate),
+                depth_matched=bool(context['depth_matched']),
+                navigation_enabled=self.enable_semantic_navigation,
+                obstacle_points=obstacle_count, clear_points=clear_count,
+                classes=self._visible_segmentation_classes(
+                    mask, confidence, segmentation.get('class_names', {})))
+        except Exception as exc:
+            self.segmentation_degraded = True
+            self.segmentation_recovery_count = 0
+            self._publish_segmentation_status(
+                'error', str(exc), reason_code='SEGMENTATION_OUTPUT_INVALID')
+
+    def _update_segmentation_rate(self, latency_ms):
+        """超过配置时限后退到 1 Hz，稳定十帧后恢复。"""
+        if latency_ms > self.segmentation_deadline_ms:
+            self.segmentation_degraded = True
+            self.segmentation_recovery_count = 0
+            return
+        if not self.segmentation_degraded:
+            return
+        self.segmentation_recovery_count += 1
+        if self.segmentation_recovery_count >= self.segmentation_recovery_successes:
+            self.segmentation_degraded = False
+            self.segmentation_recovery_count = 0
+
+    def _segmentation_overlay(self, image, mask, confidence):
+        palette = self._segmentation_palette()
+        colored = palette[mask]
+        visible = confidence >= int(round(self.segmentation_confidence * 255.0))
+        output = image.copy()
+        blended = cv2.addWeighted(image, 0.55, colored, 0.45, 0.0)
+        output[visible] = blended[visible]
+        return output
+
+    @staticmethod
+    def _segmentation_palette():
+        """生成稳定且避开纯黑的 ADE20K BGR 调色板。"""
+        palette = np.zeros((256, 3), dtype=np.uint8)
+        indexes = np.arange(256, dtype=np.uint16)
+        palette[:, 0] = (50 + indexes * 37 % 205).astype(np.uint8)
+        palette[:, 1] = (50 + indexes * 67 % 205).astype(np.uint8)
+        palette[:, 2] = (50 + indexes * 97 % 205).astype(np.uint8)
+        return palette
+
+    def _visible_segmentation_classes(self, mask, confidence, class_names):
+        """返回当前画面占比最高的类别、中文名和网页使用的 RGB 颜色。"""
+        threshold = int(round(self.segmentation_confidence * 255.0))
+        valid = (confidence >= threshold) & (mask < 150)
+        identifiers, counts = np.unique(mask[valid], return_counts=True)
+        palette = self._segmentation_palette()
+        labels_zh = {
+            'wall': '墙', 'building': '建筑', 'sky': '天空', 'floor': '地板',
+            'tree': '树', 'ceiling': '天花板', 'road': '道路', 'bed': '床',
+            'windowpane': '窗户', 'grass': '草地', 'cabinet': '柜子',
+            'sidewalk': '人行道', 'person': '人', 'door': '门', 'table': '桌子',
+            'plant': '植物', 'curtain': '窗帘', 'chair': '椅子', 'car': '汽车',
+            'painting': '画', 'sofa': '沙发', 'shelf': '架子', 'mirror': '镜子',
+            'rug': '地毯', 'desk': '书桌', 'lamp': '灯', 'railing': '栏杆',
+            'box': '箱子', 'stairs': '楼梯', 'bookcase': '书柜',
+            'coffee table': '茶几', 'toilet': '马桶', 'book': '书',
+            'bench': '长椅', 'stove': '炉灶', 'computer': '电脑',
+            'television receiver': '电视', 'bottle': '瓶子', 'bag': '包',
+        }
+        values = []
+        total = max(1, int(np.count_nonzero(valid)))
+        order = np.argsort(counts)[::-1]
+        for position in order[:10]:
+            identifier = int(identifiers[position])
+            name = str(class_names.get(str(identifier), f'class-{identifier}'))
+            blue, green, red = [int(value) for value in palette[identifier]]
+            values.append({
+                'id': identifier,
+                'name': name,
+                'label_zh': labels_zh.get(name, name),
+                'color': f'#{red:02x}{green:02x}{blue:02x}',
+                'ratio': round(float(counts[position]) / total, 4),
+            })
+        return values
+
+    def _segmentation_points(self, mask, confidence, depth, info):
+        """把置信语义像素反投影为相机坐标系下的障碍点和清除射线端点。"""
+        if depth is None or info is None or len(info.k) < 9:
+            return self._empty_points(), self._empty_points()
+        threshold = int(round(self.segmentation_confidence * 255.0))
+        confident = (confidence >= threshold) & (mask < 150)
+        traversable = confident & np.isin(mask, np.asarray([3, 28], np.uint8))
+        obstacle = confident & ~traversable
+        if self.traversable_erode_pixels > 0:
+            size = self.traversable_erode_pixels * 2 + 1
+            traversable = cv2.erode(
+                traversable.astype(np.uint8), np.ones((size, size), np.uint8)) > 0
+        if self.obstacle_dilate_pixels > 0:
+            size = self.obstacle_dilate_pixels * 2 + 1
+            obstacle = cv2.dilate(
+                obstacle.astype(np.uint8), np.ones((size, size), np.uint8)) > 0
+        depth_image = depth
+        if depth.shape != mask.shape:
+            depth_image = cv2.resize(
+                depth, (mask.shape[1], mask.shape[0]),
+                interpolation=cv2.INTER_NEAREST)
+        return (
+            self._pixels_to_points(obstacle, depth_image, info),
+            self._pixels_to_points(traversable, depth_image, info),
+        )
+
+    @staticmethod
+    def _empty_points():
+        return np.empty((0, 3), dtype=np.float32)
+
+    def _pixels_to_points(self, selected, depth, info):
+        sampled = np.zeros_like(selected, dtype=bool)
+        sampled[::self.segmentation_point_stride,
+                ::self.segmentation_point_stride] = True
+        rows, columns = np.nonzero(selected & sampled)
+        if rows.size == 0:
+            return self._empty_points()
+        z = depth[rows, columns].astype(np.float32)
+        valid = (np.isfinite(z) & (z > 0.05)
+                 & (z <= self.segmentation_max_range))
+        rows, columns, z = rows[valid], columns[valid], z[valid]
+        if z.size == 0:
+            return self._empty_points()
+        fx, fy = float(info.k[0]), float(info.k[4])
+        cx, cy = float(info.k[2]), float(info.k[5])
+        if fx <= 0.0 or fy <= 0.0:
+            return self._empty_points()
+        x = (columns.astype(np.float32) - cx) * z / fx
+        y = (rows.astype(np.float32) - cy) * z / fy
+        return np.column_stack((x, y, z)).astype(np.float32)
+
+    @staticmethod
+    def _point_cloud(points, source_header):
+        cloud = PointCloud2()
+        cloud.header = source_header
+        cloud.height = 1
+        cloud.width = len(points)
+        cloud.fields = [
+            PointField(name='x', offset=0, datatype=PointField.FLOAT32, count=1),
+            PointField(name='y', offset=4, datatype=PointField.FLOAT32, count=1),
+            PointField(name='z', offset=8, datatype=PointField.FLOAT32, count=1),
+        ]
+        cloud.is_bigendian = False
+        cloud.point_step = 12
+        cloud.row_step = cloud.point_step * cloud.width
+        cloud.is_dense = True
+        cloud.data = np.asarray(points, dtype=np.float32).tobytes()
+        return cloud
+
+    def _publish_segmentation_status(self, state, message, **extra):
+        self.segmentation_status_pub.publish(String(data=json.dumps({
+            'state': state, 'message': message, **extra,
+        }, ensure_ascii=False)))
 
     @staticmethod
     def _depth_array(msg):

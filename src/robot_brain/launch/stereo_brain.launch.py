@@ -37,6 +37,15 @@ def generate_launch_description():
             'detection_mode', default_value='continuous',
             description='网页 YOLO 检测模式，默认 continuous 持续识别'),
         DeclareLaunchArgument(
+            'start_segmentation', default_value='true',
+            description='是否启动 SegFormer 室内场景分割'),
+        DeclareLaunchArgument(
+            'enable_semantic_navigation', default_value='true',
+            description='是否让 SegFormer 独立语义层影响 Nav2 局部代价地图'),
+        DeclareLaunchArgument(
+            'segmentation_rate', default_value='5.0',
+            description='SegFormer 正常目标频率，过载时自动降到 1Hz'),
+        DeclareLaunchArgument(
             'log_level', default_value='warn',
             description='本地大脑整套 ROS 节点及网页服务的日志级别'),
         DeclareLaunchArgument(
@@ -59,6 +68,10 @@ def generate_launch_description():
             launch_arguments={
                 'inference_url': LaunchConfiguration('inference_url'),
                 'detection_mode': LaunchConfiguration('detection_mode'),
+                'start_segmentation': LaunchConfiguration('start_segmentation'),
+                'enable_semantic_navigation': LaunchConfiguration(
+                    'enable_semantic_navigation'),
+                'segmentation_rate': LaunchConfiguration('segmentation_rate'),
                 'start_pointcloud_filter': 'false',
                 'log_level': LaunchConfiguration('log_level'),
             }.items()),

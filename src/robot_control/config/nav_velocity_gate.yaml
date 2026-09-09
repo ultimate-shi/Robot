@@ -1,0 +1,8 @@
+# 使用方法：由 robot_control/launch/nav_velocity_gate.launch.py 加载；现场差异请通过 launch 参数覆盖。
+nav_controller_node:
+  ros__parameters:
+    update_rate: 20.0
+    cmd_vel_timeout: 0.5
+    require_active_nav_goal: false
+    nav_goal_status_timeout: 3.0
+    nav_cmd_active_threshold: 0.02

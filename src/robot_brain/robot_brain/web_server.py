@@ -367,6 +367,16 @@ def create_app(bridge, shared):
                 Response(content=data, media_type='image/jpeg',
                          headers={'Cache-Control': 'no-store'}))
 
+    @app.get('/api/segmentation.jpg')
+    async def segmentation_frame():
+        """返回与 SegFormer 掩码同帧的半透明叠加图。"""
+        with shared.lock:
+            age = time.monotonic() - shared.segmentation_frame_time
+            data = shared.segmentation_frame if age <= 2.0 else None
+        return (Response(status_code=204) if data is None else
+                Response(content=data, media_type='image/jpeg',
+                         headers={'Cache-Control': 'no-store'}))
+
     @app.get('/api/map')
     async def map_data():
         with shared.lock:

@@ -93,17 +93,17 @@ def generate_launch_description():
             description='已有地图模式下 map 到 odom 的偏航角，单位为弧度'),
         DeclareLaunchArgument(
             'nav2_params_file',
-            default_value=os.path.join(nav_share, 'config', 'nav2_params.yaml'),
+            default_value=os.path.join(nav_share, 'config', 'nav2.yaml'),
             description='Nav2 基础参数 YAML 文件路径'),
         DeclareLaunchArgument(
             'nav2_overrides_file',
             default_value=os.path.join(
-                nav_share, 'config', 'nav2_stereo_overrides.yaml'),
+                nav_share, 'config', 'stereo_robot.yaml'),
             description='双目实时障碍点云使用的 Nav2 参数覆盖 YAML 文件路径'),
         DeclareLaunchArgument(
             'controller_manager_config_file',
             default_value=os.path.join(
-                control_share, 'config', 'controller_manager.yaml'),
+                control_share, 'config', 'controllers.yaml'),
             description='ros2_control 管理器参数 YAML 文件路径'),
         DeclareLaunchArgument(
             'controller_config_file',
@@ -135,8 +135,17 @@ def generate_launch_description():
             'inference_url', default_value='http://127.0.0.1:9100',
             description='语义感知节点调用的本地推理服务基础 URL'),
         DeclareLaunchArgument(
-            'detection_mode', default_value='on_demand',
-            description='YOLO 检测模式，可选 on_demand 或 continuous'),
+            'detection_mode', default_value='continuous',
+            description='YOLO 检测模式，完整实机入口默认 continuous 持续识别'),
+        DeclareLaunchArgument(
+            'start_segmentation', default_value='true',
+            description='是否启动 SegFormer 室内语义分割'),
+        DeclareLaunchArgument(
+            'enable_semantic_navigation', default_value='true',
+            description='是否启用独立 SegFormer 局部代价地图层的数据源'),
+        DeclareLaunchArgument(
+            'segmentation_rate', default_value='5.0',
+            description='SegFormer 正常目标频率，过载时自动降至 1Hz'),
         DeclareLaunchArgument(
             'foxglove_port', default_value='8765',
             description='Foxglove Bridge 监听的 WebSocket 端口'),
@@ -289,6 +298,10 @@ def generate_launch_description():
             stage_delay(LaunchConfiguration('perception_start_delay')), {
                 'inference_url': LaunchConfiguration('inference_url'),
                 'detection_mode': LaunchConfiguration('detection_mode'),
+                'start_segmentation': LaunchConfiguration('start_segmentation'),
+                'enable_semantic_navigation': LaunchConfiguration(
+                    'enable_semantic_navigation'),
+                'segmentation_rate': LaunchConfiguration('segmentation_rate'),
                 'log_level': log_level,
             }),
         delayed_include(

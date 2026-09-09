@@ -26,11 +26,17 @@
       <article class="panel camera-panel">
         <div class="panel-heading">
           <div><span class="panel-index">01</span><h2>双目视觉</h2></div>
-          <span id="detectionCount" class="muted">实时识别启动中</span>
+          <div class="camera-heading-actions">
+            <label class="toggle-label"><input id="segmentationToggle" type="checkbox" checked>分割叠加</label>
+            <span id="detectionCount" class="muted">实时识别启动中</span>
+          </div>
         </div>
         <div class="canvas-wrap">
           <canvas id="cameraCanvas" width="640" height="480"></canvas>
           <div id="cameraEmpty" class="empty-state">等待右目校正画面</div>
+        </div>
+        <div id="segmentationLegend" class="segmentation-legend">
+          <span class="muted">等待 SegFormer 颜色图例</span>
         </div>
         <div class="chip-row">
           <button id="detectButton">立即刷新识别</button>

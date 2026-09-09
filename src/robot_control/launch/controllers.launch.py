@@ -20,8 +20,6 @@ def generate_launch_description():
     control_share = get_package_share_directory('robot_control')
     description_share = get_package_share_directory('robot_description')
     xacro_file = os.path.join(description_share, 'urdf', 'robot.xacro')
-    default_manager_config = os.path.join(
-        control_share, 'config', 'controller_manager.yaml')
     default_controller_config = os.path.join(
         control_share, 'config', 'controllers.yaml')
     log_level = LaunchConfiguration('log_level')
@@ -37,8 +35,8 @@ def generate_launch_description():
     ]
     actions = [
         DeclareLaunchArgument(
-            'manager_config_file', default_value=default_manager_config,
-            description='controller_manager 参数 YAML 文件路径'),
+            'manager_config_file', default_value=default_controller_config,
+            description='controller_manager 参数 YAML 文件路径；默认与控制器共用同名配置'),
         DeclareLaunchArgument(
             'controller_config_file', default_value=default_controller_config,
             description='各关节控制器参数 YAML 文件路径'),

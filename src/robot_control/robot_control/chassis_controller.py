@@ -6,7 +6,7 @@
 输入：
 - /cmd_vel：在 launch 中被 remap 到 /cmd_vel_safe，因此只接收 obstacle_avoidance 过滤后的速度。
 - /wheel_states：chassis_feedback_node 从 /joint_states 解析出的四轮转向角和轮速。
-- terrain_params.yaml：轮距、轴距、轮半径和 terrain_status 使能等参数。
+- chassis_control.yaml：轮距、轴距、轮半径和 terrain_status 使能等参数。
 
 输出：
 - /steering_controller/commands：四个转向关节的位置命令。

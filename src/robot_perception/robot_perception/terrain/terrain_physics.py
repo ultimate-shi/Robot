@@ -5,7 +5,7 @@
 
 输入：
 - TerrainHeightmap 查询出的轮子高度、车体姿态、前向地形变化。
-- terrain_params.yaml 中的 max_grade_deg、step_threshold、dropoff_threshold 等阈值。
+- terrain_analysis.yaml 中的 max_grade_deg、step_threshold、dropoff_threshold 等阈值。
 
 输出：
 - TerrainConstraint：包含 is_blocked、block_reason、slip_factor、traversability、body_z、roll、pitch。

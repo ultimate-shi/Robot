@@ -1,0 +1,11 @@
+# 使用方法：由 robot_control/launch/chassis_control.launch.py 加载；现场差异请通过 launch 参数覆盖。
+chassis_controller:
+  ros__parameters:
+    wheelbase: 0.4
+    track: 0.2
+    radius: 0.05
+    motion_mode: four_ws
+    steering_limit: 1.57
+    ackermann_min_turning_speed: 0.04
+    publish_odometry: true  # 独立旧控制入口保持兼容；完整双目入口覆盖为 false，由 EKF 独占 /odom
+    terrain_check_enabled: true

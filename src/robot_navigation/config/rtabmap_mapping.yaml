@@ -1,22 +1,4 @@
-# 使用方法：由所属 Package 的 launch 或节点加载，请通过参数覆盖现场配置。
-# 纯双目建图默认参数。当前 IMU 未接入，所有高影响参数均可在现场继续调优。
-stereo_odometry:
-  ros__parameters:
-    frame_id: base_link
-    odom_frame_id: odom
-    publish_tf: true
-    wait_for_transform: 1.0  # 实测视觉处理延迟约 0.6~0.9 s，给同时间戳 odom TF 留出到达时间
-    wait_imu_to_init: false
-    approx_sync: false
-    topic_queue_size: 2
-    sync_queue_size: 5
-    qos: 1
-    Odom/Strategy: "0"
-    Odom/ResetCountdown: "3"
-    OdomF2M/MaxSize: "1000"
-    Vis/MinInliers: "15"
-    Vis/MaxFeatures: "800"
-
+# 使用方法：由 robot_navigation/launch/rtabmap_mapping.launch.py 加载；现场差异请通过 launch 参数覆盖。
 rtabmap:
   ros__parameters:
     frame_id: base_link
@@ -50,12 +32,3 @@ rtabmap:
     Grid/MaxObstacleHeight: "0.80"
     Grid/MinGroundHeight: "-0.20"
     Grid/MaxGroundHeight: "0.05"
-
-mapping_snapshot_manager:
-  ros__parameters:
-    map_topic: /map
-    cloud_topic: /mapping/cloud_map
-    preview_directory: /tmp/robot_preview
-    save_directory: /workspace/maps
-    snapshot_basename: current
-    snapshot_timezone: Asia/Shanghai  # 长期快照目录名和元数据统一使用北京时间

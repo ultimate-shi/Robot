@@ -12,7 +12,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     default_config = os.path.join(
         get_package_share_directory('robot_perception'),
-        'config', 'terrain_perception.yaml')
+        'config', 'virtual_imu.yaml')
     return LaunchDescription([
         DeclareLaunchArgument(
             'config_file', default_value=default_config,

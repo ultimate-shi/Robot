@@ -1,0 +1,37 @@
+# 使用方法：由 robot_perception/launch/semantic_detection.launch.py 加载；现场差异请通过 launch 参数覆盖。
+semantic_perception:
+  ros__parameters:
+    image_topic: /stereo/right/image_rect
+    depth_topic: /stereo/depth/right/image
+    camera_info_topic: /stereo/right/camera_info
+    output_topic: /perception/semantic_detections
+    legacy_output_topic: /perception/semantic_detections_json
+    inference_url: http://127.0.0.1:9100/v1/detect
+    map_frame: map
+    detection_mode: on_demand
+    max_inference_rate: 5.0
+    request_timeout: 2.0
+    jpeg_quality: 80
+    min_confidence: 0.35
+    depth_center_ratio: 0.4
+    min_valid_depth_pixels: 12
+    track_match_distance: 0.5
+    track_timeout: 3.0
+    # SegFormer 导航分割默认开启；模型缺失时只降级该链路，不影响 YOLO 和几何避障。
+    start_segmentation: true
+    enable_semantic_navigation: true
+    segmentation_rate: 5.0
+    segmentation_fallback_rate: 1.0
+    segmentation_deadline_ms: 500.0
+    segmentation_recovery_successes: 10
+    segmentation_confidence: 0.60
+    segmentation_max_depth_skew: 0.10
+    segmentation_max_range: 3.0
+    segmentation_point_stride: 4
+    traversable_erode_pixels: 5
+    obstacle_dilate_pixels: 3
+    semantic_mask_topic: /perception/semantic_mask
+    semantic_overlay_topic: /perception/semantic_overlay/compressed
+    semantic_obstacle_topic: /nav/semantic_obstacle_points
+    semantic_clear_topic: /nav/semantic_clear_points
+    segmentation_status_topic: /perception/segmentation_status

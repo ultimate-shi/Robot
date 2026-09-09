@@ -1,0 +1,15 @@
+# 使用方法：由 robot_control/launch/wheel_odometry.launch.py 加载；现场差异请通过 launch 参数覆盖。
+four_wheel_odometry:
+  ros__parameters:
+    enabled: false  # MCU 和四轮实际转角未接入前保持关闭
+    joint_state_topic: /joint_states  # MCU 桥接后的标准四轮关节状态
+    output_topic: /wheel/odom  # 供 EKF 使用且不发布 TF 的轮式里程计
+    status_topic: /wheel/odometry_status  # 四轮反馈完整性和超时状态
+    wheelbase: 0.4  # 前后轮轴距，单位 m
+    track: 0.2  # 左右轮距，单位 m
+    wheel_radius: 0.05  # 轮胎有效滚动半径，单位 m
+    feedback_timeout: 0.25  # 四轮状态允许的最大消息间隔，单位 s
+    max_wheel_speed: 40.0  # 单轮合理最大角速度，单位 rad/s
+    velocity_variance: 0.02  # vx、vy 协方差初值，单位 (m/s)^2
+    yaw_rate_variance: 0.03  # yaw_rate 协方差初值，单位 (rad/s)^2
+    wheel_velocity_sign: [1.0, 1.0, 1.0, 1.0]  # 左前、右前、左后、右后轮速方向符号

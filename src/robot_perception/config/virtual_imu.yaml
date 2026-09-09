@@ -1,0 +1,8 @@
+# 使用方法：由 robot_perception/launch/virtual_imu.launch.py 加载；现场差异请通过 launch 参数覆盖。
+virtual_imu:
+  ros__parameters:
+    publish_rate: 20.0
+    orientation_noise_std: 0.0087
+    angular_vel_noise_std: 0.005
+    linear_accel_noise_std: 0.02
+    gravity: 9.81

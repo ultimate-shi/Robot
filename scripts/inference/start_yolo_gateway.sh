@@ -5,6 +5,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 MODEL_PATH="${ROBOT_YOLO_MODEL:-${REPO_DIR}/model/yolo/yolov8n.rknn}"
+SEGFORMER_MODEL="${ROBOT_SEGFORMER_MODEL:-${REPO_DIR}/model/segformer/segformer-b0-ade20k-fp16.rknn}"
 QWEN_DIR="${ROBOT_QWEN_DIR:-${REPO_DIR}/model/qwen2.5-3b-instruct}"
 QWEN_NAME='Qwen2.5-3B-Instruct-rk3588-w8a8-opt-0-hybrid-ratio-0.5.rkllm'
 QWEN_BYTES=3738346748
@@ -115,12 +116,20 @@ fi
 export PYTHONPATH="${SCRIPT_DIR}${PYTHONPATH:+:${PYTHONPATH}}"
 export ROBOT_YOLO_MODEL="${MODEL_PATH}"
 export ROBOT_DETECTOR_PLUGIN='rknn_yolov8_detector:detect'
+if [[ -s "${SEGFORMER_MODEL}" ]]; then
+  export ROBOT_SEGFORMER_MODEL="${SEGFORMER_MODEL}"
+  export ROBOT_SEGMENTER_PLUGIN='rknn_segformer_detector:segment'
+else
+  unset ROBOT_SEGMENTER_PLUGIN
+  echo "警告：SegFormer 模型不存在，YOLO 正常启动，导航语义分割将降级：${SEGFORMER_MODEL}" >&2
+fi
 export ROBOT_INFERENCE_HOST="${ROBOT_INFERENCE_HOST:-127.0.0.1}"
 export ROBOT_INFERENCE_PORT="${ROBOT_INFERENCE_PORT:-9100}"
 export ROBOT_LLM_MODEL="${ROBOT_LLM_MODEL:-qwen2.5-3b-instruct-w8a8-rk3588}"
 export ROBOT_LLM_MAX_TOKENS="${ROBOT_LLM_MAX_TOKENS:-96}"
 
 echo "YOLO 模型：${ROBOT_YOLO_MODEL}"
+echo "SegFormer 模型：${ROBOT_SEGFORMER_MODEL:-未配置}"
 echo "Qwen 文本服务：${ROBOT_LLM_ENDPOINT:-${ROBOT_VLM_ENDPOINT}}"
 echo "推理网关：http://${ROBOT_INFERENCE_HOST}:${ROBOT_INFERENCE_PORT}"
 "${PYTHON_BIN}" "${SCRIPT_DIR}/brain_inference_server.py"

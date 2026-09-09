@@ -12,7 +12,8 @@ from launch_ros.parameter_descriptions import ParameterValue
 
 def generate_launch_description():
     default_config = os.path.join(
-        get_package_share_directory('robot_control'), 'config', 'control.yaml')
+        get_package_share_directory('robot_control'),
+        'config', 'chassis_control.yaml')
     log_level = LaunchConfiguration('log_level')
 
     def staggered(index, node):

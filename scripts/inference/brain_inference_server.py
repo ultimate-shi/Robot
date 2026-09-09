@@ -9,6 +9,7 @@ import base64
 import importlib
 import json
 import os
+import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
@@ -22,6 +23,13 @@ class DetectRequest(BaseModel):
 
     image_base64: str
     min_confidence: float = 0.35
+    include_segmentation: bool = False
+
+
+class SegmentRequest(BaseModel):
+    """独立分割请求供按需 YOLO 模式下的导航语义链使用。"""
+
+    image_base64: str
 
 
 class ChatRequest(BaseModel):
@@ -41,6 +49,9 @@ class InferenceGateway:
         self.lock = asyncio.Lock()
         self.detector_name = os.environ.get('ROBOT_DETECTOR_PLUGIN', '')
         self.detector = self._load_detector(self.detector_name)
+        self.segmenter_name = os.environ.get('ROBOT_SEGMENTER_PLUGIN', '')
+        self.segmenter = self._load_detector(self.segmenter_name)
+        self.last_segmentation_metrics = {}
         self.llm_endpoint = os.environ.get(
             'ROBOT_LLM_ENDPOINT', os.environ.get(
                 'ROBOT_VLM_ENDPOINT', '')).rstrip('/')
@@ -83,11 +94,66 @@ class InferenceGateway:
             raise HTTPException(400, 'image_base64 无效') from exc
         async with self.lock:
             try:
-                detections = await asyncio.to_thread(
-                    self.detector, image, request.min_confidence)
+                detections, segmentation = await asyncio.to_thread(
+                    self._detect_and_optional_segment, image,
+                    request.min_confidence, request.include_segmentation)
             except Exception as exc:
                 raise HTTPException(500, f'RKNN 检测失败: {exc}') from exc
-        return {'model': self.detector_name, 'detections': detections}
+        result = {'model': self.detector_name, 'detections': detections}
+        if request.include_segmentation:
+            result['segmentation'] = segmentation
+        return result
+
+    async def segment(self, request):
+        """独立运行分割；与检测和 Qwen 使用同一把 NPU 锁。"""
+        if self.segmenter is None:
+            raise HTTPException(503, {
+                'code': 'SEGMENTER_UNAVAILABLE', 'message': '未配置 SegFormer',
+                'retryable': True})
+        if self.lock.locked():
+            raise HTTPException(503, {
+                'code': 'NPU_BUSY_LLM', 'message': 'NPU 正忙，语义分割已跳过',
+                'retryable': True})
+        image = self._decode_image(request.image_base64)
+        async with self.lock:
+            return {'segmentation': await asyncio.to_thread(
+                self._run_segmentation, image)}
+
+    def _detect_and_optional_segment(self, image, min_confidence, include):
+        """同一工作线程内串行执行，避免跨线程切换 RKNN Runtime。"""
+        detections = self.detector(image, min_confidence)
+        segmentation = self._run_segmentation(image) if include else None
+        return detections, segmentation
+
+    def _run_segmentation(self, image):
+        if self.segmenter is None:
+            result = {
+                'state': 'unavailable', 'reason_code': 'SEGMENTER_UNAVAILABLE',
+                'message': '未配置 SegFormer'}
+            self.last_segmentation_metrics = result
+            return result
+        started = time.perf_counter()
+        try:
+            result = self.segmenter(image)
+        except Exception as exc:
+            result = {
+                'state': 'error', 'reason_code': 'SEGMENTER_FAILED',
+                'message': str(exc)}
+            self.last_segmentation_metrics = result
+            return result
+        latency_ms = round(
+            (time.perf_counter() - started) * 1000.0, 1)
+        self.last_segmentation_metrics = {
+            'state': 'ok', 'latency_ms': latency_ms,
+            'model': result.get('model', self.segmenter_name)}
+        return {'state': 'ok', 'latency_ms': latency_ms, **result}
+
+    @staticmethod
+    def _decode_image(value):
+        try:
+            return base64.b64decode(value, validate=True)
+        except ValueError as exc:
+            raise HTTPException(400, 'image_base64 无效') from exc
 
     async def chat(self, request):
         if not self.llm_endpoint and not self.llm_fallback_endpoint:
@@ -179,9 +245,16 @@ async def health():
         gateway.endpoint_health, gateway.llm_fallback_endpoint)
     llm_ok = (llm_health.get('state') == 'ok'
               or fallback_health.get('state') == 'ok')
+    segmenter_ready = (
+        gateway.last_segmentation_metrics.get('state') == 'ok')
     return {
-        'state': 'ok' if gateway.detector and llm_ok else 'degraded',
+        'state': ('ok' if gateway.detector and llm_ok and segmenter_ready
+                  else 'degraded'),
         'detector_configured': gateway.detector is not None,
+        'segmenter_configured': gateway.segmenter is not None,
+        'segmenter_ready': segmenter_ready,
+        'segmenter_model': gateway.segmenter_name,
+        'segmentation_runtime': gateway.last_segmentation_metrics,
         'llm_configured': bool(gateway.llm_endpoint),
         'llm_ready': llm_ok,
         'llm_process_resident': bool(llm_health.get('resident')),
@@ -199,6 +272,11 @@ async def health():
 @app.post('/v1/detect')
 async def detect(request: DetectRequest):
     return await gateway.detect(request)
+
+
+@app.post('/v1/segment')
+async def segment(request: SegmentRequest):
+    return await gateway.segment(request)
 
 
 @app.post('/v1/chat')

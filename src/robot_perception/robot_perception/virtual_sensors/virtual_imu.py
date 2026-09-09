@@ -5,7 +5,7 @@
 
 输入：
 - /odom：包含 base_link 的位置、姿态和速度。
-- terrain_params.yaml 中 virtual_imu 参数：发布频率、姿态噪声、角速度噪声、线加速度噪声、重力常数。
+- virtual_imu.yaml 参数：发布频率、姿态噪声、角速度噪声、线加速度噪声、重力常数。
 
 输出：
 - /imu/data：sensor_msgs/Imu，frame_id 为 imu_link。

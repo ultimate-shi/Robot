@@ -82,3 +82,15 @@ def test_wait_for_new_scene_ignores_same_timestamp(bridge_state):
     bridge._detections_callback(second)
     snapshot = shared.wait_for_detection_after(123, 0.01)
     assert snapshot.detection_stamp_ns == 456
+
+
+def test_segmentation_overlay_and_status_are_cached_separately(bridge_state):
+    bridge, shared = bridge_state
+    frame = CompressedImage()
+    frame.data = [4, 5, 6]
+    bridge._segmentation_frame_callback(frame)
+    bridge._segmentation_status_callback(String(data=(
+        '{"state":"ok","model":"segformer-test","latency_ms":120}')))
+    assert shared.segmentation_frame == b'\x04\x05\x06'
+    assert shared.health['segmentation']['model'] == 'segformer-test'
+    assert shared.health['semantic']['state'] == 'waiting'

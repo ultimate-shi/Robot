@@ -112,7 +112,7 @@ ros2 service call /mapping/save_snapshot std_srvs/srv/Trigger '{}'
 
 临时快照位于 `/tmp/robot_preview/current.{yaml,pgm,ply,json}`，长期快照默认位于
 `/workspace/maps/map_YYYYMMDD_HHMMSS/`。长期目录名和 `map.json` 的 `created_at`
-默认按 `rtabmap_stereo_mapping.yaml` 中的 `snapshot_timezone: Asia/Shanghai` 生成，
+默认按 `mapping_snapshot.yaml` 中的 `snapshot_timezone: Asia/Shanghai` 生成，
 不受容器本地时区影响。
 
 ### mission：任务层
@@ -366,9 +366,21 @@ GY95T 开始发布滤波数据前还会静止估计约 2 秒
 # 首次准备约 3.6 GiB 的纯文本 Qwen 与匹配 Runtime（支持断点续传）。
 ./scripts/inference/download_rk3588_models.sh qwen
 
-# 常驻加载 YOLO RKNN 和 Qwen2.5-3B-Instruct，并启动 9100 网关。
+# 常驻加载 YOLO、可选 SegFormer RKNN 和 Qwen2.5-3B-Instruct，并启动 9100 网关。
 ./scripts/inference/start_yolo_gateway.sh
 ```
+
+室内导航分割使用 `nvidia/segformer-b0-finetuned-ade-512-512`。首次需要在安装了
+PyTorch、Transformers、ONNX 和 RKNN-Toolkit2 2.3.x 的 x86_64 Linux 主机转换 FP16 模型：
+
+```bash
+python3 scripts/inference/convert_segformer_rknn.py \
+  --output-directory model/segformer
+```
+
+把生成的 `segformer-b0-ade20k-fp16.rknn` 放回板端同名目录后重启网关。模型缺失或加载
+失败时 YOLO/Qwen 和原有双目、超声波避障继续工作，`/health` 与
+`/perception/segmentation_status` 会报告分割降级。
 
 `ROBOT_DETECTOR_PLUGIN` 指向一个 Python 函数，函数签名为
 `detect(jpeg_bytes, min_confidence)`，返回字典列表；每项至少包含
@@ -383,6 +395,11 @@ RKLLM 1.2.1 Runtime，不覆盖系统库。
 确定性采样。也可用 `ROBOT_LLM_ENDPOINT` 和 `ROBOT_LLM_FALLBACK_ENDPOINT` 指向其他
 OpenAI Chat Completions 兼容服务；旧 `ROBOT_VLM_*` 变量暂作兼容别名。Qwen 推理期间
 YOLO 会因共用 NPU 串行锁暂停，回答完成后自动恢复实时识别。
+SegFormer 也使用同一把锁：持续 YOLO 时通过 `/v1/detect` 的可选
+`include_segmentation` 字段在同一右目帧后串行分割；按需 YOLO 模式下则调用
+`/v1/segment`，不会隐式开启持续目标检测。完整实机入口默认持续运行 YOLO，SegFormer 调度
+目标为 5 Hz；单帧超过 500 ms 或连续失败时自动退到 1 Hz，稳定后恢复。512×512 FP16
+模型的实际频率仍受单帧推理时间限制，若延迟超过 200 ms 就无法达到真实 5 Hz。
 新链路稳定后，如确认不再需要回退到 VL，可先用 `du -sh model/qwen2.5-vl`
 核对目录，再手动执行 `rm -r -- model/qwen2.5-vl`；当前可释放约 4.9 GiB
 （约 5.2 GB），启动和下载脚本不会自动删除它。
@@ -440,7 +457,7 @@ Qwen 每轮网页对话会在 `/workspace/qwen_logs/` 保存同名的一对文�
 确认时会使用当前地图和目标再次调用 Nav2 验证路径，并重建 ROS 端预演缓存；
 因此旧预演失败或被停止清理后不会误报“任务预览不存在或已过期”。如果当前
 仍没有可达路径，网页返回具体的规划错误且不取得控制权，不再产生 HTTP 500。任务目标
-若贴近当前 OccupancyGrid 外缘，会按 `mission.yaml` 的 `goal_boundary_margin`
+若贴近当前 OccupancyGrid 外缘，会按任务规划节点的 `goal_boundary_margin` 参数
 收进地图安全边界后再交给 Nav2，避免 `Goal Coordinates ... was outside bounds`。
 
 本地大脑入口的任务规划节点会记住入口使用的 `detection_mode`。任务确认、取消、立即停止、
@@ -479,12 +496,23 @@ HTML、JavaScript 和样式响应禁用缓存，更新后普通刷新即可取�
 `/api/health`。
 
 `stereo_brain.launch.py` 默认把 YOLO 切换为 `continuous`，按
-`semantic_perception.yaml` 的 `max_inference_rate`（默认最高 5 Hz）持续识别最新右目校正
+`semantic_detection.yaml` 的 `max_inference_rate`（默认最高 5 Hz）持续识别最新右目校正
 画面；网页会实时更新物体中文名称、置信度、距离和检测框。“立即刷新识别”仍可强制等待
 一份新结果；若 5 秒内没有新结果，会明确说明当前展示的是上一次结果。单独启动
-`stereo_perception.launch.py` 时仍默认 `on_demand`，需要持续识别可传入
+`stereo_robot.launch.py` 默认使用 `continuous`，因此无需额外参数即可实时更新 YOLO。
+单独启动 `stereo_perception.launch.py` 时仍默认 `on_demand`，需要持续识别可传入
 `detection_mode:=continuous`；本地大脑入口也可以用 `detection_mode:=on_demand` 临时关闭
 持续识别。
+
+SegFormer 默认独立于 YOLO 模式持续运行，并发布 `/perception/semantic_mask`、
+`/perception/semantic_overlay/compressed`、`/nav/semantic_obstacle_points` 和
+`/nav/semantic_clear_points`。只有时间戳匹配的右目深度参与反投影；低置信度、未知或无效
+深度像素不改变导航。实机 Nav2 的 local costmap 使用独立 `semantic_layer`，非可通行类别
+只标记该层，`floor`/`rug` 只清除该层留下的旧标记，不能清除双目体素层或超声波层。
+可用 `start_segmentation:=false` 完全关闭分割，或用
+`enable_semantic_navigation:=false` 仅保留掩码和网页叠加。网页相机面板的“分割叠加”开关
+默认开启，分割图未就绪时自动回退到原始右目画面；画面下方图例会列出当前高置信类别、
+对应颜色和画面占比。
 
 网页、YOLO、Qwen视觉输入和验收采样统一使用右目校正图
 `/stereo/right/image_rect`。深度节点根据 `x_right=x_left-disparity` 生成右目对齐深度
@@ -506,7 +534,7 @@ WebSocket运行依赖 `websockets`，Jazzy镜像已固定安装对应版本；�
 
 主要接口为 `/api/chat`、`/api/missions/preview`、
 `/api/missions/{id}/confirm`、`/api/missions/cancel`、`/api/control/release`、
-`/api/stop`、`/api/detections`、`/api/health` 和 `/ws/state`。参数集中在
+`/api/stop`、`/api/detections`、`/api/segmentation.jpg`、`/api/health` 和 `/ws/state`。参数集中在
 `src/robot_brain/config/brain.yaml`。
 
 ### 现场物品和视觉问答验收
@@ -539,19 +567,20 @@ WebSocket运行依赖 `websockets`，Jazzy镜像已固定安装对应版本；�
 | --- | --- |
 | `stereo_camera.yaml` | UVC 相机格式、分辨率、帧率和拆分参数 |
 | `cameras/*/left.yaml`、`right.yaml` | 按相机型号保存的左右目标定参数 |
-| `stereo_pointcloud.yaml` | 视差、深度范围和双目点云过滤参数 |
+| `stereo_pointcloud_filter.yaml` | 视差、深度范围和双目点云过滤参数 |
 | `imu.yaml` | GY95T 串口、轴向、零偏、低通和无磁姿态滤波参数 |
-| `rtabmap_stereo_mapping.yaml` | 双目视觉里程计、RTAB-Map 和地图点云参数 |
+| `stereo_odometry.yaml` | 双目视觉里程计参数 |
+| `rtabmap_mapping.yaml` | RTAB-Map 在线建图参数 |
+| `mapping_snapshot.yaml` | 二维地图和三维点云快照参数 |
 | `state_estimation.yaml` | 视觉、IMU 和未来四轮里程计的二维 EKF 参数 |
-| `navigation_preview.yaml` | 旧导航预演入口移除后保留的局部观察和目标管理参数 |
-| `stereo_collision_monitor.yaml` | 双目局部减速、停车区域和传感器超时 |
-| `nav2_params.yaml` | Nav2 控制器、规划器、代价地图和行为树参数 |
-| `nav2_stereo_overrides.yaml` | 在线双目模式的 Nav2 覆盖参数 |
-| `controllers.yaml` | 轮子、转向和关节控制器参数 |
-| `controller_manager.yaml` | ros2_control 管理器和硬件插件参数 |
-| `robot_control/config/control.yaml` | 底盘、速度门控和最终避障阈值 |
-| `robot_perception/config/terrain_perception.yaml` | 地形与虚拟传感器参数 |
-| `robot_perception/config/semantic_perception.yaml` | YOLO、深度融合和验收采样参数 |
+| `nav2.yaml` | Nav2 控制器、规划器、代价地图和行为树参数 |
+| `stereo_robot.yaml` | 在线双目及独立 SegFormer 语义层的 Nav2 覆盖参数 |
+| `controllers.yaml` | ros2_control 管理器以及轮子、转向和关节控制器参数 |
+| `chassis_control.yaml`、`nav_velocity_gate.yaml`、`obstacle_avoidance.yaml` | 底盘控制、速度门控和最终避障参数 |
+| `head_mapping_lock.yaml`、`wheel_odometry.yaml` | 建图头部归中与四轮里程计参数 |
+| `terrain_analysis.yaml`、`pointcloud_obstacle.yaml` | 地形分析与环境点云障碍参数 |
+| `virtual_imu.yaml`、`virtual_ultrasonic.yaml`、`range_to_scan.yaml` | 数字孪生传感器参数 |
+| `semantic_detection.yaml`、`acceptance_sampler.yaml` | YOLO、SegFormer、深度融合和验收采样参数 |
 | `robot_brain/config/brain.yaml` | HTTP、Qwen队列和控制租约参数 |
 
 设备路径、网络端口和现场参数应通过 YAML 或 launch 参数修改，不要写死在 Python 节点中。

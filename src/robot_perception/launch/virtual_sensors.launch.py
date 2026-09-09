@@ -14,15 +14,12 @@ from launch.substitutions import LaunchConfiguration
 
 
 def generate_launch_description():
-    config = os.path.join(get_package_share_directory(
-        'robot_perception'), 'config', 'terrain_perception.yaml')
     share = get_package_share_directory('robot_perception')
     log_level = LaunchConfiguration('log_level')
 
     def include(filename, start_argument, arguments=None):
         """在独立作用域引用虚拟传感器，避免参数泄漏。"""
         launch_arguments = {
-            'config_file': config,
             'log_level': log_level,
             **(arguments or {}),
         }

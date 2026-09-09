@@ -1,4 +1,4 @@
-# 使用方法：由所属 Package 的 launch 或节点加载，请通过参数覆盖现场配置。
+# 使用方法：由 robot_perception/stereo_pointcloud_filter.launch.py 加载双目点云过滤参数。
 # 双目点云进入 Nav2 前的过滤参数，以及独立诊断 LaserScan 的转换参数。
 stereo_pointcloud_filter:
   ros__parameters:

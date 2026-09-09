@@ -1,0 +1,11 @@
+# 使用方法：由 robot_perception/launch/acceptance_sampler.launch.py 加载；现场差异请通过 launch 参数覆盖。
+acceptance_sampler:
+  ros__parameters:
+    output_directory: /workspace/acceptance_dataset
+    image_topic: /stereo/right/image_rect
+    depth_topic: /stereo/depth/right/image
+    camera_info_topic: /stereo/right/camera_info
+    detections_topic: /perception/semantic_detections
+    map_frame: map
+    base_frame: base_link
+    jpeg_quality: 95

@@ -110,6 +110,20 @@ def test_nav2_online_mode_can_disable_static_map_publishers():
     assert text.count("LaunchConfiguration('use_map_server')") == 3
 
 
+def test_segformer_uses_an_independent_local_costmap_layer():
+    overrides = (
+        SOURCE_DIRECTORY / 'robot_navigation' / 'config' /
+        'stereo_robot.yaml').read_text(encoding='utf-8')
+    assert 'plugins: ["voxel_layer", "semantic_layer", "inflation_layer"]' in overrides
+    assert 'topic: /nav/semantic_obstacle_points' in overrides
+    assert 'topic: /nav/semantic_clear_points' in overrides
+    assert 'marking: true  # 只增加语义障碍' in overrides
+    assert 'marking: false  # 可通行语义不能创建障碍' in overrides
+    assert 'global_costmap' in overrides
+    global_section = overrides.split('global_costmap:', 1)[1]
+    assert 'semantic_layer' not in global_section
+
+
 def test_static_navigation_loads_maps_from_workspace_directory():
     """静态导航默认从工作区 maps 加载，不依赖已删除的 Package map 目录。"""
     nav2_text = launch_text('robot_navigation', 'nav2.launch.py')

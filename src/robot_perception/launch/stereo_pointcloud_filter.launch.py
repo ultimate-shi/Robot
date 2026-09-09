@@ -13,7 +13,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     default_config = os.path.join(
         get_package_share_directory('robot_perception'),
-        'config', 'stereo_pointcloud.yaml')
+        'config', 'stereo_pointcloud_filter.yaml')
     return LaunchDescription([
         DeclareLaunchArgument(
             'config_file', default_value=default_config,

@@ -1,6 +1,7 @@
 """使用方法：pytest 运行本文件，验证不依赖相机硬件的双目核心处理。"""
 
 import threading
+from collections import deque
 
 import numpy as np
 
@@ -194,3 +195,77 @@ def test_semantic_pause_does_not_publish_fake_empty_result():
     assert fake.in_flight is False
     assert statuses[0][0][0] == 'paused'
     assert statuses[0][1]['reason_code'] == 'NPU_BUSY_LLM'
+
+
+def test_segmentation_points_separate_floor_and_obstacles():
+    """floor/rug 只能进入清除点，家具类别只能进入标记点。"""
+    fake = type('FakeSemantic', (), {
+        'segmentation_confidence': 0.60,
+        'traversable_erode_pixels': 0,
+        'obstacle_dilate_pixels': 0,
+        'segmentation_point_stride': 1,
+        'segmentation_max_range': 3.0,
+        '_empty_points': staticmethod(SemanticPerception._empty_points),
+        '_pixels_to_points': SemanticPerception._pixels_to_points,
+    })()
+    mask = np.asarray([[3, 19], [28, 19]], dtype=np.uint8)
+    confidence = np.full((2, 2), 255, dtype=np.uint8)
+    depth = np.ones((2, 2), dtype=np.float32)
+    info = type('Info', (), {'k': [1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                                  0.0, 0.0, 1.0]})()
+    obstacles, clear = SemanticPerception._segmentation_points(
+        fake, mask, confidence, depth, info)
+    assert len(obstacles) == 2
+    assert len(clear) == 2
+
+
+def test_low_confidence_segmentation_does_not_affect_navigation():
+    fake = type('FakeSemantic', (), {
+        'segmentation_confidence': 0.60,
+        'traversable_erode_pixels': 0,
+        'obstacle_dilate_pixels': 0,
+        'segmentation_point_stride': 1,
+        'segmentation_max_range': 3.0,
+        '_empty_points': staticmethod(SemanticPerception._empty_points),
+        '_pixels_to_points': SemanticPerception._pixels_to_points,
+    })()
+    mask = np.asarray([[3, 19]], dtype=np.uint8)
+    confidence = np.asarray([[10, 10]], dtype=np.uint8)
+    depth = np.ones((1, 2), dtype=np.float32)
+    info = type('Info', (), {'k': [1.0, 0.0, 0.0, 0.0, 1.0, 0.0,
+                                  0.0, 0.0, 1.0]})()
+    obstacles, clear = SemanticPerception._segmentation_points(
+        fake, mask, confidence, depth, info)
+    assert obstacles.size == 0
+    assert clear.size == 0
+
+
+def test_segmentation_depth_pairing_rejects_stale_frame():
+    fake = type('FakeSemantic', (), {})()
+    image = Image()
+    image.header.stamp.sec = 10
+    near = Image()
+    near.header.stamp.sec = 10
+    near.header.stamp.nanosec = 50_000_000
+    stale = Image()
+    stale.header.stamp.sec = 9
+    fake.depth_frames = deque([stale, near])
+    fake.max_depth_skew = 0.10
+    fake._stamp_ns = SemanticPerception._stamp_ns
+    assert SemanticPerception._matching_depth_locked(fake, image) is near
+    fake.depth_frames = deque([stale])
+    assert SemanticPerception._matching_depth_locked(fake, image) is None
+
+
+def test_segmentation_rate_degrades_and_recovers():
+    fake = type('FakeSemantic', (), {})()
+    fake.segmentation_deadline_ms = 500.0
+    fake.segmentation_degraded = False
+    fake.segmentation_recovery_count = 0
+    fake.segmentation_recovery_successes = 2
+    SemanticPerception._update_segmentation_rate(fake, 600.0)
+    assert fake.segmentation_degraded is True
+    SemanticPerception._update_segmentation_rate(fake, 100.0)
+    assert fake.segmentation_degraded is True
+    SemanticPerception._update_segmentation_rate(fake, 100.0)
+    assert fake.segmentation_degraded is False

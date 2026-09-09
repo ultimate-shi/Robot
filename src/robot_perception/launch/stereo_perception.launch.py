@@ -23,7 +23,6 @@ def scoped_include(launch_source, **kwargs):
 
 def generate_launch_description():
     share = get_package_share_directory('robot_perception')
-    semantic = os.path.join(share, 'config', 'semantic_perception.yaml')
     inference_url = LaunchConfiguration('inference_url')
     log_level = LaunchConfiguration('log_level')
     return LaunchDescription([
@@ -40,6 +39,15 @@ def generate_launch_description():
             'start_semantic_detection', default_value='true',
             description='是否启动语义目标识别与定位节点'),
         DeclareLaunchArgument(
+            'start_segmentation', default_value='true',
+            description='是否在语义节点中启动 SegFormer 室内场景分割'),
+        DeclareLaunchArgument(
+            'enable_semantic_navigation', default_value='true',
+            description='是否发布 SegFormer 导航 marking/clearing 点云'),
+        DeclareLaunchArgument(
+            'segmentation_rate', default_value='5.0',
+            description='SegFormer 正常推理目标频率，单位 Hz'),
+        DeclareLaunchArgument(
             'start_acceptance_sampler', default_value='true',
             description='是否启动感知验收样本保存节点'),
         DeclareLaunchArgument(
@@ -55,9 +63,12 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(os.path.join(
                 share, 'launch', 'semantic_detection.launch.py')),
             launch_arguments={
-                'config_file': semantic,
                 'inference_url': inference_url,
                 'detection_mode': LaunchConfiguration('detection_mode'),
+                'start_segmentation': LaunchConfiguration('start_segmentation'),
+                'enable_semantic_navigation': LaunchConfiguration(
+                    'enable_semantic_navigation'),
+                'segmentation_rate': LaunchConfiguration('segmentation_rate'),
                 'log_level': log_level,
             }.items(),
             condition=IfCondition(LaunchConfiguration(
@@ -66,7 +77,6 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(os.path.join(
                 share, 'launch', 'acceptance_sampler.launch.py')),
             launch_arguments={
-                'config_file': semantic,
                 'log_level': log_level,
             }.items(),
             condition=IfCondition(LaunchConfiguration(

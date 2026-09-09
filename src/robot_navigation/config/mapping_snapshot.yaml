@@ -1,0 +1,9 @@
+# 使用方法：由 robot_navigation/launch/mapping_snapshot.launch.py 加载；现场差异请通过 launch 参数覆盖。
+mapping_snapshot_manager:
+  ros__parameters:
+    map_topic: /map
+    cloud_topic: /mapping/cloud_map
+    preview_directory: /tmp/robot_preview
+    save_directory: /workspace/maps
+    snapshot_basename: current
+    snapshot_timezone: Asia/Shanghai  # 长期快照目录名和元数据统一使用北京时间

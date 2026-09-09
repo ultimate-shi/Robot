@@ -12,7 +12,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     default_config = os.path.join(
         get_package_share_directory('robot_navigation'),
-        'config', 'rtabmap_stereo_mapping.yaml')
+        'config', 'rtabmap_mapping.yaml')
     return LaunchDescription([
         DeclareLaunchArgument(
             'config_file', default_value=default_config,

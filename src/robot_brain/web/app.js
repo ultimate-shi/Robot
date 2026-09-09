@@ -24,7 +24,8 @@ const elements = Object.fromEntries([
   'exploreButton', 'followButton', 'previewPanel', 'previewText',
   'candidateList', 'confirmButton', 'closePreview', 'cameraCanvas',
   'cameraEmpty', 'mapCanvas', 'mapEmpty', 'mapState', 'detectionCount',
-  'detectionChips', 'detectionSummary', 'captureButton', 'detectButton'
+  'detectionChips', 'detectionSummary', 'captureButton', 'detectButton',
+  'segmentationToggle', 'segmentationLegend'
 ].map(id => [id, document.getElementById(id)]));
 
 elements.clientValue.textContent = clientId.slice(0, 8);
@@ -111,6 +112,7 @@ function updateSharedState(state) {
   const mission = state.mission || {};
   const detectionState = state.detections || {};
   const semanticHealth = state.health?.semantic || {};
+  const segmentationHealth = state.health?.segmentation || {};
   const detectionMode = semanticHealth.state === 'paused'
     ? 'YOLO 暂停 · 显示上次结果'
     : (semanticHealth.state === 'error' ? 'YOLO 异常 · 显示上次结果' : '实时');
@@ -131,6 +133,29 @@ function updateSharedState(state) {
   elements.detectionSummary.textContent = details.length
     ? `${detectionMode}${latency}\n${details.join('\n')}`
     : `${detectionMode}${latency}\n当前画面未识别到目标`;
+  drawSegmentationLegend(segmentationHealth);
+}
+
+function drawSegmentationLegend(status) {
+  const classes = status.classes || [];
+  if (!classes.length) {
+    const message = status.state === 'error'
+      ? `分割异常：${status.message || '没有结果'}` : '等待 SegFormer 颜色图例';
+    const empty = document.createElement('span');
+    empty.className = 'muted';
+    empty.textContent = message;
+    elements.segmentationLegend.replaceChildren(empty);
+    return;
+  }
+  elements.segmentationLegend.replaceChildren(...classes.map(item => {
+    const entry = document.createElement('span');
+    entry.className = 'legend-entry';
+    const swatch = document.createElement('i');
+    swatch.style.backgroundColor = item.color;
+    const percent = Math.round((item.ratio || 0) * 100);
+    entry.append(swatch, `${item.label_zh || item.name} ${percent}%`);
+    return entry;
+  }));
 }
 
 function translateTask(task) {
@@ -313,7 +338,13 @@ async function controlRequest(path) {
 
 async function updateCamera() {
   try {
-    const response = await fetch(`/api/frame.jpg?t=${Date.now()}`, {cache: 'no-store'});
+    const endpoint = elements.segmentationToggle.checked
+      ? '/api/segmentation.jpg' : '/api/frame.jpg';
+    let response = await fetch(`${endpoint}?t=${Date.now()}`, {cache: 'no-store'});
+    // 分割尚未就绪时仍显示实时相机，不把可视化降级误认为相机故障。
+    if (response.status === 204 && endpoint.includes('segmentation')) {
+      response = await fetch(`/api/frame.jpg?t=${Date.now()}`, {cache: 'no-store'});
+    }
     if (response.status === 204) return;
     if (!response.ok) throw new Error(`相机取帧失败 ${response.status}`);
     const blob = await response.blob();

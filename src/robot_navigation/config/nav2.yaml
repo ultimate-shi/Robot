@@ -1,4 +1,4 @@
-# 使用方法：由 robot_navigation/nav2.launch.py 加载 Nav2 参数。
+# 使用方法：由 robot_navigation/nav2.launch.py 加载 Nav2 基础参数。
 # 本文件由 robot.launch.py 传给本项目显式启动的 Nav2 节点。
 # bt_navigator
 # 行为树导航器。负责接收 /navigate_to_pose、/navigate_through_poses 目标，然后按行为树调度“规划路

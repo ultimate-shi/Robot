@@ -19,7 +19,7 @@
 - /pointcloud_obstacle_status：输出过滤后的点数，用于调试点云是否进入 Nav2。
 
 为什么不能删除：
-nav2_params.yaml 的 local_costmap 直接订阅 /nav/obstacle_points；删除会导致 Nav2 点云避障失效。
+nav2.yaml 的 local_costmap 直接订阅 /nav/obstacle_points；删除会导致 Nav2 点云避障失效。
 """
 
 import math

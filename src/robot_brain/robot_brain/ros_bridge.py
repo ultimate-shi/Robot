@@ -36,9 +36,11 @@ class SharedRobotState:
         self.health = {
             'camera': {'state': 'waiting'}, 'slam': {'state': 'waiting'},
             'semantic': {'state': 'waiting'}, 'navigation': {'state': 'waiting'},
-            'qwen': {'state': 'waiting'},
+            'segmentation': {'state': 'waiting'}, 'qwen': {'state': 'waiting'},
         }
         self.frame = None
+        self.segmentation_frame = None
+        self.segmentation_frame_time = 0.0
         # detection_frame 只供聊天审计使用，不能进入 WebSocket JSON 状态。
         self.detection_frame = None
         self.detection_frame_stamp_ns = None
@@ -99,10 +101,16 @@ class RosBridge(Node):
             String, '/perception/semantic_status',
             self._semantic_status_callback, 10)
         self.create_subscription(
+            String, '/perception/segmentation_status',
+            self._segmentation_status_callback, 10)
+        self.create_subscription(
             MissionState, '/mission/state', self._mission_callback, 20)
         self.create_subscription(
             CompressedImage, str(self.get_parameter('frame_topic').value),
             self._frame_callback, qos_profile_sensor_data)
+        self.create_subscription(
+            CompressedImage, '/perception/semantic_overlay/compressed',
+            self._segmentation_frame_callback, qos_profile_sensor_data)
         map_qos = QoSProfile(depth=1)
         map_qos.durability = DurabilityPolicy.TRANSIENT_LOCAL
         self.create_subscription(
@@ -205,6 +213,16 @@ class RosBridge(Node):
             self.shared.scene_coordinator.wake()
         self._changed()
 
+    def _segmentation_status_callback(self, msg):
+        """缓存 SegFormer 状态，错误不会覆盖 YOLO 健康状态。"""
+        try:
+            value = json.loads(msg.data)
+        except (TypeError, ValueError, json.JSONDecodeError):
+            value = {'state': 'error', 'message': '分割状态不是有效 JSON'}
+        with self.shared.lock:
+            self.shared.health['segmentation'] = value
+        self._changed()
+
     def _mission_callback(self, msg):
         with self.shared.lock:
             self.shared.mission = {
@@ -229,6 +247,12 @@ class RosBridge(Node):
                 self.shared.detection_frame_stamp_ns = stamp_ns
                 self.shared.scene_coordinator.pair_image(stamp_ns)
             self.shared.health['camera'] = {'state': 'ok'}
+        self._changed()
+
+    def _segmentation_frame_callback(self, msg):
+        with self.shared.lock:
+            self.shared.segmentation_frame = bytes(msg.data)
+            self.shared.segmentation_frame_time = time.monotonic()
         self._changed()
 
     def _map_callback(self, msg):

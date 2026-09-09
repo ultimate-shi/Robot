@@ -12,7 +12,7 @@ sys.path.insert(0, str(SCRIPT_DIR))
 
 from qwen_vl_adapter import LocalQwenRunner  # noqa: E402
 from brain_inference_server import (  # noqa: E402
-    ChatRequest, DetectRequest, InferenceGateway)
+    ChatRequest, DetectRequest, InferenceGateway, SegmentRequest)
 from fastapi import HTTPException  # noqa: E402
 
 
@@ -93,3 +93,43 @@ def test_text_gateway_never_forwards_compatible_image_field():
     ]
     assert 'image' not in json.dumps(captured['body'])
     assert captured['body']['max_tokens'] == 96
+
+
+def test_combined_detection_runs_segmentation_after_yolo():
+    gateway = InferenceGateway()
+    calls = []
+    gateway.detector = lambda *_: calls.append('yolo') or [{'id': 1}]
+    gateway.segmenter = lambda *_: calls.append('segformer') or {
+        'model': 'segformer-test', 'width': 2, 'height': 2}
+    detections, segmentation = gateway._detect_and_optional_segment(
+        b'jpeg', 0.35, True)
+    assert calls == ['yolo', 'segformer']
+    assert detections == [{'id': 1}]
+    assert segmentation['state'] == 'ok'
+
+
+def test_segmentation_failure_does_not_discard_yolo_result():
+    gateway = InferenceGateway()
+    gateway.detector = lambda *_: [{'class_name': 'person'}]
+
+    def fail(_):
+        raise RuntimeError('bad model')
+
+    gateway.segmenter = fail
+    detections, segmentation = gateway._detect_and_optional_segment(
+        b'jpeg', 0.35, True)
+    assert detections[0]['class_name'] == 'person'
+    assert segmentation['state'] == 'error'
+    assert segmentation['reason_code'] == 'SEGMENTER_FAILED'
+
+
+def test_independent_segmentation_uses_same_gateway_contract():
+    gateway = InferenceGateway()
+    gateway.segmenter = lambda value: {
+        'model': 'segformer-test', 'width': len(value), 'height': 1}
+    request = SegmentRequest(
+        image_base64=base64.b64encode(b'jpeg').decode('ascii'))
+    image = gateway._decode_image(request.image_base64)
+    result = gateway._run_segmentation(image)
+    assert result['state'] == 'ok'
+    assert result['width'] == 4

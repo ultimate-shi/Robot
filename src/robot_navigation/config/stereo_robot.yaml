@@ -1,9 +1,9 @@
-# 使用方法：由所属 Package 的 launch 或节点加载，请通过参数覆盖现场配置。
+# 使用方法：由 robot_navigation/stereo_robot.launch.py 传给 Nav2，覆盖在线双目导航参数。
 # 实机双目 Nav2 覆盖参数。点云负责代价地图，/stereo/scan 负责速度安全层。
 local_costmap:
   local_costmap:
     ros__parameters:
-      plugins: ["voxel_layer", "inflation_layer"]  # 局部层列表：双目体素障碍层和膨胀层
+      plugins: ["voxel_layer", "semantic_layer", "inflation_layer"]  # 局部层列表：双目体素、独立 SegFormer 语义层和膨胀层
       voxel_layer:
         observation_sources: stereo_obstacle_points  # 当前 VoxelLayer 启用的观测源名称
         stereo_obstacle_points:
@@ -18,6 +18,30 @@ local_costmap:
           min_obstacle_height: 0.05  # 局部障碍最低高度，单位 m
           max_obstacle_height: 0.80  # 局部障碍最高高度，单位 m
           tf_filter_tolerance: 0.5  # costmap 等待点云 TF 的容忍时间，单位 s
+      semantic_layer:
+        plugin: "nav2_costmap_2d::ObstacleLayer"  # 独立语义层，清除操作不会覆盖双目体素层
+        enabled: true  # 实机默认启用；分割不可用时该层没有观测，几何避障继续工作
+        observation_sources: semantic_obstacles semantic_clear  # 分开表达标记点与清除射线端点
+        semantic_obstacles:
+          topic: /nav/semantic_obstacle_points  # SegFormer 非可通行像素与同帧深度融合点云
+          data_type: "PointCloud2"  # 语义障碍输入消息类型
+          marking: true  # 只增加语义障碍
+          clearing: false  # 障碍点本身不承担清除，避免语义边缘误清
+          obstacle_max_range: 3.0  # 语义标记最远距离，单位 m
+          obstacle_min_range: 0.25  # 忽略相机近场无效深度，单位 m
+          min_obstacle_height: 0.05  # 语义障碍最低高度，单位 m
+          max_obstacle_height: 0.80  # 语义障碍最高高度，单位 m
+          observation_persistence: 0.60  # 短暂保留跨越 5Hz 分割周期的观测
+          tf_filter_tolerance: 0.5  # 等待相机点云 TF 的容忍时间，单位 s
+        semantic_clear:
+          topic: /nav/semantic_clear_points  # floor/rug 高置信像素形成的清除射线端点
+          data_type: "PointCloud2"  # 语义清除输入消息类型
+          marking: false  # 可通行语义不能创建障碍
+          clearing: true  # 仅清除本 semantic_layer 的旧标记
+          raytrace_max_range: 3.5  # 清除射线最远距离，单位 m
+          raytrace_min_range: 0.25  # 忽略近场无效区域，单位 m
+          observation_persistence: 0.60  # 覆盖约三个 5Hz 分割周期，避免短时丢帧
+          tf_filter_tolerance: 0.5  # 等待相机点云 TF 的容忍时间，单位 s
 
 global_costmap:
   global_costmap:

@@ -1,6 +1,32 @@
 <!-- 使用方法：按日期记录每次代码修改、验证结果、当前卡点和踩坑。 -->
 # 过程记录
 
+## 2026-09-09
+
+- 整理全部 launch 参数文件，使直接加载的 YAML 与 launch 主文件同名；拆分原先由多个独立
+  入口共用的控制、虚拟感知、语义感知和 RTAB-Map 聚合配置，并合并 ros2_control 管理器与
+  控制器配置。同步更新组合入口、文档和测试引用，删除已无 launch 使用的旧聚合、导航预演、
+  空覆盖和 collision monitor 配置。验证结果：三个受影响包在 Jazzy 容器中干净构建通过，
+  全部 34 个 launch 的 `--show-args` 解析通过，三个包的 pytest 共 38 项通过，YAML 解析、
+  Python 编译和 `git diff --check` 通过。当前卡点：无；踩坑：symlink-install 的旧缓存仍引用
+  已删除配置，需清理受影响包的可再生 `build/install` 子目录后再构建；`colcon test` 未发现
+  Python 测试，改为在同一 Jazzy 环境直接运行 pytest 测试目录。
+- 在现有 YOLOv8n RKNN 感知链中增加 SegFormer-B0 ADE20K 室内语义分割：新增 x86_64
+  ONNX/RKNN FP16 转换脚本、板端 RKNN 插件和兼容 `/v1/detect` 的组合响应，并提供独立
+  `/v1/segment` 以保持 YOLO `on_demand` 语义。YOLO、SegFormer、Qwen 继续由同一 NPU 锁
+  串行调度，分割默认目标 5 Hz，超过 500 ms 后退到 1 Hz。ROS 语义节点新增时间戳深度配对、
+  ADE20K 标签/置信度图、网页叠加图以及独立的 Nav2 marking/clearing 点云；实机 local
+  costmap 新增隔离语义层，floor/rug 清除不会覆盖双目或超声波障碍。网页增加默认开启的
+  分割叠加开关和 `/api/segmentation.jpg`。验证结果：网关 7 项测试及 SegFormer、导航、
+  launch、网页静态合同 21 项测试通过，Python/Shell/JavaScript 语法、YAML 解析和
+  `git diff --check` 通过。后续现场确认完整实机入口未传参数时 YOLO 原为 `on_demand`，已改为默认
+  `continuous`；SegFormer 调度目标提高到 5 Hz，网页新增当前高置信类别的中英文颜色和占比
+  图例。三个受影响 ROS 包已在当前 Jazzy 容器完成构建，隔离 ROS Domain 的感知、网页、
+  导航和 launch 回归共 33 项通过。当前卡点：512×512 FP16 模型实测单帧约 248.9 ms，理论上限约 4 Hz，要稳定达到
+  真实 5 Hz 仍需改用更小输入或 INT8 模型。踩坑：模型虚拟环境内连续 `asyncio.to_thread`
+  的测试执行受当前运行环境线程行为
+  限制，组合推理改为单工作线程内顺序调用，也更符合 RKNN Runtime 的线程归属要求。
+
 ## 2026-08-28
 
 - 修复 `stereo_robot.launch.py` 延时 include 后，相机自动控制退出回调找不到

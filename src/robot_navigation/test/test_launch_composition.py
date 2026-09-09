@@ -66,6 +66,13 @@ def test_removed_legacy_compositions_are_not_present():
         assert not (launch_directory / filename).exists()
 
 
+def test_each_top_level_config_has_a_same_named_launch():
+    """每个 Package 根 config YAML 都应归属于同名 launch。"""
+    for config in sorted(SOURCE_DIRECTORY.glob('*/config/*.yaml')):
+        launch = config.parents[1] / 'launch' / f'{config.stem}.launch.py'
+        assert launch.exists(), f'{config} 没有同名 launch：{launch}'
+
+
 def test_all_launch_arguments_have_descriptions():
     for path in SOURCE_DIRECTORY.glob('*/launch/*.launch.py'):
         tree = ast.parse(path.read_text(encoding='utf-8'), filename=str(path))

@@ -1,0 +1,16 @@
+# 使用方法：由 robot_perception/launch/terrain_analysis.launch.py 加载；现场差异请通过 launch 参数覆盖。
+terrain_analyzer:
+  ros__parameters:
+    input_topic: /perception/points
+    publish_rate: 10.0
+    grid_resolution: 0.02
+    ground_tolerance: 0.05
+    terrain_voxel_size: 0.03
+    max_grade_deg: 35.0
+    step_threshold: 0.03
+    dropoff_threshold: 0.05
+    look_ahead_distance: 0.10
+    look_ahead_samples: 5
+    ground_to_base_height: 0.15
+    wheelbase: 0.4
+    track: 0.2

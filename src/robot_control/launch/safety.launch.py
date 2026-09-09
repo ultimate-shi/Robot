@@ -22,7 +22,6 @@ def scoped_include(launch_source, **kwargs):
 
 def generate_launch_description():
     share = get_package_share_directory('robot_control')
-    config = os.path.join(share, 'config', 'control.yaml')
     input_topic = LaunchConfiguration('input_topic')
     output_topic = LaunchConfiguration('output_topic')
     log_level = LaunchConfiguration('log_level')
@@ -46,7 +45,6 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(os.path.join(
                 share, 'launch', 'nav_velocity_gate.launch.py')),
             launch_arguments={
-                'config_file': config,
                 'log_level': log_level,
             }.items(),
             condition=IfCondition(LaunchConfiguration(
@@ -55,7 +53,6 @@ def generate_launch_description():
             PythonLaunchDescriptionSource(os.path.join(
                 share, 'launch', 'obstacle_avoidance.launch.py')),
             launch_arguments={
-                'config_file': config,
                 'input_topic': input_topic,
                 'output_topic': output_topic,
                 'log_level': log_level,
