@@ -8,7 +8,7 @@ stereo_pointcloud_filter:
     target_frame: "base_link"  # 点云变换和过滤所使用的机器人底盘坐标系
     min_height: 0.05  # base_link 下保留点的最低 z，单位 m；用于排除地面噪声
     max_height: 0.80  # base_link 下保留点的最高 z，单位 m；用于排除无关高处点
-    min_range: 0.25  # base_link 平面内保留点的最近距离，单位 m
+    min_range: 0.1  # base_link 平面内保留点的最近距离，单位 m
     max_range: 4.0  # base_link 平面内保留点的最远距离，单位 m
     horizontal_fov_deg: 120.0  # 以前向 x 轴为中心保留的水平视场总角度，单位 deg
     voxel_size: 0.05  # 三维体素降采样边长，单位 m；增大可降低 CPU 和网络负载

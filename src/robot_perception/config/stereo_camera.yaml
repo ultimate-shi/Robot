@@ -75,5 +75,5 @@ stereo_depth:
     right_depth_topic: "/stereo/depth/right/image"  # 前向映射到右目像素坐标的米制深度
     right_depth_frame_id: "stereo_right_optical_frame"  # 右目深度对应的光学坐标系
     visual_topic: "/stereo/depth/image_visual"  # 供 Foxglove 显示的 mono8 深度预览
-    min_depth: 0.25  # 接受的最近深度，单位 m；更近的结果写为 NaN
+    min_depth: 0.1  # 接受的最近深度，单位 m；更近的结果写为 NaN
     max_depth: 4.0  # 接受的最远深度，单位 m；更远的结果写为 NaN

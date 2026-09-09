@@ -1,34 +1,34 @@
 # 使用方法：由 robot_navigation/launch/rtabmap_mapping.launch.py 加载；现场差异请通过 launch 参数覆盖。
 rtabmap:
   ros__parameters:
-    frame_id: base_link
-    odom_frame_id: odom
-    map_frame_id: map
-    publish_tf: true
+    frame_id: base_link  # 机器人主体坐标系；传感器数据会通过 TF 转换到该坐标系参与建图
+    odom_frame_id: odom  # 局部连续里程计坐标系；RTAB-Map 根据它估计并修正 map -> odom
+    map_frame_id: map  # 全局地图坐标系，也是输出占据栅格地图所在的坐标系
+    publish_tf: true  # 是否由 RTAB-Map 发布 map -> odom 变换
     wait_for_transform: 1.0  # 等待视觉里程计发布对应图像时间戳的 odom -> base_link
-    subscribe_stereo: true
-    subscribe_depth: false
-    subscribe_rgb: false
-    subscribe_odom_info: false
-    subscribe_scan_cloud: false
-    approx_sync: false
-    topic_queue_size: 2
-    sync_queue_size: 10
-    qos: 1
-    database_path: /tmp/robot_rtabmap_mapping.db
-    Rtabmap/DetectionRate: "2.0"
-    Mem/IncrementalMemory: "true"
-    Mem/InitWMWithAllNodes: "false"
-    RGBD/CreateOccupancyGrid: "true"
-    Reg/Force3DoF: "true"
-    Grid/FromDepth: "true"
-    Grid/3D: "false"
-    Grid/RayTracing: "true"
-    Grid/CellSize: "0.03"
-    Grid/RangeMin: "0.25"
-    Grid/RangeMax: "4.0"
-    Grid/NoiseFilteringRadius: "0.08"
-    Grid/NoiseFilteringMinNeighbors: "5"
-    Grid/MaxObstacleHeight: "0.80"
-    Grid/MinGroundHeight: "-0.20"
-    Grid/MaxGroundHeight: "0.05"
+    subscribe_stereo: true  # 订阅同步后的左、右目图像及相机标定信息作为建图输入
+    subscribe_depth: false  # 是否订阅 RGB-D 深度图；本项目使用双目输入，因此关闭
+    subscribe_rgb: false  # 是否单独订阅普通 RGB 图像；双目模式已包含左目图像，因此关闭
+    subscribe_odom_info: false  # 是否额外同步 rtabmap_odom/OdomInfo；当前建图不依赖该诊断信息
+    subscribe_scan_cloud: false  # 是否把外部激光/障碍 PointCloud2 同步为建图输入；当前栅格直接由双目深度生成
+    approx_sync: false  # false 使用严格时间同步，要求双目图像与 CameraInfo 的时间戳一致
+    topic_queue_size: 2  # 每个输入订阅器的消息队列深度；较小可减少处理旧帧造成的延迟
+    sync_queue_size: 10  # 消息同步器缓存的候选消息数量，用于等待同时间戳的双目数据
+    qos: 1  # 图像类订阅使用的 ROS 2 QoS 可靠性编号；1 表示 RELIABLE
+    database_path: /tmp/robot_rtabmap_mapping.db  # RTAB-Map 图、特征和地图数据库路径；位于 /tmp，重启系统后可能被清理
+    Rtabmap/DetectionRate: "2.0"  # RTAB-Map 处理传感器数据和创建节点的最高频率，单位 Hz；0 表示不限制
+    Mem/IncrementalMemory: "true"  # 启用增量建图；true 会把新观测加入数据库，false 通常用于已有地图定位
+    Mem/InitWMWithAllNodes: "false"  # 启动时是否把数据库全部节点载入工作内存；增量建图关闭可降低启动内存占用
+    RGBD/CreateOccupancyGrid: "true"  # 是否根据传感器数据生成并发布二维/三维占据地图
+    Reg/Force3DoF: "true"  # 将位姿优化约束为平面 x、y、yaw，避免地面机器人地图产生俯仰和高度漂移
+    Grid/FromDepth: "true"  # 从双目/RGB-D 深度数据生成局部占据栅格，而不是依赖激光扫描
+    Grid/3D: "false"  # false 生成二维 OccupancyGrid；true 则构建三维占据表示
+    Grid/RayTracing: "true"  # 沿传感器到测量点进行射线清空，将射线穿过区域标记为空闲空间
+    Grid/CellSize: "0.02"  # 占据栅格边长，单位 m；越小地图越细，但计算量、内存和噪声敏感度越高
+    Grid/RangeMin: "0.1"  # 参与栅格生成的最小测量距离，单位 m；更近的深度点会被忽略
+    Grid/RangeMax: "4.0"  # 参与栅格生成的最大测量距离，单位 m；用于限制远距离双目噪声
+    Grid/NoiseFilteringRadius: "0.08"  # 点云半径离群过滤的邻域半径，单位 m；0 表示关闭该过滤
+    Grid/NoiseFilteringMinNeighbors: "5"  # 上述半径内所需的最少邻点数；不足的点会作为孤立噪声删除
+    Grid/MaxObstacleHeight: "0.80"  # 障碍点相对 frame_id 原点允许的最大高度，单位 m；更高的点不标为障碍
+    Grid/MinGroundHeight: "-0.20"  # 地面点相对 frame_id 原点允许的最小高度，单位 m
+    Grid/MaxGroundHeight: "0.05"  # 地面点相对 frame_id 原点允许的最大高度，单位 m；与下限共同限定地面高度带
