@@ -7,13 +7,17 @@ from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
     ExecuteProcess,
+    GroupAction,
+    IncludeLaunchDescription,
+    OpaqueFunction,
     RegisterEventHandler,
+    TimerAction,
 )
 from launch.conditions import IfCondition, UnlessCondition
 from launch.event_handlers import OnProcessExit
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration, PythonExpression
 from launch_ros.actions import Node
-from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -28,9 +32,7 @@ def generate_launch_description():
     video_device = LaunchConfiguration('video_device')
     apply_auto_camera_controls = LaunchConfiguration(
         'apply_auto_camera_controls')
-    # 独立启动时默认开启；组合入口可用内部配置避免同一端口重复启动。
-    start_foxglove_bridge = LaunchConfiguration(
-        '_camera_start_foxglove_bridge', default='true')
+    start_foxglove_bridge = LaunchConfiguration('start_foxglove_bridge')
     foxglove_port = LaunchConfiguration('foxglove_port')
     log_level = LaunchConfiguration('log_level')
     splitter_backend = LaunchConfiguration('splitter_backend')
@@ -58,6 +60,15 @@ def generate_launch_description():
     python_splitter_condition = IfCondition(PythonExpression([
         '"', splitter_backend, '" == "python"',
     ]))
+
+    def staggered(index, actions):
+        """在当前作用域解析间隔，再创建不会依赖子作用域的定时器。"""
+        def create_timer(context):
+            interval = float(LaunchConfiguration(
+                'node_start_interval').perform(context))
+            return [TimerAction(period=interval * index, actions=actions)]
+
+        return OpaqueFunction(function=create_timer)
 
     declarations = [
         DeclareLaunchArgument(
@@ -87,6 +98,12 @@ def generate_launch_description():
             'foxglove_port', default_value='8765',
             description='Foxglove Bridge 监听的 WebSocket 端口'),
         DeclareLaunchArgument(
+            'start_foxglove_bridge', default_value='true',
+            description='是否为独立相机入口启动 Foxglove Bridge'),
+        DeclareLaunchArgument(
+            'node_start_interval', default_value='0.0',
+            description='双目处理链相邻启动阶段的错峰间隔，单位为秒'),
+        DeclareLaunchArgument(
             'left_calibration_file',
             default_value=os.path.join(calibration_dir, 'left.yaml'),
             description='左目相机标定 YAML 文件路径'),
@@ -99,19 +116,21 @@ def generate_launch_description():
             description='相机处理链各 ROS 节点的日志级别'),
     ]
 
-    def camera_node(condition=None):
+    def camera_node(
+            condition=None, config=camera_config, device=video_device,
+            node_ros_args=ros_args):
         """创建取流节点；自动控制开启时由控制命令完成事件启动."""
         return Node(
             package='usb_cam',
             executable='usb_cam_node_exe',
             name='usb_cam',
-            parameters=[camera_config, {'video_device': video_device}],
+            parameters=[config, {'video_device': device}],
             remappings=[
                 ('image_raw', '/stereo/image_raw'),
                 ('camera_info', '/stereo/combined/camera_info'),
             ],
             condition=condition,
-            arguments=ros_args,
+            arguments=node_ros_args,
             output='screen',
         )
 
@@ -128,13 +147,23 @@ def generate_launch_description():
         condition=auto_controls_condition,
         output='screen',
     )
-    camera_after_controls = RegisterEventHandler(
-        OnProcessExit(
-            target_action=camera_controls,
-            on_exit=[camera_node()],
-        ),
-        condition=auto_controls_condition,
-    )
+    def register_camera_after_controls(context):
+        """提前解析退出回调参数，避免被组合入口引用后丢失子 launch 作用域。"""
+        resolved_config = camera_config.perform(context)
+        resolved_device = video_device.perform(context)
+        resolved_log_level = log_level.perform(context)
+        return [RegisterEventHandler(
+            OnProcessExit(
+                target_action=camera_controls,
+                on_exit=[camera_node(
+                    config=resolved_config,
+                    device=resolved_device,
+                    node_ros_args=[
+                        '--ros-args', '--log-level', resolved_log_level],
+                )],
+            ),
+            condition=auto_controls_condition,
+        )]
     camera_without_controls = camera_node(
         condition=camera_without_auto_condition)
     splitter = Node(
@@ -242,24 +271,18 @@ def generate_launch_description():
         arguments=ros_args,
         output='screen',
     )
-    foxglove = Node(
-        package='foxglove_bridge',
-        executable='foxglove_bridge',
-        name='stereo_foxglove_bridge',
-        parameters=[{
-            'port': ParameterValue(foxglove_port, value_type=int),
-            'address': '0.0.0.0',
-            'asset_uri_allowlist': ['package://robot_description/.*'],
-            'allow_file_transfer': True,
-            'send_buffer_limit': 10000000,
-            'max_packet_messages': 100,
-            'client_timeout_ms': 300000,
-            'keep_alive_interval_ms': 5000,
-        }],
-        condition=IfCondition(start_foxglove_bridge),
-        arguments=ros_args,
-        output='screen',
-    )
+    foxglove = GroupAction(actions=[
+        IncludeLaunchDescription(
+            PythonLaunchDescriptionSource(os.path.join(
+                get_package_share_directory('robot_description'),
+                'launch', 'foxglove.launch.py')),
+            launch_arguments={
+                'port': foxglove_port,
+                'log_level': log_level,
+            }.items(),
+            condition=IfCondition(start_foxglove_bridge),
+        ),
+    ])
 
     def compressed_republisher(name, topic):
         return Node(
@@ -283,21 +306,23 @@ def generate_launch_description():
         )
 
     return LaunchDescription(declarations + [
-        camera_after_controls,
-        camera_controls,
-        camera_without_controls,
-        splitter,
-        cpp_splitter,
-        left_rectify,
-        right_rectify,
-        pair_throttle,
-        disparity,
-        point_cloud,
-        depth,
         foxglove,
-        # rectify_node 自带 image_transport 压缩插件；网页订阅时会按需发布，
-        # 不再额外转发左右图，避免同一压缩话题出现两个发布者和重复帧。
-        compressed_republisher(
-            'depth_compressed_republisher',
-            '/stereo/depth/image_visual'),
+        staggered(0, [
+            OpaqueFunction(function=register_camera_after_controls),
+            camera_controls,
+            camera_without_controls,
+        ]),
+        staggered(1, [splitter, cpp_splitter]),
+        staggered(2, [left_rectify]),
+        staggered(3, [right_rectify]),
+        staggered(4, [pair_throttle]),
+        staggered(5, [disparity]),
+        staggered(6, [point_cloud]),
+        staggered(7, [depth]),
+        staggered(8, [
+            # rectify_node 自带 image_transport 压缩插件；不再额外转发左右图。
+            compressed_republisher(
+                'depth_compressed_republisher',
+                '/stereo/depth/image_visual'),
+        ]),
     ])

@@ -21,5 +21,7 @@ setup(
         'chassis_feedback_node = robot_control.chassis_feedback:main',
         'nav_controller_node = robot_control.nav_velocity_gate:main',
         'obstacle_avoidance = robot_control.obstacle_avoidance:main',
+        'head_mapping_lock_node = robot_control.head_mapping_lock:main',
+        'four_wheel_odometry_node = robot_control.four_wheel_odometry:main',
     ]},
 )

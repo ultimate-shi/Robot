@@ -1,0 +1,32 @@
+# 使用方法：由 robot_perception/imu.launch.py 加载 GY95T 与无磁姿态滤波参数。
+gy95t_driver:
+  ros__parameters:
+    device: "/dev/gy95t"  # GY95T USB 转串口的稳定 udev 设备名
+    baud_rate: 115200  # GY95T 串口波特率，说明书默认 115200
+    poll_rate: 30.0  # 主机查询与发布目标频率，单位 Hz
+    serial_timeout: 0.10  # 单次串口响应超时，单位 s
+    reconnect_interval: 1.0  # 断线后的重连间隔，单位 s
+    configure_on_start: true  # 打开串口后是否显式设置查询模式、频率和量程
+    validate_checksum: true  # 是否拒绝累加校验失败的响应帧
+    frame_id: "imu_link"  # IMU 消息使用的 URDF 坐标系
+    accel_range_index: 0  # 加速度量程索引：0=±2g、1=±4g、2=±8g、3=±16g
+    gyro_range_index: 0  # 陀螺仪量程索引：0=±250、1=±500、2=±1000、3=±2000 deg/s
+    axis_permutation: [0, 1, 2]  # 设备 XYZ 到 imu_link XYZ 的轴索引排列
+    axis_sign: [1.0, 1.0, 1.0]  # 轴方向符号，装车后按三轴正向试验校准
+    median_window: 3  # 去除孤立尖峰的中值滤波窗口，必须为正奇数
+    low_pass_cutoff: 10.0  # 角速度和加速度一阶低通截止频率，单位 Hz；0 表示关闭
+    gyro_bias_duration: 2.0  # 启动后保持静止以估计陀螺仪零偏的时间，单位 s
+    gyro_stationary_threshold: 0.08  # 零偏标定允许的最大角速度模长，单位 rad/s
+    orientation_variance: 0.03  # 姿态方差占位；原始话题会用 -1 标记姿态不可用
+    angular_velocity_variance: 0.0025  # 角速度协方差对角线初值，单位 (rad/s)^2
+    linear_acceleration_variance: 0.04  # 加速度协方差对角线初值，单位 (m/s^2)^2
+
+imu_filter_madgwick:
+  ros__parameters:
+    use_mag: false  # 首版不使用易受电机和大电流影响的磁航向
+    publish_tf: false  # TF 由 robot_state_publisher 和 EKF 统一负责
+    world_frame: "enu"  # ROS 机器人采用东北天世界坐标约定
+    gain: 0.1  # Madgwick 姿态校正增益
+    zeta: 0.0  # 不在此节点重复估计陀螺仪零偏
+    remove_gravity_vector: false  # 保留加速度中的重力分量，不用于位置积分
+

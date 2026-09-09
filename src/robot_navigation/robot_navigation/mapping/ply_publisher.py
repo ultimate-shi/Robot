@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""
-使用方法：由 robot_navigation 的预演 launch 启动，发布离线 PLY 点云。
+"""使用方法：由 robot_navigation 的预演 launch 启动，发布离线 PLY 点云.
+
 本节点由 robot.launch.py 以 executable='publish_ply' 启动。
 作用是把离线 PLY 点云文件转换成 ROS 2 的 PointCloud2 话题。
 
 输入：
-- 参数 ply_file，默认指向 robot 包 share 目录下的 map/studyroom.ply。
+- 参数 ply_file，默认指向工作区 /workspace/maps/studyroom/studyroom.ply。
 - 参数 frame_id，默认 map，表示点云坐标已经在地图坐标系下。
 
 输出：
@@ -17,9 +17,6 @@ Nav2 点云避障链路依赖 /perception/points，前端显示依赖 /pointclou
 如果换成真实双目相机，可以保留接口但用相机驱动替代本节点的数据来源。
 """
 
-import os
-
-from ament_index_python.packages import get_package_share_directory
 import numpy as np
 import rclpy
 from rclpy.executors import ExternalShutdownException
@@ -39,8 +36,7 @@ class PLYPublisher(Node):
     def __init__(self):
         super().__init__('ply_publisher')
 
-        pkg_share = get_package_share_directory('robot_navigation')
-        default_ply = os.path.join(pkg_share, 'map', 'studyroom.ply')
+        default_ply = '/workspace/maps/studyroom/studyroom.ply'
 
         self.declare_parameter('ply_file', '')
         self.declare_parameter('frame_id', 'map')

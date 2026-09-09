@@ -1,0 +1,49 @@
+# 使用方法：由 state_estimation.launch.py 加载，统一融合视觉、IMU 和未来轮式里程计。
+ekf_filter_node:
+  ros__parameters:
+    frequency: 30.0  # EKF 输出频率，单位 Hz
+    sensor_timeout: 0.2  # 输入超过该时间未更新时只执行预测，单位 s
+    two_d_mode: true  # 小车建图只估计平面位置、航向和平面速度
+    publish_tf: true  # EKF 是 odom 到 base_link 的唯一 TF 发布者
+    publish_acceleration: false  # 当前不输出未经可靠约束的线加速度状态
+    print_diagnostics: true  # 向 /diagnostics 发布输入和配置问题
+    map_frame: map  # 全局地图坐标系，由 RTAB-Map 负责 map 到 odom
+    odom_frame: odom  # 连续局部里程计坐标系
+    base_link_frame: base_link  # 机器人底盘坐标系
+    world_frame: odom  # 本 EKF 只负责连续局部状态，不直接融合 map 跳变
+    transform_time_offset: 0.0  # 不人为前移 TF 时间戳
+    transform_timeout: 0.1  # 等待传感器外参 TF 的最长时间，单位 s
+
+    odom0: /visual_odom  # RTAB stereo_odometry 的纯视觉输出
+    odom0_config: [true, true, false,
+                   false, false, true,
+                   false, false, false,
+                   false, false, false,
+                   false, false, false]  # 只融合视觉 x、y、yaw，避免重复使用同源速度
+    odom0_queue_size: 10  # 视觉消息输入队列深度
+    odom0_differential: false  # /visual_odom 已是连续 odom 位姿
+    odom0_relative: false  # 保留视觉里程计自身的启动原点
+    odom0_pose_rejection_threshold: 3.0  # 拒绝过大的视觉位姿创新
+
+    imu0: /sensors/imu/data  # 无磁 Madgwick 输出
+    imu0_config: [false, false, false,
+                  false, false, false,
+                  false, false, false,
+                  false, false, true,
+                  false, false, false]  # 首版只融合陀螺仪 yaw 角速度
+    imu0_queue_size: 100  # IMU 高频消息队列深度
+    imu0_differential: false  # 角速度本身不是姿态差分量
+    imu0_relative: false  # 当前未融合绝对姿态
+    imu0_remove_gravitational_acceleration: false  # 当前不融合线加速度
+    imu0_twist_rejection_threshold: 2.0  # 拒绝异常角速度创新
+
+    odom1: /wheel/odom  # 未来四轮独立转向运动学输出
+    odom1_config: [false, false, false,
+                   false, false, false,
+                   true, true, false,
+                   false, false, true,
+                   false, false, false]  # 轮侧只融合 vx、vy、yaw_rate
+    odom1_queue_size: 20  # 轮式里程计输入队列深度
+    odom1_differential: false  # 输入使用瞬时 twist，不对积分位姿求差分
+    odom1_relative: false  # 当前不融合轮式绝对位姿
+    odom1_twist_rejection_threshold: 2.0  # 拒绝轮速突变形成的异常创新

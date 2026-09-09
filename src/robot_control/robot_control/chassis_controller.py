@@ -11,8 +11,8 @@
 输出：
 - /steering_controller/commands：四个转向关节的位置命令。
 - /wheel_controller/commands：四个轮子的速度命令。
-- /odom：积分出的 6DOF 里程计，供 TF、IMU、Nav2 使用。
-- odom -> base_link TF：机器人位姿变换。
+- /odom 与 odom -> base_link TF：仅在 publish_odometry=true 时发布，完整双目入口会关闭，
+  由统一 EKF 独占这两个接口。
 - /terrain_status：由 terrain_analyzer_node 发布，本节点订阅后用于 z/roll/pitch、打滑和阻挡处理。
 - /chassis_mode：当前运动模式，供调试显示。
 
@@ -22,7 +22,7 @@
 - ackermann：近似阿克曼转向，使用 linear.x + angular.z。
 
 为什么不能删除：
-删除后 /cmd_vel_safe 无法转成轮速/转角，小车不会运动，也不会发布 /odom 和 TF。
+删除后 /cmd_vel_safe 无法转成轮速/转角，小车不会运动；旧的独立控制入口也不会发布里程计。
 """
 
 import json
@@ -52,6 +52,7 @@ class ChassisController3D(Node):
         self.declare_parameter("motion_mode", "crab")
         self.declare_parameter("steering_limit", 1.57)
         self.declare_parameter("ackermann_min_turning_speed", 0.04)
+        self.declare_parameter("publish_odometry", True)
         # Terrain parameters
         self.declare_parameter("terrain_check_enabled", True)
         self.declare_parameter("grid_resolution", 0.02)
@@ -79,6 +80,8 @@ class ChassisController3D(Node):
         self.ackermann_min_turning_speed = float(
             self.get_parameter("ackermann_min_turning_speed").value
         )
+        self.publish_odometry = bool(
+            self.get_parameter("publish_odometry").value)
         self.terrain_enabled = self.get_parameter("terrain_check_enabled").value
 
         self.Lx = self.wheel_base / 2.0
@@ -101,8 +104,11 @@ class ChassisController3D(Node):
         self.steer_pub = self.create_publisher(Float64MultiArray, '/steering_controller/commands', 10)
         self.speed_pub = self.create_publisher(Float64MultiArray, '/wheel_controller/commands', 10)
         self.mode_pub = self.create_publisher(String, '/chassis_mode', 10)
-        self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
-        self.tf_broadcaster = TransformBroadcaster(self)
+        self.odom_pub = None
+        self.tf_broadcaster = None
+        if self.publish_odometry:
+            self.odom_pub = self.create_publisher(Odometry, '/odom', 10)
+            self.tf_broadcaster = TransformBroadcaster(self)
 
         # 10Hz control loop
         self.control_timer = self.create_timer(self.control_rate, self.control_loop)
@@ -407,10 +413,12 @@ class ChassisController3D(Node):
             self.pitch = 0.0
 
         # Publish 6DOF odometry and TF
-        self.publish_odom(current_time)
+        if self.publish_odometry:
+            self.publish_odom(current_time)
 
     # ==================== 6DOF Odometry publishing ====================
     def publish_odom(self, time):
+        """在兼容模式下发布旧底盘积分里程计及其 TF。"""
         # Convert roll, pitch, yaw to quaternion
         qx, qy, qz, qw = self._euler_to_quaternion(self.roll, self.pitch, self.yaw)
 

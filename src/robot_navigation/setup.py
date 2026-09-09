@@ -1,4 +1,4 @@
-"""使用方法：在工作区执行 colcon build 安装导航节点、地图、配置和 launch。"""
+"""使用方法：在工作区执行 colcon build 安装导航节点、配置和 launch；地图保留在 maps/。"""
 import os
 from glob import glob
 from setuptools import find_packages, setup
@@ -11,7 +11,6 @@ setup(
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
-        (os.path.join('share', package_name, 'map'), glob('map/*.*')),
         (os.path.join('share', package_name, 'tools'), glob('tools/*.py')),
     ],
     install_requires=['setuptools', 'plyfile>=1.0,<2'], zip_safe=True,

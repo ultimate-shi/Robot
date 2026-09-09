@@ -35,6 +35,31 @@ else
   echo "提示：未找到 /dev/stereo_camera，本次容器不映射真实双目相机。" >&2
 fi
 
+IMU_DEVICE_ARGS=()
+IMU_HOST_DEVICE="${GY95T_DEVICE:-}"
+if [[ -n "${IMU_HOST_DEVICE}" && ! -e "${IMU_HOST_DEVICE}" ]]; then
+  echo "GY95T_DEVICE 指定的设备不存在：${IMU_HOST_DEVICE}" >&2
+  exit 1
+fi
+if [[ -z "${IMU_HOST_DEVICE}" ]]; then
+  # 优先稳定别名；未安装 udev 规则时兼容当前 CH340 by-id 和单设备 ttyUSB0。
+  for candidate in \
+    /dev/gy95t \
+    /dev/serial/by-id/usb-1a86_USB_Serial-if00-port0 \
+    /dev/ttyUSB0; do
+    if [[ -e "${candidate}" ]]; then
+      IMU_HOST_DEVICE="${candidate}"
+      break
+    fi
+  done
+fi
+if [[ -n "${IMU_HOST_DEVICE}" ]]; then
+  IMU_DEVICE_ARGS=(--device "${IMU_HOST_DEVICE}:/dev/gy95t")
+  echo "已映射 GY95T：${IMU_HOST_DEVICE} -> 容器 /dev/gy95t"
+else
+  echo "提示：未找到 GY95T；可用 GY95T_DEVICE=/dev/ttyUSBx 显式指定。" >&2
+fi
+
 # 容器仅提供 Jazzy 环境，不执行 colcon build，也不启动任何 ROS launch。
 docker run --rm --detach --interactive --tty \
   --name "${CONTAINER_NAME}" \
@@ -42,6 +67,7 @@ docker run --rm --detach --interactive --tty \
   --ipc host \
   --ulimit core=0 \
   "${CAMERA_DEVICE_ARGS[@]}" \
+  "${IMU_DEVICE_ARGS[@]}" \
   --volume "${WORKSPACE_DIR}:/workspace" \
   --workdir /workspace \
   "${IMAGE_NAME}" \
@@ -61,9 +87,11 @@ docker run --rm --detach --interactive --tty \
     exec bash
   ' >/dev/null
 
-echo "Jazzy 容器已在后台启动，未构建项目，也未启动 launch。"
 if [[ ${#CAMERA_DEVICE_ARGS[@]} -gt 0 ]]; then
   echo "容器相机设备：/dev/video0"
+fi
+if [[ ${#IMU_DEVICE_ARGS[@]} -gt 0 ]]; then
+  echo "容器 IMU 设备：/dev/gy95t"
 fi
 echo "进入容器：docker exec -it ${CONTAINER_NAME} bash"
 echo "停止容器：docker stop ${CONTAINER_NAME}"

@@ -1,4 +1,4 @@
-# 使用方法：由 stereo_perception.launch.py 加载语义检测和现场验收采样参数。
+# 使用方法：由 semantic_detection、acceptance_sampler 或 stereo_perception launch 加载。
 semantic_perception:
   ros__parameters:
     image_topic: /stereo/right/image_rect

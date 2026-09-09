@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<!-- 使用方法：ros2 launch robot_description description.launch.py 发布机器人静态模型和 TF。 -->
+<!-- 使用方法：通过 description、joint_states 或 foxglove launch 启动基础模型与可视化能力。 -->
 <package format="3">
   <name>robot_description</name><version>0.1.0</version>
   <description>机器人 URDF、ros2_control 描述和网格资源</description>
@@ -7,6 +7,7 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <exec_depend>ament_index_python</exec_depend><exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend><exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend><exec_depend>foxglove_bridge</exec_depend>
   <exec_depend>xacro</exec_depend>
   <export><build_type>ament_cmake</build_type></export>
 </package>

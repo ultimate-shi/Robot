@@ -27,13 +27,14 @@ rtabmap:
     subscribe_stereo: true
     subscribe_depth: false
     subscribe_rgb: false
-    subscribe_odom_info: true
+    subscribe_odom_info: false
+    subscribe_scan_cloud: false
     approx_sync: false
     topic_queue_size: 2
     sync_queue_size: 10
     qos: 1
     database_path: /tmp/robot_rtabmap_mapping.db
-    Rtabmap/DetectionRate: "1.0"
+    Rtabmap/DetectionRate: "2.0"
     Mem/IncrementalMemory: "true"
     Mem/InitWMWithAllNodes: "false"
     RGBD/CreateOccupancyGrid: "true"
@@ -41,8 +42,11 @@ rtabmap:
     Grid/FromDepth: "true"
     Grid/3D: "false"
     Grid/RayTracing: "true"
-    Grid/CellSize: "0.05"
+    Grid/CellSize: "0.03"
+    Grid/RangeMin: "0.25"
     Grid/RangeMax: "4.0"
+    Grid/NoiseFilteringRadius: "0.08"
+    Grid/NoiseFilteringMinNeighbors: "5"
     Grid/MaxObstacleHeight: "0.80"
     Grid/MinGroundHeight: "-0.20"
     Grid/MaxGroundHeight: "0.05"

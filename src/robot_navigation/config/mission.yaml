@@ -1,4 +1,4 @@
-# 使用方法：由 mission_preview.launch.py 加载；确认任务也只发布未来导航接口。
+# 使用方法：供后续任务规划入口加载；当前删除旧 mission_preview launch 后不再默认启动。
 brain_mission:
   ros__parameters:
     motion_enabled: false

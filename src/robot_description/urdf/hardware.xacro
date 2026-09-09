@@ -81,6 +81,16 @@
       <state_interface name="position"/>
       <state_interface name="velocity"/>
     </joint>
+
+    <!-- 头部几何仍由 head.xacro 定义；此处只提供 ros2_control 位置接口。 -->
+    <joint name="head_yaw_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
+    <joint name="head_pitch_joint">
+      <command_interface name="position"/>
+      <state_interface name="position"/>
+    </joint>
   </ros2_control>
 
 </robot>

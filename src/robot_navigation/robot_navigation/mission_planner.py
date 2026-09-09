@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""使用方法：由 mission_preview.launch.py 把探索、跟随和物体任务转换为 Nav2 路径预演。"""
+"""使用方法：由后续任务规划入口启动，把探索、跟随和物体任务转换为 Nav2 路径预演。"""
 
 import json
 import math

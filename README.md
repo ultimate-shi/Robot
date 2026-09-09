@@ -76,9 +76,24 @@ splitter_backend:=python
 
 ### localization：定位层
 
-该目录用于放置定位实现。目前双目视觉里程计直接使用
-`rtabmap_odom/stereo_odometry`，由 `stereo_mapping.launch.py` 组合启动。后续接入
-IMU、轮式里程计或 robot_localization 时，应在这一层增加融合节点，不需要改动感知和任务层。
+真实建图由 `rtabmap_odom/stereo_odometry` 输出 `/visual_odom`，再由
+`robot_localization` 二维 EKF 统一输出 `/odom` 和 `odom -> base_link`。首期可融合
+GY95T 的 yaw 角速度；未来 `/wheel/odom` 接入后只融合四轮运动学计算的平面速度。
+RTAB-Map 继续负责 `map -> odom`，视觉里程计不再单独发布冲突 TF。
+
+本次传感器融合功能按 ROS Package 分工如下：
+
+| 功能 | 所属 Package | 主要输入与输出 |
+| --- | --- | --- |
+| GY95T 串口驱动、零偏/中值/低通、Madgwick | `robot_perception` | `/dev/gy95t` → `/sensors/imu/data` |
+| 双目伪障碍点过滤 | `robot_perception` | `/stereo/points2` → `/mapping/stereo_obstacle_points` |
+| 视觉、IMU、未来轮速 EKF 与 RTAB-Map 编排 | `robot_navigation` | `/visual_odom`、IMU、`/wheel/odom` → `/odom` |
+| 建图头部归中、未来四轮运动学 | `robot_control` | 头部位置命令；`/joint_states` → `/wheel/odom` |
+| 现有 IMU/相机 TF 与头部 ros2_control 接口 | `robot_description` | URDF、`imu_link`、头部关节硬件接口 |
+
+轮速 MCU 应发布标准 `sensor_msgs/JointState`：四个转向关节填实际 `position`，四个驱动轮
+填实际 `velocity`。这样未来只需给建图入口传入 `use_wheel_odometry:=true`，不用改 EKF 的
+话题合同；该开关默认关闭，未接 MCU 时不会生成伪轮速。
 
 ### mapping：建图和地图层
 
@@ -154,6 +169,32 @@ ros2 launch <包名> <launch文件> --show-args
 ros2 launch robot_perception stereo_camera.launch.py --show-args
 ```
 
+### Launch 分层
+
+复杂场景入口只负责组合独立功能 launch 和传递参数，不直接重复创建节点。当前分层如下：
+
+- 基础与可视化：`description.launch.py`、`joint_states.launch.py`、
+  `foxglove.launch.py`。
+- 控制功能：`controllers.launch.py`、`chassis_control.launch.py`、
+  `head_mapping_lock.launch.py`、`wheel_odometry.launch.py`、
+  `nav_velocity_gate.launch.py`、`obstacle_avoidance.launch.py`。
+- 实机感知：`stereo_camera.launch.py`、`imu.launch.py`、
+  `stereo_pointcloud_filter.launch.py`、`semantic_detection.launch.py`、
+  `acceptance_sampler.launch.py`。
+- 虚拟感知：`pointcloud_obstacle.launch.py`、`terrain_analysis.launch.py`、
+  `virtual_ultrasonic.launch.py`、`range_to_scan.launch.py`、
+  `virtual_imu.launch.py`。
+- 导航与建图功能：`nav2.launch.py`、`stereo_odometry.launch.py`、
+  `state_estimation.launch.py`、`rtabmap_mapping.launch.py`、
+  `mapping_snapshot.launch.py`、`ply_map.launch.py`。
+- 组合入口：`control.launch.py`、`safety.launch.py`、
+  `virtual_sensors.launch.py`、`stereo_perception.launch.py`、
+  `robot.launch.py`、`stereo_mapping.launch.py`、`stereo_robot.launch.py` 和
+  `stereo_brain.launch.py`。
+
+独立功能入口均可用 `ros2 launch <包名> <文件名> --show-args` 查看输入话题、输出话题、
+设备、配置文件和日志参数。组合入口已有同一基础功能时，应通过其 `start_*` 参数关闭重复实例。
+
 ### 默认虚拟机器人
 
 ```bash
@@ -181,14 +222,47 @@ ros2 launch robot_perception stereo_camera.launch.py video_device:=/dev/video0
 ros2 launch robot_navigation stereo_mapping.launch.py video_device:=/dev/video0
 ```
 
+建图入口默认启动 GY95T，并把 `/sensors/imu/data` 同时送入双目视觉里程计和二维 EKF：
+
+```bash
+ros2 launch robot_navigation stereo_mapping.launch.py \
+  video_device:=/dev/video0 imu_device:=/dev/gy95t
+```
+
+现场暂未接入 IMU 时显式传入 `use_imu:=false`，视觉里程计和 EKF 会保持纯视觉降级运行。
+
+推荐在宿主机为 USB 转串口创建稳定的 `/dev/gy95t` 别名；首次调试也可直接传入实际设备，
+例如 `imu_device:=/dev/ttyUSB0`。容器必须在创建时映射该设备，运行中的旧容器不能追加设备；
+`run_jazzy_container.sh` 会依次检测 `/dev/gy95t`、当前 CH340 的稳定 by-id 和
+`/dev/ttyUSB0`，统一映射为容器内 `/dev/gy95t`。存在多个 USB 串口时，用
+`GY95T_DEVICE=/dev/ttyUSBx bash scripts/docker/run_jazzy_container.sh` 显式指定。
+
 若启动时报 `XML or text declaration not at start of entity`，请确认已重新构建
 `robot_description`，且 `robot.xacro` 的 `<?xml ...?>` 声明位于文件第一行。
 
-该入口启动真实相机、双目视觉里程计、RTAB-Map、地图点云、机器人模型、快照管理和
-Foxglove，不启动虚拟底盘和 Nav2。
+该入口启动真实相机、双目视觉里程计、二维 EKF、过滤后的建图障碍点云、RTAB-Map、
+头部建图归中、机器人模型、快照管理和 Foxglove，不启动虚拟底盘和 Nav2。默认
+`require_head_feedback:=false` 适合摄像头机械固定向前的手持验证；接入实机头部闭环后应改为
+`true`，并确保 `/head_controller/commands` 有控制器订阅且 `/joint_states` 返回实际角度。
+`wait_imu_to_init` 默认保持 `false`：IMU 正常时仍会参与视觉旋转估计和 EKF，但串口短时掉线
+不会阻塞纯视觉 `/visual_odom`。只有明确要求“没有 IMU 就不允许建图”时才设为 `true`。
 
-当前没有 IMU 和轮式里程计时仍可依靠双目视觉里程计建图。扩大地图时应保持相机安装在
-机器人上并缓慢移动整车；相机完全静止只能建立当前视野附近的局部地图。
+没有 IMU 和轮式里程计时仍可依靠双目视觉里程计和 EKF 建图。手持验收时应把摄像头和
+IMU 固定在同一刚性支架上，摄像头正前、IMU 水平，启动后先静止至少 2 秒完成陀螺仪零偏
+估计，再缓慢移动整个支架；不能让摄像头相对 IMU 单独转动。
+
+GY95T 驱动读取附件协议的 `0x08-0x2A` 寄存器，发布
+`/sensors/imu/raw_unfiltered`、`/sensors/imu/data_raw` 和内部姿态对照
+`/sensors/imu/vendor_rpy`。原始角速度和加速度经过三点中值、10 Hz 一阶低通及静止零偏
+校正，随后由无磁 Madgwick 输出 `/sensors/imu/data`。首版 EKF 只使用 yaw 角速度，不使用
+线加速度积分或易受电机干扰的磁航向。装车后必须按前倾、左倾和逆时针转动检查
+`axis_permutation` 与 `axis_sign`。
+
+二维地图由 RTAB-Map 从已同步的双目深度生成，并通过 `Grid/NoiseFilteringRadius` 与
+`Grid/NoiseFilteringMinNeighbors` 删除缺少邻域支持的孤立误匹配，避免空白区域形成黑色点。
+同时保留 `/mapping/stereo_obstacle_points`：它经过距离、高度、视场、每体素最少点数和相邻
+体素支持过滤，供 Foxglove 检查和未来 Nav2 使用，但不再作为 RTAB-Map 必须同步的第五路输入，
+避免过滤点云短时缺失导致整张二维地图无法生成。
 
 建图入口默认在 `usb_cam` 占用设备前，通过相机真实的 V4L2 控制名开启自动曝光和自动
 白平衡，并在终端回读控制值。若现场需要固定曝光和色温，可先运行
@@ -201,55 +275,90 @@ Foxglove，不启动虚拟底盘和 Nav2。
 `/compressed` 由 `rectify_node` 的 image_transport 插件按订阅需求发布，不再额外启动左右
 压缩转发器，避免同一话题出现两个发布者和重复帧；显式压缩转发仅保留给深度预览。
 
-`/visual_odom` 只表示双目视觉估计的机器人位姿，并通过 `odom -> base_link` TF 让
-Foxglove/RViz 中的 `robot_description` 随估计轨迹移动；它不会发布速度命令，也不会直接
-驱动真实底盘。真实小车只有在底盘控制链收到 `/cmd_vel` 后才会运动。
+`/visual_odom` 只表示双目视觉估计，`/odom` 才是 EKF 融合结果并负责
+`odom -> base_link` TF。二者都不会发布速度命令或直接驱动底盘；真实小车只有在底盘控制链
+收到 `/cmd_vel` 后才会运动。
 
 Foxglove 常用话题：
 
 - `/map`：二维占据栅格。
 - `/mapping/cloud_map`：三维地图点云。
 - `/visual_odom`：视觉里程计。
+- `/odom`：视觉、IMU 和未来轮式里程计的统一融合结果。
+- `/sensors/imu/data`：无磁姿态滤波后的 IMU。
+- `/mapping/stereo_obstacle_points`：生成二维地图前的过滤障碍点云。
+- `/mapping/head_lock_status`：建图期间头部归中状态。
 - `/tf`、`/robot_description`：机器人模型和轨迹。
 - `/mapping/snapshot_status`：快照状态。
 
-### 已保存地图导航预演
-
-先在建图模式调用临时快照服务，停止建图 launch，然后启动：
-
-```bash
-ros2 launch robot_navigation navigation_preview.launch.py
-```
-
-该入口不读取位置固定的真实相机，而是加载
-`/tmp/robot_preview/current.yaml` 和 `current.ply`，让虚拟机器人在已保存环境中规划、
-运动和避障。也可以指定其他地图：
-
-```bash
-ros2 launch robot_navigation navigation_preview.launch.py \
-  map_yaml_file:=/workspace/src/robot_navigation/map/studyroom.yaml \
-  ply_file:=/workspace/src/robot_navigation/map/studyroom.ply
-```
-
 ### 完整在线双目机器人
+
+`stereo_robot.launch.py` 是完整实机顶层组合入口，只引用独立功能 launch，不再直接创建 ROS
+节点。它按单一所有权组合机器人模型、Foxglove、IMU、双目相机、视觉里程计、EKF、可选轮式
+里程计、RTAB-Map、底盘控制、安全链、Nav2、语义感知和验收采样；相机、串口、点云过滤器、
+Foxglove 和 `/odom` 发布者都只启动一份。
+
+不传 `map_yaml_file` 时，同时启动 RTAB-Map 和 Nav2，使用实时 `/map` 边建图边导航：
 
 ```bash
 ros2 launch robot_navigation stereo_robot.launch.py
 ```
 
-用于相机和机器人运动链已经处于同一坐标关系时的在线模式。真实底盘、IMU 和超声波尚未接入
-ROS 前，不应把固定在现实环境中的相机点云与正在移动的虚拟机器人混合使用。
+加载工作区 `maps/` 中已有地图时传入对应 YAML；PGM 使用 YAML 中的相对路径自动加载，实时
+双目点云继续负责局部动态避障：
+
+```bash
+ros2 launch robot_navigation stereo_robot.launch.py \
+  map_yaml_file:=/workspace/maps/map_20260827_202256/map.yaml \
+  initial_x:=0.0 initial_y:=0.0 initial_yaw:=0.0
+```
+
+只要 `map_yaml_file` 非空，就不会启动 RTAB-Map，也不会修改已有地图；地图服务器发布 `/map`，
+给定的 `initial_x`、`initial_y`、`initial_yaw` 用于发布 `map -> odom` 初始关系。不传该参数时，
+不会启动静态地图服务器或静态 `map -> odom`，两者均由在线 RTAB-Map 提供，避免重复发布。
+
+两种模式都启动同一套 GY95T、双目视觉里程计和二维 EKF：`/visual_odom` 与 IMU yaw 角速度
+融合为 `/odom`，并由 EKF 发布 `odom -> base_link`。默认 `use_imu:=true`；没有映射 GY95T
+设备时应传入 `use_imu:=false`。已有地图模式当前不启动 AMCL，必须让机器人从命令给定的已知
+地图位姿开始；如果启动位置不确定，需要后续接入 RTAB-Map localization 或 AMCL，而不能靠
+IMU 推断地图中的绝对位置。
+
+完整双目入口会覆盖 `chassis_controller.publish_odometry=false`，禁止旧底盘积分同时发布
+`/odom` 和 `odom -> base_link`；真实轮侧反馈应通过 `/wheel/odom` 进入 EKF。单独运行旧控制
+入口时该参数默认保持 `true`，兼容原有仿真和调试方式。
+
+当前启动编排不再用 16、31、41 秒的长固定等待。入口先启动机器人模型、Foxglove、IMU、
+视觉里程计和 EKF；传感器与控制链默认在第 3 秒开始，语义
+感知在第 8 秒、Nav2 在第 14 秒开始。顶层功能入口以及双目相机和 Nav2 内部节点仍以默认
+0.8 秒间隔错峰创建，避免 RK3588 在同一时刻初始化大量高负载节点。ros2_control 的
+controller spawner 不再按定时器并发启动，
+而是严格等待前一个退出后再启动下一个，避免多个 spawner 争抢进程锁。可用
+`node_start_interval` 及四个阶段参数按现场负载调整；`navigation_start_delay` 应晚于双目
+里程计和在线地图首次输出。Foxglove 默认保持 WARN，排查监听状态时传入
+`foxglove_log_level:=info`，并确认终端出现 `Server listening on port 8765`。
+所有带错峰定时器的独立入口都会先在当前作用域解析延迟；相机自动控制退出回调和控制器串行
+生成链也会在注册时固化所需参数。因此这些入口被上层延时 include 后，不会因子 launch
+作用域结束而丢失配置。所有组合入口还会为每个子 launch 建立独立配置作用域，避免多个功能
+共用 `config_file`、`log_level` 等参数名时互相继承错误值。
+GY95T 开始发布滤波数据前还会静止估计约 2 秒
+陀螺仪零偏，期间出现一次
+`Still waiting for data on topic imu/data_raw` 属于正常初始化；持续超过 5 秒则应检查是否有
+重复 `gy95t_driver` 占用串口。四个阶段可用 `sensor_start_delay`、`control_start_delay`、
+`navigation_start_delay` 和 `perception_start_delay` 调整，不建议全部设为 0。
+
+该入口用于相机和机器人运动链已经处于同一坐标关系时的在线模式。真实底盘反馈未接入 ROS 前，
+可以验证建图和规划，但不应下发实车导航目标；固定在环境中的相机也不能与运动底盘混用。
 容器启动脚本将宿主机 `/dev/stereo_camera` 映射为容器内 `/dev/video0`，因此该入口默认使用
 `/dev/video0`；只有自定义容器设备映射时才需要传入 `video_device:=...`。
 该入口默认以 `log_level:=warn` 启动各 ROS 节点，需要调试时可显式传入
 `log_level:=info`。launch 框架输出的进程启动与退出提示不受该参数控制。
 
-### 机器人本地大脑与路径预演
+### 机器人本地大脑
 
-`stereo_brain.launch.py` 在真实双目在线建图基础上增加语义识别、Nav2 规划服务、前沿
-探索、人员跟随/前往物体预演、多用户控制权和局域网 HTTP 网页。第一版在代码和参数中
-双重固定 `motion_enabled=false`，只发布 `/mission/preview_goal` 和
-`/mission/preview_path`，不会向底盘发送速度。
+`stereo_brain.launch.py` 在真实双目在线建图基础上增加语义识别、视觉问答和局域网 HTTP
+网页。旧 `mission_preview.launch.py` 已删除，因此该入口当前不启动 Nav2 planner 或
+`mission_planner`，任务预演、确认和控制权相关接口暂时没有 ROS 任务节点提供服务；对应代码
+和参数保留给后续重新设计独立任务入口使用。当前入口不会向底盘发送速度。
 
 宿主机推理网关监听回环地址，ROS 容器通过 host network 访问：
 
@@ -431,8 +540,10 @@ WebSocket运行依赖 `websockets`，Jazzy镜像已固定安装对应版本；�
 | `stereo_camera.yaml` | UVC 相机格式、分辨率、帧率和拆分参数 |
 | `cameras/*/left.yaml`、`right.yaml` | 按相机型号保存的左右目标定参数 |
 | `stereo_pointcloud.yaml` | 视差、深度范围和双目点云过滤参数 |
+| `imu.yaml` | GY95T 串口、轴向、零偏、低通和无磁姿态滤波参数 |
 | `rtabmap_stereo_mapping.yaml` | 双目视觉里程计、RTAB-Map 和地图点云参数 |
-| `navigation_preview.yaml` | 静态点云局部观察和目标管理参数 |
+| `state_estimation.yaml` | 视觉、IMU 和未来四轮里程计的二维 EKF 参数 |
+| `navigation_preview.yaml` | 旧导航预演入口移除后保留的局部观察和目标管理参数 |
 | `stereo_collision_monitor.yaml` | 双目局部减速、停车区域和传感器超时 |
 | `nav2_params.yaml` | Nav2 控制器、规划器、代价地图和行为树参数 |
 | `nav2_stereo_overrides.yaml` | 在线双目模式的 Nav2 覆盖参数 |
@@ -451,12 +562,14 @@ WebSocket运行依赖 `websockets`，Jazzy镜像已固定安装对应版本；�
 - `src/robot_description/urdf/head.xacro`：两自由度头部和双目相机安装结构。
 - `src/robot_description/urdf/hardware.xacro`：ros2_control 硬件接口。
 - `src/robot_description/meshes/`：车体、轮子、头部和传感器网格。
-- `src/robot_navigation/map/studyroom.*`：默认二维地图和三维 PLY 点云。
-- `src/robot_navigation/map/obstacle_test.*`：避障测试地图。
-- `src/robot_navigation/map/blank.*`：基础运动链调试使用的空白地图。
+- `maps/studyroom/studyroom.*`：默认二维地图和三维 PLY 点云。
+- `maps/obstacle_test/obstacle_test.*`：避障测试地图。
+- `maps/blank/blank.*`：基础运动链调试使用的空白地图。
 
 二维地图的 `.yaml` 和 `.pgm` 必须配套；需要三维局部观察或虚拟超声波时，还要提供同一
-坐标系下的 `.ply`。
+坐标系下的 `.ply`。容器把工作区根目录挂载为 `/workspace`，因此 launch 默认从
+`/workspace/maps/studyroom/` 加载；宿主机直接运行时应通过 `map_yaml_file` 和 `ply_file`
+传入宿主机绝对路径。
 
 ## 构建与容器
 
@@ -489,6 +602,10 @@ bash scripts/docker/run_jazzy_container.sh
 docker exec -it robot-jazzy bash
 ```
 
+该脚本默认使用宿主机 IPC，让容器与宿主机上的 Fast DDS 进程共用 `/dev/shm`；当前不限制
+容器共享内存为 1 GB。停止容器后若异常残留影响下一次 ROS 图发现，应先确认宿主机没有其他
+ROS 2 进程，再处理对应的 Fast DDS 共享内存运行文件。
+
 进入容器后手动构建：
 
 ```bash
@@ -510,18 +627,6 @@ bash scripts/stereo/run_stereo_calibration.sh calibrate 0.030
 ```bash
 colcon build --symlink-install
 source install/setup.bash
-python3 -m pytest -q \
-  src/robot_brain/test/test_action_schema.py \
-  src/robot_brain/test/test_brain_core.py \
-  src/robot_navigation/test/test_mapping_snapshot.py \
-  src/robot_perception/test/test_stereo_processing.py
-```
 
-新增节点后，需要同时：
-
-1. 放入正确的领域 Package，不向兼容 `robot` 增加实现。
-2. 在所属 Package 的 `setup.py` 注册 `console_scripts`。
-3. 将可调参数放入所属 Package 的 `config/` 或 launch 参数。
-4. 更新 README 和当天的 `progress.md`。
 
 更完整但保持精简的开发约定见 `AGENTS.md`。

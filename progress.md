@@ -1,6 +1,179 @@
 <!-- 使用方法：按日期记录每次代码修改、验证结果、当前卡点和踩坑。 -->
 # 过程记录
 
+## 2026-08-28
+
+- 修复 `stereo_robot.launch.py` 延时 include 后，相机自动控制退出回调找不到
+  `camera_config`、控制器定时器找不到 `spawn_start_delay` 而导致整套启动退出的问题。
+  `stereo_camera.launch.py` 和 `controllers.launch.py` 现在通过 `OpaqueFunction` 在子 launch
+  作用域有效时提前解析异步回调参数；专项检查后，`chassis_control.launch.py`、
+  `nav2.launch.py`、`stereo_camera.launch.py` 和顶层 `stereo_robot.launch.py` 的所有定时器也改为
+  提前解析周期，避免它们由其他组合入口引用时发生同类问题。顶层入口同时显式传递相机、
+  controller_manager 和控制器配置文件，保持覆盖能力。清除了已删除历史 launch 留在
+  `robot_navigation` 构建目录中的失效
+  符号链接，并按标准命令完整重建工作区。验证结果：14 项 launch 架构回归测试、全部 34 个
+  launch 的 `--show-args` 解析、Python 编译、`git diff --check` 和 7 个 ROS Package 的
+  `colcon build --symlink-install` 通过；容器内实际运行
+  `stereo_robot` 40 秒，相机、12 个串行控制器链、RTAB-Map 和 Nav2 均进入启动阶段，不再出现
+  `SubstitutionFailure`。进一步实测发现兄弟 include 的同名 `config_file` 默认参数会串扰，导致
+  `stereo_mapping` 的 EKF、RTAB-Map 等节点误读 `robot_control/config/control.yaml`；全部 9 个
+  含子 launch 的入口现已用 scoped `GroupAction` 隔离配置，并新增异步与兄弟作用域专项回归
+  测试；`control`、`robot`、`stereo_mapping` 和修改后的 `stereo_robot` 均已短时实际启动验证。
+  当前卡点：无；踩坑：ROS 2 Jazzy 的 `TimerAction` 和 `OnProcessExit` 不会自动长期保留
+  IncludeLaunchDescription 的子作用域参数，IncludeLaunchDescription 本身也不会隔离子 launch
+  声明的默认参数。
+- 按现场要求暂不使用容器独立 IPC 和 1 GB `/dev/shm`，`run_jazzy_container.sh` 恢复
+  `--ipc host` 并移除 `--shm-size`，README 同步改回宿主机共享 IPC 的现状与残留清理提醒。
+  本次不回退 `stereo_robot` 已完成的启动依赖、控制器串行生成和 `/odom` 唯一所有权修改。
+  验证结果：Shell 语法、Docker 参数检查和差异空白检查通过。当前卡点：无；踩坑：无。
+- 按“独立功能 launch、子系统组合 launch、顶层场景 launch”三层重构启动架构。新增 21 个
+  可复用独立入口，覆盖公共 Foxglove、
+  默认关节状态、ros2_control 控制器、底盘控制、头部归中、轮式里程计、速度门控、最终避障、
+  双目点云过滤、语义检测、验收采样、五类虚拟感知、双目视觉里程计、二维 EKF、RTAB-Map、
+  地图快照和 PLY 发布；每个对外参数均带中文说明。`control`、`safety`、`virtual_sensors`、
+  `stereo_perception`、`robot`、`stereo_mapping`、`stereo_robot` 和 `stereo_brain` 已改为只
+  include 独立入口，不再直接创建节点；`stereo_camera` 保留不可拆的双目处理流水线并复用
+  公共 Foxglove。完整实机入口继续按 `map_yaml_file` 互斥选择在线 RTAB-Map 或已有地图模式，
+  相机和 Nav2 的节点级错峰下沉到各自独立 launch，控制器生成器统一严格串行启动。
+  `stereo_brain` 同时关闭语义组合中的第二个点云过滤器，复用建图链已有实例。README 已同步
+  launch 分层和复用规则。验证结果：全部 launch Python 编译、参数描述 AST 检查、组合入口
+  架构检查、已删除入口检查和既有 `stereo_robot` 合同共 10 项测试通过，XML/YAML 解析与
+  `git diff --check` 通过。当前卡点：宿主机没有 ROS 2，且没有可用 Jazzy 容器镜像，本轮无法
+  执行真实 `ros2 launch --show-args` 和 `colcon build`。踩坑：宿主机直接运行 ROS 节点测试会
+  因缺少 `rclpy`、消息包在收集阶段失败，不能把环境缺失误记为功能回归。
+- 删除 `mission_preview.launch.py`、`navigation_preview.launch.py` 和中间包装入口
+  `stereo_localization.launch.py`；`stereo_brain.launch.py` 同步移除任务路径预演组合，
+  `stereo_mapping.launch.py` 改为直接引用独立 `imu.launch.py`，并保留双目视觉里程计、二维
+  EKF 和可选四轮里程计节点，避免删除包装入口后破坏在线建图定位链。README 已删除旧地图
+  导航预演命令，并标明本地大脑当前不启动 ROS 任务规划节点。验证结果：相关 launch Python
+  编译通过，导航 launch 合同测试 6 项通过，残留 include 检查和 `git diff --check` 通过。
+  当前卡点：无。踩坑：删除被引用的中间 launch 时必须同步迁移其必要节点，不能只删文件，
+  否则父入口会在解析阶段失败或失去 `/odom`。
+- 将导航静态地图的统一存放位置从 `src/robot_navigation/map/` 调整为工作区根目录 `maps/`：
+  `nav2.launch.py`、`robot.launch.py` 和 PLY 发布节点默认加载
+  `/workspace/maps/studyroom/`，数字孪生入口新增可覆盖的 `map_yaml_file`、`ply_file` 参数，
+  并停止将地图作为 `robot_navigation` Package 数据安装；README 已同步目录结构和启动示例。
+  验证结果：Jazzy 一次性容器内导航包 12 项测试全部通过并隔离构建成功，相关 Python 文件
+  编译、ament_flake8 和差异空白检查通过。当前卡点：无。踩坑：测试时追加源码
+  `PYTHONPATH` 不能覆盖 ROS 已设置的模块路径，否则会误报 `rclpy` 和消息包不存在。
+
+## 2026-08-27
+
+- 独立 IPC 实机复验后 ROS 图和 `/map` 已恢复，确认 16、31、41 秒长阶段等待不再必要；运行期
+  模型抖动与长 delay 无关，现场仍存在双目特征大量拒绝及 image/CameraInfo 偶发不同步。将
+  完整入口的控制、Nav2、语义感知默认启动时间缩短为 3、14、8 秒，保留传感器 3 秒零偏等待
+  和阶段内 0.8 秒轻量错峰。controller spawner 改为前一个进程退出后再启动下一个，修复当前
+  12 个控制器仅 4 个激活、其余因并发争锁重试约 115 秒后失败的问题。完整入口同时关闭旧
+  `chassis_controller` 的 `/odom` 与 TF 输出，由视觉、IMU、未来 `/wheel/odom` 的 EKF 独占；
+  独立旧控制入口保持兼容开关默认开启。验证结果：控制包在工作区构建成功，导航包使用全新
+  `/tmp` 构建目录隔离构建成功，导航与四轮运动学 7 项测试、launch 实际解析、导航文件
+  ament_flake8、Python 编译和差异空白检查通过；原工作区导航构建目录仍引用用户已删除的旧
+  `map/blank.yaml`，未恢复或覆盖这些地图改动。当前卡点：需重启实机验证控制器全部串行激活，
+  双目匹配质量与图像同步仍需单独调优。踩坑：给 spawner 增加亚秒级 Timer 间隔不等于串行，
+  单个进程持锁超过间隔时后续进程仍会全部重叠争锁。
+- 排查 `stereo_robot.launch.py` 无 `/map`：相机设备可直接稳定抓取约 20 Hz 图像，但
+  `usb_cam` 进程未打开 `/dev/video0`，ROS 图查询也持续超时；宿主机 IPC 中同时存在 179 个
+  本次容器启动前遗留的 Fast DDS 文件。将 Jazzy 容器默认从宿主机 IPC 改为独立 IPC，并把
+  `/dev/shm` 上限设为 1 GB，使容器内双目图像和点云继续走共享内存，容器删除时自动清理 DDS
+  运行文件。验证结果：Shell 语法和 Docker 参数检查通过，差异空白检查通过。当前卡点：需在
+  下次重建容器后实机确认话题发现、双目里程计和 `/map` 恢复。踩坑：`--ipc host` 会让带
+  `--rm` 的容器退出后仍把 Fast DDS 文件留在宿主机 `/dev/shm`，`--shm-size` 也不能隔离它们。
+- Foxglove 提前启动后可以连接，但实机只显示 `robot_description`：确认 Bridge 正常发布连接图，
+  第 3 秒同时创建的 12 个相机、双目和 RTAB-Map 进程虽存在却未加入 ROS 图，后续 controller
+  spawner 也全部锁超时。将传感器、控制、控制器、Nav2 和语义感知每个阶段内部改为按默认
+  0.8 秒逐节点启动，并将控制、Nav2、语义阶段推迟到 16、31、41 秒，优先保证建图链稳定。
+  Foxglove 默认日志恢复 WARN，避免 INFO 连接图持续刷屏，需要排查时再显式开启。验证结果：
+  导航包 11 项 pytest、ament_flake8 和差异空白检查通过；无硬件进程展开确认双目建图节点按
+  设定间隔依次创建。当前卡点：当前运行实例仍是旧调度，待重启实机确认。踩坑：顶层阶段错开并不足够，
+  单个阶段内同时创建十余个进程仍会触发 Fast DDS 初始化锁竞争。
+- 排查完整 `stereo_robot.launch.py` 中 Foxglove 进程存在但客户端无法连接：实机进程 PID 存在，
+  但 ROS 图中没有该节点、系统也没有 8765 监听套接字，进程停在 DDS 初始化；独立最小 Bridge
+  则能监听 8765 并发现 `/tf`、`/tf_static`、`/robot_description`。同时验证 URDF 正常发布
+  `base_link -> body`，Foxglove 的 “base_link is not provided” 是未收到 TF 的连带提示，不是
+  URDF 缺少根连杆。将唯一 Bridge 从第 16 秒语义感知阶段移到第一阶段，与模型和 IMU 优先
+  加入节点图，并单独使用 INFO 日志显示端口监听成功。验证结果：待重启完整入口实机确认。
+  当前卡点：当前运行实例仍是修改前进程，需用户重启。踩坑：进程列表出现 Bridge 不等于
+  WebSocket 已监听，必须同时检查 ROS 节点图、监听套接字或启动日志。
+- 按实机完整入口的单一所有权原则重写 `stereo_robot.launch.py`：删除全部子 launch 包含，
+  直接创建机器人模型、GY95T、Madgwick、双目处理、视觉里程计、EKF、RTAB-Map、地图快照、
+  ros2_control、安全链、Nav2、语义感知和唯一 Foxglove 节点；继续按 0、3、8、12、16 秒
+  分阶段启动。不传地图时只运行在线 RTAB-Map，传 `map_yaml_file` 时只运行地图服务器和静态
+  `map -> odom`，两种模式共用且只创建一份相机和障碍点云过滤链。验证结果：Jazzy 容器内
+  6 个依赖 Package 隔离构建成功，导航包 11 项 pytest 和 ament_flake8 通过，两种模式均以
+  无硬件副作用的命令前缀完整展开，确认条件节点互斥。当前卡点：无。踩坑：仅检查源码中
+  没有 include 不足以证明条件分支正确，仍需展开两种模式的最终进程命令。
+- 实机复现 `stereo_robot.launch.py` 启动后 Madgwick 持续等待 `imu/data_raw`：独立 IMU 链
+  实测 `/sensors/imu/data_raw` 和 `/sensors/imu/data` 均稳定约 29.8 Hz，话题重映射正确；
+  完整入口同时创建约 30 个 DDS 节点时，IMU、EKF、Nav2 和 controller manager 未能正常加入
+  节点图，控制器随后因锁超时退出。将完整入口改为四阶段启动：先单独初始化 IMU、视觉里程计
+  和 EKF，3 秒后启动相机与 RTAB-Map，再于 8、12、16 秒启动控制安全链、Nav2、语义感知与
+  Foxglove；四个延迟均暴露为 launch 参数。当前卡点：待分阶段入口完成容器实机复验。踩坑：Madgwick 在驱动进行
+  2 秒零偏估计时短暂等待是正常现象，但重复 IMU 进程占用串口或大量节点并发发现会让等待持续。
+- GY95T 驱动原先只把串口打开、配置和读取错误写进 `/diagnostics`，而节点发现异常时该话题也
+  无法读取，终端只剩 Madgwick 的等待提示。现在连接与读取失败每 5 秒输出一次包含设备路径和
+  原因的告警，并补捕获 PySerial 专用异常，防止轮询线程因 USB 串口异常静默退出。
+- 将双目、GY95T、未来轮速和二维 EKF 抽成 `stereo_localization.launch.py`，由独立建图和完整
+  机器人入口复用；IMU 姿态同时约束 `stereo_odometry`，其 yaw 角速度再与视觉位姿融合为
+  `/odom`，EKF 继续作为 `odom -> base_link` 的唯一发布者。
+- 将 `stereo_robot.launch.py` 改为由 `map_yaml_file` 自动选择模式：非空时加载已有 YAML、
+  发布已知初始 `map -> odom` 并直接导航；留空时启动 RTAB-Map 边建图边导航，由 RTAB-Map
+  独占动态 `/map` 和 `map -> odom`。Nav2 新增关闭静态地图服务器的组合开关，在线模式复用
+  `/nav/stereo_obstacle_points`，并避免相机、点云过滤、模型和 Foxglove 重复启动。
+- 验证结果：Jazzy 容器内 6 个相关 Package 构建成功，在线与已有地图模式均通过空执行节点图
+  展开；前者确认只启动 RTAB-Map，后者确认只启动 map_server 和静态全局 TF，两种模式都包含
+  stereo_odometry 与 EKF。导航、GY95T、双目和四轮相关 21 项测试通过，6 个修改文件的
+  ament_flake8、Python 编译和差异空白检查通过。当前卡点：已有地图模式尚无 AMCL 或
+  RTAB-Map localization，必须从命令给定的已知地图位姿启动。踩坑：Launch 文件通过
+  `--show-args` 只能证明参数可展开，不能证明条件分支互斥，需用无硬件副作用的执行前缀分别
+  展开两套实际节点图。
+- 实机首次接入 GY95T 后定位到容器只映射相机、未映射宿主机 CH340 `/dev/ttyUSB0`，导致
+  Madgwick 收不到 `/sensors/imu/data_raw`、视觉里程计持续 waiting imu，继而没有 `/odom`
+  和地图 TF。容器启动脚本新增 GY95T 设备自动发现：依次支持 `/dev/gy95t`、当前 CH340
+  by-id 和 `/dev/ttyUSB0`，也可用 `GY95T_DEVICE` 显式指定，容器内统一为 `/dev/gy95t`。
+- 实测发现建图点云偶发因头部动态 TF 比图像时间戳慢约 0.18 秒而被拒绝，将过滤器 TF 等待
+  从 0.05 秒调整为 0.5 秒。将“启用 IMU”和“视觉必须等待 IMU”拆成两个参数，后者默认
+  `false`，避免 IMU 短时掉线同时阻塞纯视觉里程计、EKF、地图和 Foxglove TF。
+- 针对 RTAB-Map 持续 `Grid map is empty` 继续定位：单独相机链已实测原图、左右拆分、视差和
+  `/stereo/points2` 均能生成，断点位于建图过滤链。过滤器新增精确采集时刻 TF 越界时回退
+  最新 TF（仅适用于建图头部已归中），RTAB 的 `qos_scan` 改为 Best Effort，与过滤点云的
+  SensorDataQoS 匹配，避免 scan_cloud 因 QoS 不兼容而始终为空。
+- 进一步实测确认当前 RTAB 节点没有创建 `scan_cloud` 订阅端点，外部过滤云作为强制同步输入
+  会让每个节点都得到空 scan。二维地图恢复为官方深度栅格路径，并启用 0.08 m 半径、至少
+  5 邻点的内置离群过滤；外部 `/mapping/stereo_obstacle_points` 保留作诊断和未来导航输入，
+  不再阻塞 RTAB 地图生成。
+- 最终实机验证：`/map` 已发布 0.05 m 分辨率、79×68 单元的 OccupancyGrid，数据同时包含
+  未知 `-1`、空闲 `0` 和障碍 `100`，RTAB 退出时确认二维占用地图已保存；感知和导航包
+  重建成功，相关 10 项测试及差异空白检查通过。当前 `Grid map is empty` 问题已解决。
+- 验证结果：容器内真实 GY95T 原始与 Madgwick 输出稳定约 49.7 Hz，诊断为 `ok`、无错帧；
+  完整链路已确认越过 waiting imu 并产生视觉里程计与 RTAB 节点。当前卡点：本次移动测试中
+  双目相机曾连续 10 秒不出图，若重启后复现需检查相机线缆、供电和 USB 稳定性。踩坑：USB
+  设备在宿主机出现不代表运行中的 Docker 容器能看到，设备必须在创建容器时映射；远程终止
+  `docker exec` 不一定清理 launch 子进程，重复启动会争用串口、相机和 8765 端口。GY95T
+  配置寄存器暂时超时现在也会关闭串口并重连，不再让读取线程直接退出。
+
+## 2026-08-26
+
+- 接入 GY95T、双目视觉与未来四轮里程计的统一状态估计链：新增 115200 baud、50 Hz 查询式
+  GY95T ROS 驱动，按附件寄存器协议输出 SI 单位 IMU，补齐响应校验、错帧恢复、USB 重连、
+  静止陀螺仪零偏、三点中值和 10 Hz 低通；无磁 Madgwick 输出
+  `/sensors/imu/data`，内部九轴 RPY 仅保留诊断。新增二维 robot_localization EKF，视觉只融合
+  x/y/yaw、IMU 只融合 yaw_rate、未来轮式里程计只融合 vx/vy/yaw_rate；EKF 统一发布
+  `/odom` 和 `odom -> base_link`，RTAB-Map 继续发布 `map -> odom`。
+- 不修改头部 URDF 或摄像头父子关系，在 ros2_control 硬件接口中补充两个现有头部关节，并新增
+  建图归中节点持续发送 yaw/pitch 零位命令和检查反馈。新增默认关闭的四轮独立转向里程计节点，
+  预留标准 `/joint_states -> /wheel/odom` 合同和 `use_wheel_odometry` 建图开关，缺少四轮实际
+  转角时不启用融合。
+- 修复二维地图空白区出现黑色伪障碍的链路绕过问题：双目点云过滤增加每体素最少原始点数和
+  相邻体素支持，建图发布 `/mapping/stereo_obstacle_points`；RTAB-Map 关闭直接深度栅格并改用
+  过滤点云进行射线清空和障碍标记。新增 GY95T 协议、四轮运动学和孤立体素测试。
+- 验证结果：重建 `robot-jazzy:local` 成功；Jazzy 容器内 6 个受影响 Package 构建成功，
+  GY95T 协议、双目核心和四轮运动学共 12 项测试通过；IMU 驱动入口可实际启动并正常等待
+  不存在的串口设备，Madgwick 与 EKF 可执行项存在，IMU/建图/控制三个 launch 可解析，完整
+  URDF 可展开，Python 语法、YAML、Shell 和 `git diff --check` 均通过。当前卡点：本会话没有
+  可访问的真实 GY95T 和相机数据，轴向符号、串口响应细节与黑点过滤阈值需按手持刚性支架
+  实测确认。踩坑：旧读取代码丢弃响应头且不校验返回帧，不能直接作为状态估计输入；RTAB
+  原先的 `Grid/FromDepth` 绕过了已有导航点云过滤器。
+
 ## 2026-08-24
 
 - 按新的视觉问答协议修改 `qwen_client` 系统提示词：明确输入是已完成

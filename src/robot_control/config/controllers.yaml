@@ -80,3 +80,10 @@ wheel_controller:
       - front_right_wheel_joint                              # 右前驱动轮关节
       - rear_left_wheel_joint                                # 左后驱动轮关节
       - rear_right_wheel_joint                               # 右后驱动轮关节
+
+head_controller:
+  ros__parameters:
+    type: position_controllers/JointGroupPositionController  # 建图归中与日常头部控制共用的位置控制器
+    joints:
+      - head_yaw_joint                                       # 水平旋转关节，命令数组第一个值
+      - head_pitch_joint                                     # 俯仰关节，命令数组第二个值

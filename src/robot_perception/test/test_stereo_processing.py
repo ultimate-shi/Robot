@@ -148,6 +148,25 @@ def test_voxel_filter_keeps_nearest_point_for_navigation_safety():
     assert not np.any(np.isclose(filtered[:, 0], 0.149))
 
 
+def test_voxel_filter_removes_isolated_false_obstacle():
+    """缺少原始点数或相邻体素支持的空白区误匹配必须被删除。"""
+    fake = type('FakeFilter', (), {
+        'voxel_size': 0.05,
+        'min_points_per_voxel': 2,
+        'min_neighbor_voxels': 1,
+    })()
+    points = np.array([
+        [0.100, 0.000, 0.10], [0.101, 0.001, 0.10],
+        [0.151, 0.000, 0.10], [0.152, 0.001, 0.10],
+        [1.000, 0.000, 0.10],
+    ], dtype=np.float32)
+
+    filtered = StereoPointCloudFilter._voxel_downsample(fake, points)
+
+    assert len(filtered) == 2
+    assert np.all(filtered[:, 0] < 0.2)
+
+
 def test_benchmark_percentile_is_stable_for_small_samples():
     """验收统计在小样本下也应给出确定的中位数和P95."""
     assert percentile([], 0.95) is None

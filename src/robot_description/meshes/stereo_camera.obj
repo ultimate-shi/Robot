@@ -1,7 +1,7 @@
 # FreeCAD v1.1 build0 Arch module
 # https://www.freecad.org
 mtllib stereo_camera.mtl
-o 双目摄像头HBVCAM-W202011HDV33-105
+o stereo_camera_hbvcam_w202011hdv33_105
 usemtl color_727980
 v -40.0 -0.5 57.799999
 v -40.0 -0.5 35.799999

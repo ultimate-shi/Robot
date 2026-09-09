@@ -32,9 +32,12 @@ class StereoPointCloudFilter(Node):
             'max_range': 4.0,
             'horizontal_fov_deg': 120.0,
             'voxel_size': 0.05,
+            'min_points_per_voxel': 3,
+            'min_neighbor_voxels': 1,
             'max_points': 20000,
             'max_input_rate': 20.0,
             'tf_timeout': 0.05,
+            'allow_latest_transform_fallback': True,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -154,11 +157,27 @@ class StereoPointCloudFilter(Node):
                 rclpy.time.Time.from_msg(msg.header.stamp),
                 timeout=Duration(seconds=float(self.tf_timeout)),
             )
-        except Exception as exc:
-            self.get_logger().warn(
-                f'TF {self.target_frame} <- {msg.header.frame_id} 查询失败: '
-                f'{exc}', throttle_duration_sec=2.0)
-            return None
+        except Exception as exact_exc:
+            if not bool(self.allow_latest_transform_fallback):
+                self.get_logger().warn(
+                    f'TF {self.target_frame} <- {msg.header.frame_id} 查询失败: '
+                    f'{exact_exc}', throttle_duration_sec=2.0)
+                return None
+            try:
+                transform = self.tf_buffer.lookup_transform(
+                    str(self.target_frame), msg.header.frame_id,
+                    rclpy.time.Time(),
+                    timeout=Duration(seconds=float(self.tf_timeout)),
+                )
+                self.get_logger().warn(
+                    '采集时刻 TF 不可用，建图头部已归中，暂用最新 TF 处理点云: '
+                    f'{exact_exc}', throttle_duration_sec=2.0)
+            except Exception as latest_exc:
+                self.get_logger().warn(
+                    f'TF {self.target_frame} <- {msg.header.frame_id} 查询失败: '
+                    f'exact={exact_exc}; latest={latest_exc}',
+                    throttle_duration_sec=2.0)
+                return None
 
         q = transform.transform.rotation
         rotation = self._quaternion_matrix(q.x, q.y, q.z, q.w)
@@ -200,10 +219,41 @@ class StereoPointCloudFilter(Node):
         return points[mask]
 
     def _voxel_downsample(self, points):
-        """每个体素保留平面距离最近的点，导航障碍边界取保守值。"""
+        """删除缺少空间支持的孤立体素，并为每个保留体素选最近点。"""
         if points.size == 0 or float(self.voxel_size) <= 0.0:
             return points
         grid = np.floor(points / float(self.voxel_size)).astype(np.int32)
+        unique_grid, inverse, counts = np.unique(
+            grid, axis=0, return_inverse=True, return_counts=True)
+        supported = counts >= max(
+            1, int(getattr(self, 'min_points_per_voxel', 1)))
+        minimum_neighbors = max(
+            0, int(getattr(self, 'min_neighbor_voxels', 0)))
+        if minimum_neighbors > 0 and np.any(supported):
+            occupied = {
+                tuple(cell) for cell in unique_grid[supported]
+            }
+            connected = np.zeros(len(unique_grid), dtype=bool)
+            offsets = [
+                (dx, dy, dz)
+                for dx in (-1, 0, 1)
+                for dy in (-1, 0, 1)
+                for dz in (-1, 0, 1)
+                if (dx, dy, dz) != (0, 0, 0)
+            ]
+            for index in np.flatnonzero(supported):
+                cell = unique_grid[index]
+                neighbors = sum(
+                    (int(cell[0] + dx), int(cell[1] + dy), int(cell[2] + dz))
+                    in occupied
+                    for dx, dy, dz in offsets
+                )
+                connected[index] = neighbors >= minimum_neighbors
+            supported &= connected
+        points = points[supported[inverse]]
+        grid = grid[supported[inverse]]
+        if points.size == 0:
+            return points
         planar_range = np.hypot(points[:, 0], points[:, 1])
         nearest_order = np.argsort(planar_range, kind='stable')
         ordered_grid = grid[nearest_order]

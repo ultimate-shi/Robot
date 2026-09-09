@@ -12,9 +12,12 @@ stereo_pointcloud_filter:
     max_range: 4.0  # base_link 平面内保留点的最远距离，单位 m
     horizontal_fov_deg: 120.0  # 以前向 x 轴为中心保留的水平视场总角度，单位 deg
     voxel_size: 0.05  # 三维体素降采样边长，单位 m；增大可降低 CPU 和网络负载
+    min_points_per_voxel: 3  # 每个障碍体素至少需要的原始点数，用于删除空白区孤立误匹配
+    min_neighbor_voxels: 1  # 体素至少需要的相邻占用体素数，0 表示关闭连通支持过滤
     max_points: 20000  # 每帧最多发布点数；超过时按固定步长均匀抽样
     max_input_rate: 4.0  # 导航点云目标频率；上游也只产生最新的 4 Hz 视差，双重防止积压
-    tf_timeout: 0.05  # 按消息时间戳查询 TF 的最长等待时间，单位 s
+    tf_timeout: 0.5  # 等待相机采集时刻 TF，覆盖头部关节 TF 约 0.2 s 的实测滞后
+    allow_latest_transform_fallback: true  # 建图头部归中时，精确时刻越界可安全回退到最新安装 TF
 
 pointcloud_to_laserscan:
   ros__parameters:
