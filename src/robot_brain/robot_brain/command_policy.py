@@ -1,4 +1,4 @@
-"""使用方法：Web 聊天在模型返回后调用 CommandPolicy，未经授权的动作不得调度。"""
+"""用途：授权模型动作提案；使用方法：任务入口在调度前调用 CommandPolicy。"""
 
 from robot_brain.action_schema import ModelAction, ModelResponse
 from robot_brain.contracts import PolicyResult

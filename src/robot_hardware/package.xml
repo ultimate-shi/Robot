@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<!-- 使用方法：由 robot_main 实机模式加载，直接驱动 DMC0、DMC1 和 SE2。 -->
+<package format="3">
+  <name>robot_hardware</name><version>0.1.0</version>
+  <description>DMC0、DMC1、SE2 串口 ros2_control 硬件插件</description>
+  <maintainer email="shijiahao@todo.todo">shijiahao</maintainer>
+  <license>TODO: License declaration</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>diagnostic_msgs</depend><depend>hardware_interface</depend>
+  <depend>pluginlib</depend><depend>rclcpp</depend><depend>rclcpp_lifecycle</depend>
+  <depend>robot_interfaces</depend><depend>sensor_msgs</depend>
+  <depend>std_msgs</depend><depend>std_srvs</depend><depend>yaml_cpp_vendor</depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>controller_manager</exec_depend><exec_depend>robot_description</exec_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

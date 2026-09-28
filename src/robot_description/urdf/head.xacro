@@ -74,13 +74,13 @@
       </inertial>
     </link>
 
-    <!-- pitch 初始限制为上下各 45 度，后续可按实机舵机限位校准。 -->
+    <!-- pitch 按旧控制程序的实机机械限制固定为上下各 30 度。 -->
     <joint name="head_pitch_joint" type="revolute">
       <origin xyz="${pitch_joint_xyz}" rpy="0 0 0"/>
       <parent link="head_yaw_link"/>
       <child link="head_pitch_link"/>
       <axis xyz="1 0 0"/>
-      <limit lower="${-pi / 4.0}" upper="${pi / 4.0}"
+      <limit lower="${-pi / 6.0}" upper="${pi / 6.0}"
              effort="3.0" velocity="1.0"/>
       <dynamics damping="0.05" friction="0.0"/>
     </joint>

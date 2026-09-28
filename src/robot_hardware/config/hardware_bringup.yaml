@@ -1,0 +1,22 @@
+# 使用方法：hardware_bringup.launch.py 的实机默认配置；设备路径可在现场覆盖。
+hardware:
+  device_candidates: [/dev/ttyACM0, /dev/ttyACM1, /dev/ttyACM2, /dev/ttyACM3, /dev/ttyACM4, /dev/ttyACM5, /dev/ttyACM6, /dev/ttyACM7, /dev/ttyACM8]
+  baud_rate: 115200
+  serial_timeout_ms: 500
+  inter_command_delay_ms: 3
+  # DMC1 每次读取一个 I 参数后会重新枚举，至少需要四次重连和一次最终连接。
+  discovery_retry_count: 20
+  discovery_retry_delay_ms: 700
+  # 与已验收 hw_ctrl/load_wheel_config() 一致，I4..I7 查询之间给 MCU 留出处理时间。
+  encoder_query_delay_ms: 20
+  ros_command_timeout_ms: 500
+  # 固件验收目标；当前串口协议没有运行时写入该值的指令。
+  required_mcu_watchdog_ms: 300
+  wheel_diameter: 0.110
+  wheelbase: 0.312
+  track: 0.280
+  leg_length: 0.060
+  leg_height: 0.140
+  sonar_lpf_alpha: 0.2
+  sonar_min_valid_mm: 30
+  sonar_max_valid_mm: 2500

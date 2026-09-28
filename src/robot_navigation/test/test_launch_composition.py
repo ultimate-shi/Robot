@@ -16,7 +16,6 @@ def launch_text(package, filename):
 
 def test_complex_launches_do_not_create_nodes_directly():
     complex_launches = [
-        ('robot_brain', 'stereo_brain.launch.py'),
         ('robot_control', 'control.launch.py'),
         ('robot_control', 'safety.launch.py'),
         ('robot_navigation', 'robot.launch.py'),
@@ -66,11 +65,17 @@ def test_removed_legacy_compositions_are_not_present():
         assert not (launch_directory / filename).exists()
 
 
-def test_each_top_level_config_has_a_same_named_launch():
-    """每个 Package 根 config YAML 都应归属于同名 launch。"""
+def test_each_top_level_config_is_used_by_a_launch():
+    """根 config YAML 应有同名入口，或由组合 launch 显式引用。"""
+    launch_sources = [
+        path.read_text(encoding='utf-8')
+        for path in SOURCE_DIRECTORY.glob('*/launch/*.launch.py')
+    ]
     for config in sorted(SOURCE_DIRECTORY.glob('*/config/*.yaml')):
         launch = config.parents[1] / 'launch' / f'{config.stem}.launch.py'
-        assert launch.exists(), f'{config} 没有同名 launch：{launch}'
+        assert launch.exists() or any(
+            f"'{config.name}'" in source for source in launch_sources
+        ), f'{config} 没有 launch 入口或引用'
 
 
 def test_all_launch_arguments_have_descriptions():
@@ -93,7 +98,7 @@ def test_async_launches_resolve_timer_periods_before_scope_exit():
         ('robot_control', 'chassis_control.launch.py'),
         ('robot_control', 'controllers.launch.py'),
         ('robot_navigation', 'nav2.launch.py'),
-        ('robot_navigation', 'stereo_robot.launch.py'),
+        ('robot_main', 'robot.launch.py'),
         ('robot_perception', 'stereo_camera.launch.py'),
     ]
 
@@ -125,5 +130,9 @@ def test_every_nested_launch_has_an_independent_configuration_scope():
     for path in launch_paths:
         text = path.read_text(encoding='utf-8')
         if 'IncludeLaunchDescription(' not in text:
+            continue
+        if path.name in ('robot.launch.py', 'stereo_robot.launch.py') and (
+                path.parent.parent.name == 'robot_navigation'):
+            # 导航包的兼容入口只转发到统一启动入口。
             continue
         assert 'GroupAction' in text, f'{path} 的子 launch 没有独立参数作用域'

@@ -12,8 +12,8 @@
 - TF map -> radar-*：由机器人模型、关节状态和 odom 共同提供。
 
 输出：
-- /ultrasonic/front_fl、front_fr、front_rl、front_rr。
-- /ultrasonic/side_fl、side_fr、side_rl、side_rr。
+- /ultrasonic/front_left、front_center、front_right。
+- /ultrasonic/rear_left、rear_center、rear_right、left、right。
 """
 
 import math
@@ -32,14 +32,14 @@ from robot_perception.pointcloud_utils import cloud_to_xyz
 
 
 SENSORS = [
-    {'link': 'radar-front_fl', 'topic': '/ultrasonic/front_fl'},
-    {'link': 'radar-front_fr', 'topic': '/ultrasonic/front_fr'},
-    {'link': 'radar-front_rl', 'topic': '/ultrasonic/front_rl'},
-    {'link': 'radar-front_rr', 'topic': '/ultrasonic/front_rr'},
-    {'link': 'radar-side_fl', 'topic': '/ultrasonic/side_fl'},
-    {'link': 'radar-side_fr', 'topic': '/ultrasonic/side_fr'},
-    {'link': 'radar-side_rl', 'topic': '/ultrasonic/side_rl'},
-    {'link': 'radar-side_rr', 'topic': '/ultrasonic/side_rr'},
+    {'link': 'sonar_fl', 'topic': '/ultrasonic/front_left'},
+    {'link': 'sonar_fc', 'topic': '/ultrasonic/front_center'},
+    {'link': 'sonar_fr', 'topic': '/ultrasonic/front_right'},
+    {'link': 'sonar_right', 'topic': '/ultrasonic/right'},
+    {'link': 'sonar_rr', 'topic': '/ultrasonic/rear_right'},
+    {'link': 'sonar_rc', 'topic': '/ultrasonic/rear_center'},
+    {'link': 'sonar_rl', 'topic': '/ultrasonic/rear_left'},
+    {'link': 'sonar_left', 'topic': '/ultrasonic/left'},
 ]
 
 

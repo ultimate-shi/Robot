@@ -2,6 +2,21 @@
 <!-- 使用方法：由 robot_description/description.launch.py 展开并发布完整机器人模型。 -->
 <robot name="robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
+  <!-- mode 只决定 ros2_control 插件；模型、关节和控制接口保持完全一致。 -->
+  <xacro:arg name="hardware_plugin" default="mock_components/GenericSystem"/>
+  <xacro:arg name="servo_calibration_file" default=""/>
+  <xacro:arg name="device_candidates" default="/dev/ttyACM0,/dev/ttyACM1,/dev/ttyACM2"/>
+  <xacro:arg name="serial_timeout_ms" default="500"/>
+  <xacro:arg name="inter_command_delay_ms" default="3"/>
+  <xacro:arg name="discovery_retry_count" default="20"/>
+  <xacro:arg name="discovery_retry_delay_ms" default="700"/>
+  <xacro:arg name="encoder_query_delay_ms" default="20"/>
+  <xacro:arg name="command_timeout_ms" default="500"/>
+  <xacro:arg name="wheel_diameter" default="0.110"/>
+  <xacro:arg name="sonar_lpf_alpha" default="0.2"/>
+  <xacro:arg name="sonar_min_valid_mm" default="30"/>
+  <xacro:arg name="sonar_max_valid_mm" default="2500"/>
+
   <!-- 引入xacro文件 -->
   <xacro:include filename="materials.xacro"/>
   <xacro:include filename="lap.xacro"/>
@@ -10,9 +25,11 @@
   <xacro:include filename="wheel.xacro"/>
   <xacro:include filename="radar-front.xacro"/>
   <xacro:include filename="radar-side.xacro"/>
+  <xacro:include filename="sonar.xacro"/>
   <xacro:include filename="imu.xacro"/>
   <xacro:include filename="stereo_camera.xacro"/>
   <xacro:include filename="head.xacro"/>
+  <xacro:include filename="hardware.xacro"/>
 
   <!-- 新增：动态获取robot包的绝对路径（核心！） -->
   <xacro:property name="pkg_path" value="$(find robot_description)"/>
@@ -71,6 +88,7 @@
   <!-- 右前大腿 - 原样 -->
   <xacro:lap suffix="fr" 
              parent_link="body"
+             lower="${-pi/6}" upper="${pi/4}"
              xyz="-0.091 -0.072 0.158"
              rpy="0 0 0"
              mesh_scale="0.001 0.001 0.001"/>
@@ -78,6 +96,7 @@
   <!-- 左前大腿 - Y轴镜像 -->
   <xacro:lap suffix="fl" 
              parent_link="body"
+             lower="${-pi/4}" upper="${pi/6}"
              xyz="0.091 -0.072 0.158"
              rpy="0 0 0"
              mesh_scale="-0.001 0.001 0.001"/> <!-- Y轴镜像 -->
@@ -85,6 +104,7 @@
   <!-- 右后大腿 - X轴镜像 -->
   <xacro:lap suffix="rr" 
              parent_link="body"
+             lower="${-pi/4}" upper="${pi/6}"
              xyz="-0.091 0.072 0.158"
              rpy="0 0 0"
              mesh_scale="0.001 -0.001 0.001"/> <!-- X轴镜像 -->
@@ -92,6 +112,7 @@
   <!-- 左后大腿 - X和Y轴都镜像 -->
   <xacro:lap suffix="rl" 
              parent_link="body"
+             lower="${-pi/6}" upper="${pi/4}"
              xyz="0.091 0.072 0.158"
              rpy="0 0 0"
              mesh_scale="-0.001 -0.001 0.001"/> <!-- X和Y轴镜像 -->
@@ -101,6 +122,7 @@
   <!-- 右前小腿 -->
   <xacro:shin suffix="fr" 
               parent_link="lap_fr"
+              mimic_joint="lap_body_joint_fr"
               xyz="-0.017 -0.060 0"
               rpy="0 0 0"
               mesh_scale="0.001 0.001 0.001"/>
@@ -108,6 +130,7 @@
   <!-- 左前小腿（Y轴镜像） -->
   <xacro:shin suffix="fl" 
               parent_link="lap_fl"
+              mimic_joint="lap_body_joint_fl"
               xyz="0.017 -0.060 0"
               rpy="0 0 0"
               mesh_scale="-0.001 0.001 0.001"/>
@@ -115,6 +138,7 @@
   <!-- 右后小腿（X轴镜像） -->
   <xacro:shin suffix="rr" 
               parent_link="lap_rr"
+              mimic_joint="lap_body_joint_rr"
               xyz="-0.017 0.060 0"
               rpy="0 0 0"
               mesh_scale="0.001 -0.001 0.001"/>
@@ -122,6 +146,7 @@
   <!-- 左后小腿（X和Y轴镜像） -->
   <xacro:shin suffix="rl" 
               parent_link="lap_rl"
+              mimic_joint="lap_body_joint_rl"
               xyz="0.017 0.060 0"
               rpy="0 0 0"
               mesh_scale="-0.001 -0.001 0.001"/>
@@ -223,6 +248,16 @@
               rpy="0 0 0"
               mesh_scale="-0.001 -0.001 0.001"/>
 
+  <!-- 实机固定超声波：前3、后3、左1、右1，位置来自 hw_ctrl/chassis.json。 -->
+  <xacro:sonar_frame name="sonar_fl" parent="base_link" xyz="0.201 0.058 0.03" yaw="${pi/6}"/>
+  <xacro:sonar_frame name="sonar_fc" parent="base_link" xyz="0.215 0 0.03" yaw="0"/>
+  <xacro:sonar_frame name="sonar_fr" parent="base_link" xyz="0.201 -0.058 0.03" yaw="${-pi/6}"/>
+  <xacro:sonar_frame name="sonar_right" parent="base_link" xyz="0 -0.142 0.03" yaw="${-pi/2}"/>
+  <xacro:sonar_frame name="sonar_rr" parent="base_link" xyz="-0.190 -0.062 0.03" yaw="${-2*pi/3}"/>
+  <xacro:sonar_frame name="sonar_rc" parent="base_link" xyz="-0.200 0 0.03" yaw="${pi}"/>
+  <xacro:sonar_frame name="sonar_rl" parent="base_link" xyz="-0.190 0.062 0.03" yaw="${2*pi/3}"/>
+  <xacro:sonar_frame name="sonar_left" parent="base_link" xyz="0 0.142 0.03" yaw="${pi/2}"/>
+
   <!--  插入 IMU（修改安装位置即可） -->
   <xacro:imu
     parent_link="body"   
@@ -252,6 +287,18 @@
                        rpy="0 0 0"
                        baseline="0.061145213"/>
 
-  <xacro:include filename="hardware.xacro"/>
+  <xacro:hardware hardware_plugin="$(arg hardware_plugin)"
+                  servo_calibration_file="$(arg servo_calibration_file)"
+                  device_candidates="$(arg device_candidates)"
+                  serial_timeout_ms="$(arg serial_timeout_ms)"
+                  inter_command_delay_ms="$(arg inter_command_delay_ms)"
+                  discovery_retry_count="$(arg discovery_retry_count)"
+                  discovery_retry_delay_ms="$(arg discovery_retry_delay_ms)"
+                  encoder_query_delay_ms="$(arg encoder_query_delay_ms)"
+                  command_timeout_ms="$(arg command_timeout_ms)"
+                  wheel_diameter="$(arg wheel_diameter)"
+                  sonar_lpf_alpha="$(arg sonar_lpf_alpha)"
+                  sonar_min_valid_mm="$(arg sonar_min_valid_mm)"
+                  sonar_max_valid_mm="$(arg sonar_max_valid_mm)"/>
 
 </robot>

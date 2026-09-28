@@ -1,4 +1,4 @@
-"""使用方法：MissionManager 实例化本模块，管理局域网多用户控制租约和幂等请求。"""
+"""用途：管理多客户端任务租约；使用方法：由 MissionManager 实例化并传入客户端标识。"""
 
 from collections import OrderedDict
 from dataclasses import asdict, dataclass
@@ -40,7 +40,7 @@ class MultiUserMissionState:
         return text[:8] if text else ''
 
     def connect(self, client_id):
-        """记录 WebSocket 连接或刷新后的重连."""
+        """记录客户端连接或刷新后的重连。"""
         now = self.clock()
         with self._lock:
             self._connected.add(client_id)
@@ -56,7 +56,7 @@ class MultiUserMissionState:
             return self.snapshot(now)
 
     def disconnect(self, client_id):
-        """断线不立即停止，为页面刷新保留十秒恢复窗口."""
+        """断线不立即停止，在宽限期内允许同一客户端恢复连接。"""
         with self._lock:
             self._connected.discard(client_id)
             self._last_heartbeat[client_id] = self.clock()

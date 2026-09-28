@@ -1,0 +1,30 @@
+# 使用方法：由 body_balance.launch.py 加载；实机确认机械状态后通过服务启用。
+body_balance:
+  ros__parameters:
+    enabled: false
+    imu_topic: /sensors/imu/data
+    joint_state_topic: /joint_states
+    hardware_state_topic: /hardware/chassis_state
+    control_rate: 10.0
+    leg_length: 0.060
+    wheelbase: 0.312
+    track: 0.280
+    deadzone_deg: 1.0
+    imu_filter_alpha: 0.5
+    kp: 0.1
+    kd_pitch: 2.0
+    kd_roll: 2.0
+    derivative_window: 0.05
+    max_step_deg: 5.0
+    soft_margin_mm: 4.0
+    hard_margin_mm: 1.0
+    safe_margin_mm: 0.1
+    imu_timeout: 0.5
+    overload_current_ma: 2300.0
+    overload_hold: 2.0
+    recover_current_ma: 1000.0
+    recover_hold: 2.0
+    max_setpoint_deg: 10.0
+    high_offset_mm: 25.0
+    low_offset_mm: -25.0
+    mid_restore_hold: 2.5

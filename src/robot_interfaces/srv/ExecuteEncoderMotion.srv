@@ -1,0 +1,5 @@
+# 使用方法：仅供 ExecuteWheelMotion Action 与实机插件之间传递四轮相对距离。
+float64[4] distance_m
+---
+bool success
+string message

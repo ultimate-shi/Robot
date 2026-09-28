@@ -5,10 +5,9 @@
 
 输入：
 - /cmd_vel_raw：在 launch 中被 remap 到 /cmd_vel，因此 Foxglove、Nav2 或命令行发布的 /cmd_vel 都会进入这里。
-- /ultrasonic/front_fl、/ultrasonic/front_fr：前向避障。
-- /ultrasonic/front_rl、/ultrasonic/front_rr：后向避障。
-- /ultrasonic/side_fl、/ultrasonic/side_rl：左侧避障。
-- /ultrasonic/side_fr、/ultrasonic/side_rr：右侧避障。
+- /ultrasonic/front_left、front_center、front_right：前向避障。
+- /ultrasonic/rear_left、rear_center、rear_right：后向避障。
+- /ultrasonic/left、right：左右侧避障。
 - /terrain_status：chassis_controller_node 发布的地形阻挡/打滑状态。
 
 输出：
@@ -39,6 +38,7 @@ try:
     from rclpy.qos import qos_profile_action_status
 except ImportError:
     from rclpy.qos import qos_profile_action_status_default as qos_profile_action_status
+from rclpy.qos import qos_profile_sensor_data
 
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Range
@@ -47,14 +47,14 @@ from robot_interfaces.msg import TerrainState
 
 
 SENSOR_LABELS = {
-    '/ultrasonic/front_fl': 'front_fl',
-    '/ultrasonic/front_fr': 'front_fr',
-    '/ultrasonic/front_rl': 'front_rl',
-    '/ultrasonic/front_rr': 'front_rr',
-    '/ultrasonic/side_fl': 'side_fl',
-    '/ultrasonic/side_fr': 'side_fr',
-    '/ultrasonic/side_rl': 'side_rl',
-    '/ultrasonic/side_rr': 'side_rr',
+    '/ultrasonic/front_left': 'front_left',
+    '/ultrasonic/front_center': 'front_center',
+    '/ultrasonic/front_right': 'front_right',
+    '/ultrasonic/right': 'right',
+    '/ultrasonic/rear_right': 'rear_right',
+    '/ultrasonic/rear_center': 'rear_center',
+    '/ultrasonic/rear_left': 'rear_left',
+    '/ultrasonic/left': 'left',
 }
 
 
@@ -78,9 +78,9 @@ class ObstacleAvoidanceNode(Node):
         self.declare_parameter("update_rate", 20.0)
         self.declare_parameter("cmd_vel_timeout", 0.3)
         self.declare_parameter("range_timeout", 0.15)
-        self.declare_parameter("require_valid_ranges", False)
+        self.declare_parameter("require_valid_ranges", True)
         self.declare_parameter("obstacle_log_period", 0.5)
-        self.declare_parameter("escape_reverse_enabled", True)
+        self.declare_parameter("escape_reverse_enabled", False)
         self.declare_parameter("escape_trigger_time", 1.0)
         self.declare_parameter("escape_reverse_duration", 0.8)
         self.declare_parameter("escape_reverse_speed", -0.06)
@@ -148,16 +148,16 @@ class ObstacleAvoidanceNode(Node):
         self.ultrasonic_data = {}
         self.ultrasonic_stamp = {}
         ultrasonic_topics = [
-            '/ultrasonic/front_fl', '/ultrasonic/front_fr',
-            '/ultrasonic/front_rl', '/ultrasonic/front_rr',
-            '/ultrasonic/side_fl', '/ultrasonic/side_fr',
-            '/ultrasonic/side_rl', '/ultrasonic/side_rr',
+            '/ultrasonic/front_left', '/ultrasonic/front_center',
+            '/ultrasonic/front_right', '/ultrasonic/right',
+            '/ultrasonic/rear_right', '/ultrasonic/rear_center',
+            '/ultrasonic/rear_left', '/ultrasonic/left',
         ]
         for topic in ultrasonic_topics:
             self.create_subscription(
                 Range, topic,
                 lambda msg, t=topic: self.ultrasonic_callback(msg, t),
-                10
+                qos_profile_sensor_data
             )
             self.ultrasonic_data[topic] = float('inf')
             self.ultrasonic_stamp[topic] = None
@@ -259,7 +259,8 @@ class ObstacleAvoidanceNode(Node):
         # === Front obstacle check (only when moving forward) ===
         if cmd.linear.x > 0.001:
             if self.require_valid_ranges and not self._has_valid_readings([
-                    '/ultrasonic/front_fl', '/ultrasonic/front_fr']):
+                    '/ultrasonic/front_left', '/ultrasonic/front_center',
+                    '/ultrasonic/front_right']):
                 cmd.linear.x = 0.0
                 warnings.append("FRONT_RANGE_STALE")
             elif front_min < self.front_stop:
@@ -288,7 +289,8 @@ class ObstacleAvoidanceNode(Node):
             rear_min = self._get_rear_min_distance()
 
             if self.require_valid_ranges and not self._has_valid_readings([
-                    '/ultrasonic/front_rl', '/ultrasonic/front_rr']):
+                    '/ultrasonic/rear_left', '/ultrasonic/rear_center',
+                    '/ultrasonic/rear_right']):
                 cmd.linear.x = 0.0
                 warnings.append("REAR_RANGE_STALE")
             elif rear_min < self.front_stop:
@@ -304,8 +306,8 @@ class ObstacleAvoidanceNode(Node):
         right_min = self._get_right_min_distance()
 
         # Positive linear.y = move left in ROS base_link convention.
-        left_topics = ['/ultrasonic/side_fl', '/ultrasonic/side_rl']
-        right_topics = ['/ultrasonic/side_fr', '/ultrasonic/side_rr']
+        left_topics = ['/ultrasonic/left']
+        right_topics = ['/ultrasonic/right']
         if (cmd.linear.y > 0.001 and self.require_valid_ranges
                 and not self._has_valid_readings(left_topics)):
             cmd.linear.y = 0.0
@@ -423,6 +425,12 @@ class ObstacleAvoidanceNode(Node):
             return False
 
         rear_min = self._get_rear_min_distance()
+        if self.require_valid_ranges and not self._has_valid_readings([
+                '/ultrasonic/rear_left', '/ultrasonic/rear_center',
+                '/ultrasonic/rear_right']):
+            warnings.append("ESCAPE_REAR_RANGE_STALE")
+            self.front_blocked_since = None
+            return False
         if rear_min < self.rear_escape_clearance:
             warnings.append(f"REAR_NOT_CLEAR:{rear_min:.2f}m")
             self.front_blocked_since = None
@@ -509,31 +517,39 @@ class ObstacleAvoidanceNode(Node):
 
     def _get_front_min_distance(self) -> float:
         """Get minimum distance from front-facing sensors."""
-        distances = self._valid_distances(['/ultrasonic/front_fl', '/ultrasonic/front_fr'])
+        distances = self._valid_distances([
+            '/ultrasonic/front_left', '/ultrasonic/front_center',
+            '/ultrasonic/front_right'])
         return min(distances) if distances else float('inf')
 
     def _get_rear_min_distance(self) -> float:
         """Get minimum distance from rear-facing sensors."""
-        distances = self._valid_distances(['/ultrasonic/front_rl', '/ultrasonic/front_rr'])
+        distances = self._valid_distances([
+            '/ultrasonic/rear_left', '/ultrasonic/rear_center',
+            '/ultrasonic/rear_right'])
         return min(distances) if distances else float('inf')
 
     def _get_left_min_distance(self) -> float:
         """Get minimum distance from left-side sensors."""
-        distances = self._valid_distances(['/ultrasonic/side_fl', '/ultrasonic/side_rl'])
+        distances = self._valid_distances(['/ultrasonic/left'])
         return min(distances) if distances else float('inf')
 
     def _get_right_min_distance(self) -> float:
         """Get minimum distance from right-side sensors."""
-        distances = self._valid_distances(['/ultrasonic/side_fr', '/ultrasonic/side_rr'])
+        distances = self._valid_distances(['/ultrasonic/right'])
         return min(distances) if distances else float('inf')
 
     def _detected_ultrasonic(self):
         """返回所有低于告警距离的超声波读数，用于日志和状态输出。"""
         groups = [
-            ('front', self.front_warn, ['/ultrasonic/front_fl', '/ultrasonic/front_fr']),
-            ('rear', self.front_warn, ['/ultrasonic/front_rl', '/ultrasonic/front_rr']),
-            ('left', self.side_warn, ['/ultrasonic/side_fl', '/ultrasonic/side_rl']),
-            ('right', self.side_warn, ['/ultrasonic/side_fr', '/ultrasonic/side_rr']),
+            ('front', self.front_warn, ['/ultrasonic/front_left',
+                                        '/ultrasonic/front_center',
+                                        '/ultrasonic/front_right']),
+            ('rear', self.front_warn, ['/ultrasonic/rear_left',
+                                       '/ultrasonic/rear_center',
+                                       '/ultrasonic/rear_right']),
+            ('left', self.side_warn, ['/ultrasonic/left']),
+            ('right', self.side_warn, ['/ultrasonic/right']),
         ]
         detected = []
         for direction, threshold, topics in groups:

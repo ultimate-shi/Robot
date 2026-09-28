@@ -1,0 +1,13 @@
+# 使用方法：robot_main/robot.launch.py 读取整车公共默认值；现场可用 launch 参数覆盖。
+defaults:
+  virtual_ply: /workspace/maps/studyroom/studyroom.ply
+  log_level: warn
+  node_start_interval: 0.8
+  sensor_start_delay: 3.0
+  control_start_delay: 3.0
+  navigation_start_delay: 14.0
+  perception_start_delay: 8.0
+  foxglove_port: 8765
+  use_imu: true
+  use_wheel_odometry: true
+  start_semantic_perception: true

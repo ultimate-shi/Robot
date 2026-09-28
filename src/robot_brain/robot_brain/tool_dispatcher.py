@@ -1,4 +1,4 @@
-"""使用方法：Web 层只把 CommandPolicy 已授权的动作传给 dispatch 生成固定任务参数。"""
+"""作用：把已授权白名单动作转为固定任务参数；使用方法：调用 dispatch(action)。"""
 
 from robot_brain.action_schema import ModelAction
 

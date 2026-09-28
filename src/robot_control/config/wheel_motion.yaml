@@ -1,0 +1,11 @@
+# 使用方法：由 wheel_motion.launch.py 加载，实机优先使用 DMC T 指令。
+wheel_motion_server:
+  ros__parameters:
+    wheel_radius: 0.055
+    virtual_speed: 0.10
+    distance_tolerance: 0.005
+    default_steering_timeout: 5.0
+    default_motion_timeout: 30.0
+    feedback_timeout: 0.25
+    steering_limit: 1.57  # Action 转向目标的最大绝对角度，单位 rad
+    require_encoder_service: true  # 实机 T 服务缺失时拒绝动作，禁止改用轮速回退

@@ -1,4 +1,4 @@
-"""使用方法：pytest 运行本文件，验证任务结束后恢复入口配置的 YOLO 模式。"""
+"""使用方法：pytest 运行本文件，验证任务结束后恢复 YOLO 检测模式及目标边界。"""
 
 from types import SimpleNamespace
 
@@ -10,7 +10,7 @@ class _Publisher:
         self.message = message
 
 
-def test_clear_task_restores_continuous_detection_for_brain_web():
+def test_clear_task_restores_continuous_detection():
     fake = type('FakeMission', (), {})()
     fake.active_task = 'explore'
     fake.active_target_id = 'frontier'

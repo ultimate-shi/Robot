@@ -9,7 +9,7 @@ head_mapping_lock:
     pitch_joint: head_pitch_joint  # 头部俯仰关节名称
     target_yaw: 0.0  # 建图目标 yaw，单位 rad；0 表示正前方
     target_pitch: 0.0  # 建图目标 pitch，单位 rad；0 表示水平
-    position_tolerance: 0.0349066  # 允许的位置误差，单位 rad，约 2°
+    position_tolerance: 0.0523599  # 允许的位置误差，单位 rad，约 3°；应略大于头部 PID 停止死区
     feedback_timeout: 0.5  # 关节反馈超时，单位 s
     require_feedback: false  # 手持固定支架时为 false，实机闭环头部应设为 true
-    command_rate: 5.0  # 建图期间重复发送归中命令的频率，单位 Hz
+    command_rate: 2.0  # 建图期间检查并维持归中的频率，单位 Hz；无需高频重复刷新相同目标

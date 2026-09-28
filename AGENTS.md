@@ -5,15 +5,23 @@
 
 本仓库是 ROS 2 Jazzy 机器人小车工作区，目标是让实机与仿真共用模型、传感器接口、运动控制和导航链路，逐步形成数字孪生。修改底盘、轮子、头部、传感器、TF、控制参数或地图时，应优先保证与实车结构和坐标关系一致。
 
-当前已具备默认虚拟机器人、双目视觉处理、IMU、RTAB-Map 建图、地图快照、Nav2 导航预演和分级避障；真实底盘、超声波仍待接入。固定在环境中的真实相机数据不得与运动中的虚拟机器人混用。
+当前已具备默认虚拟机器人、双目视觉处理、IMU、RTAB-Map 建图、地图快照、Nav2 导航预演、分级避障，以及 DMC0/DMC1/SE2 实机底盘和 8 路超声波接入。固定在环境中的真实相机数据不得与运动中的虚拟机器人混用。
 
 ## 主要目录
 
 - `src/robot_{brain,perception,navigation,control}/`：按职责拆分的 Python 节点、launch、配置和测试。
+- `src/robot_hardware/`、`src/robot_main/`：实机 ros2_control 插件与整车统一编排入口。
 - `src/robot_interfaces/`、`src/robot_description/`：跨包 ROS 接口与静态机器人模型资源。
 - `src/robot_stereo_components/`：高带宽双目处理 C++ 节点。
 - `scripts/`、`docker/`、`docs/`：运行脚本、Jazzy ARM64 容器和专项文档。
 - `README.md`：当前使用方法；`progress.md`：按日期记录开发过程。
+
+## 多 Agent 协作
+
+- 复杂任务由 `system_coordinator` 负责拆分、指定文件所有者、汇总结果和最终验证；不要让多个 Agent 同时修改同一文件。
+- 按包调用项目级专业 Agent：`brain_owner` 负责 `robot_brain`；`perception_owner` 负责 `robot_perception`、`robot_stereo_components`；`navigation_owner` 负责 `robot_navigation`；`control_hardware_owner` 负责 `robot_control`、`robot_hardware`；`platform_integration_owner` 负责 `robot_interfaces`、`robot_description`、`robot_main`。
+- 跨包故障应优先并行做只读排查，再由协调 Agent 按接口边界分配写入任务。消息、服务、Action、TF 或统一 launch 的改动必须通知 `platform_integration_owner` 复核。
+- Agent 的项目配置位于 `.codex/agents/`，详细分工、协作流程和调用示例见 `docs/multi_agent_workflow.md`；包级事实以 `docs/packages/` 和当前代码为准。
 
 ## 开发约定
 

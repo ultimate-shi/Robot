@@ -1,0 +1,8 @@
+<!-- 使用方法：controller_manager 根据 URDF 中的插件名称加载本共享库。 -->
+<library path="robot_serial_system">
+  <class name="robot_hardware/RobotSerialSystem"
+         type="robot_hardware::RobotSerialSystem"
+         base_class_type="hardware_interface::SystemInterface">
+    <description>DMC0/DMC1/SE2 USB 串口底盘系统接口</description>
+  </class>
+</library>

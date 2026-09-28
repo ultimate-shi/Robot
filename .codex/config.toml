@@ -1,0 +1,6 @@
+# 作用：启用本仓库的项目级多 Agent 并发上限。
+# 使用方法：从仓库启动新的 Codex 会话；专业 Agent 定义位于 .codex/agents/。
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 5

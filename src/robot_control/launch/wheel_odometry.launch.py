@@ -1,4 +1,4 @@
-"""使用方法：ros2 launch robot_control wheel_odometry.launch.py 发布四轮反馈里程计。"""
+"""使用方法：ros2 launch robot_control wheel_odometry.launch.py 发布四轮反馈里程计."""
 
 import os
 
@@ -22,6 +22,18 @@ def generate_launch_description():
             'enabled', default_value='true',
             description='是否启用四轮反馈里程计计算和发布'),
         DeclareLaunchArgument(
+            'wheelbase', default_value='0.312',
+            description='前后轮轴距，单位米'),
+        DeclareLaunchArgument(
+            'track', default_value='0.280',
+            description='左右轮距，单位米'),
+        DeclareLaunchArgument(
+            'wheel_radius', default_value='0.055',
+            description='车轮有效滚动半径，单位米'),
+        DeclareLaunchArgument(
+            'leg_length', default_value='0.060',
+            description='主动腿长度，单位米'),
+        DeclareLaunchArgument(
             'log_level', default_value='warn',
             description='四轮反馈里程计节点的 ROS 日志级别'),
         Node(
@@ -30,6 +42,14 @@ def generate_launch_description():
             parameters=[LaunchConfiguration('config_file'), {
                 'enabled': ParameterValue(
                     LaunchConfiguration('enabled'), value_type=bool),
+                'wheelbase': ParameterValue(
+                    LaunchConfiguration('wheelbase'), value_type=float),
+                'track': ParameterValue(
+                    LaunchConfiguration('track'), value_type=float),
+                'wheel_radius': ParameterValue(
+                    LaunchConfiguration('wheel_radius'), value_type=float),
+                'leg_length': ParameterValue(
+                    LaunchConfiguration('leg_length'), value_type=float),
             }],
             arguments=[
                 '--ros-args', '--log-level',

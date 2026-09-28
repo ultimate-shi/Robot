@@ -37,7 +37,7 @@ def generate_launch_description():
                 ('right/image_rect', '/stereo/right/image_rect'),
                 ('left/camera_info', '/stereo/left/camera_info'),
                 ('right/camera_info', '/stereo/right/camera_info'),
-                ('odom', '/visual_odom'),
+                ('odom', '/visual_odom_raw'),
                 ('odom_info', '/visual_odom_info'),
                 ('imu', '/sensors/imu/data'),
             ],

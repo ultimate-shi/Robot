@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""使用方法：由 start_yolo_gateway.sh 启动。
+"""使用方法：由 start_yolo_gateway.sh 启动纯文本 Qwen 与感知推理网关。
 
 本程序串行调度 YOLO 与常驻纯文本 Qwen。
 """
@@ -33,7 +33,7 @@ class SegmentRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    """文本决策请求；image_base64 仅为旧客户端兼容字段，不会发送给 LLM。"""
+    """文本决策请求；图像字段仅作兼容接收，不会发送给 LLM。"""
 
     request_id: str = ''
     system: str = ''
@@ -52,18 +52,13 @@ class InferenceGateway:
         self.segmenter_name = os.environ.get('ROBOT_SEGMENTER_PLUGIN', '')
         self.segmenter = self._load_detector(self.segmenter_name)
         self.last_segmentation_metrics = {}
-        self.llm_endpoint = os.environ.get(
-            'ROBOT_LLM_ENDPOINT', os.environ.get(
-                'ROBOT_VLM_ENDPOINT', '')).rstrip('/')
+        self.llm_endpoint = os.environ.get('ROBOT_LLM_ENDPOINT', '').rstrip('/')
         self.llm_fallback_endpoint = os.environ.get(
-            'ROBOT_LLM_FALLBACK_ENDPOINT', os.environ.get(
-                'ROBOT_VLM_FALLBACK_ENDPOINT', '')).rstrip('/')
+            'ROBOT_LLM_FALLBACK_ENDPOINT', '').rstrip('/')
         self.llm_model = os.environ.get(
-            'ROBOT_LLM_MODEL', os.environ.get(
-                'ROBOT_VLM_MODEL', 'qwen2.5-3b-instruct-w8a8-rk3588'))
+            'ROBOT_LLM_MODEL', 'qwen2.5-3b-instruct-w8a8-rk3588')
         self.llm_fallback_model = os.environ.get(
-            'ROBOT_LLM_FALLBACK_MODEL', os.environ.get(
-                'ROBOT_VLM_FALLBACK_MODEL', 'qwen2.5-3b-instruct'))
+            'ROBOT_LLM_FALLBACK_MODEL', 'qwen2.5-3b-instruct')
         self.max_tokens = int(os.environ.get('ROBOT_LLM_MAX_TOKENS', '96'))
         self.timeout = float(os.environ.get('ROBOT_LLM_TIMEOUT', '180'))
         self.last_llm_metrics = {}
@@ -262,9 +257,6 @@ async def health():
         'llm_fallback_runtime': fallback_health,
         'llm_fallback_configured': bool(gateway.llm_fallback_endpoint),
         'local_llm_model': gateway.llm_model,
-        # 兼容现有网页健康检查字段，后续版本再移除。
-        'vlm_configured': bool(gateway.llm_endpoint),
-        'local_qwen_model': gateway.llm_model,
         'serialization': 'single_queue',
     }
 

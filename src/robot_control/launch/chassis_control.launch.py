@@ -1,4 +1,4 @@
-"""使用方法：ros2 launch robot_control chassis_control.launch.py 启动底盘反馈和运动控制节点。"""
+"""使用方法：ros2 launch robot_control chassis_control.launch.py 启动底盘反馈和运动控制节点."""
 
 import os
 
@@ -17,7 +17,7 @@ def generate_launch_description():
     log_level = LaunchConfiguration('log_level')
 
     def staggered(index, node):
-        """在当前作用域解析间隔，再创建不会依赖子作用域的定时器。"""
+        """在当前作用域解析间隔，再创建不会依赖子作用域的定时器."""
         def create_timer(context):
             interval = float(LaunchConfiguration(
                 'node_start_interval').perform(context))
@@ -36,6 +36,15 @@ def generate_launch_description():
             'publish_odometry', default_value='true',
             description='底盘控制器是否自行发布 /odom 和对应 TF'),
         DeclareLaunchArgument(
+            'wheelbase', default_value='0.312',
+            description='前后轮轴距，单位米'),
+        DeclareLaunchArgument(
+            'track', default_value='0.280',
+            description='左右轮距，单位米'),
+        DeclareLaunchArgument(
+            'wheel_radius', default_value='0.055',
+            description='车轮有效滚动半径，单位米'),
+        DeclareLaunchArgument(
             'node_start_interval', default_value='0.0',
             description='底盘反馈和控制节点的错峰启动间隔，单位为秒'),
         DeclareLaunchArgument(
@@ -46,14 +55,28 @@ def generate_launch_description():
             arguments=['--ros-args', '--log-level', log_level],
             output='screen')),
         staggered(1, Node(
+            package='robot_control', executable='wheel_command_guard_node',
+            name='wheel_command_guard',
+            parameters=[LaunchConfiguration('config_file')],
+            arguments=['--ros-args', '--log-level', log_level],
+            output='screen')),
+        staggered(2, Node(
             package='robot_control', executable='chassis_controller_node',
             name='chassis_controller',
             parameters=[LaunchConfiguration('config_file'), {
                 'publish_odometry': ParameterValue(
                     LaunchConfiguration('publish_odometry'), value_type=bool),
+                'wheelbase': ParameterValue(
+                    LaunchConfiguration('wheelbase'), value_type=float),
+                'track': ParameterValue(
+                    LaunchConfiguration('track'), value_type=float),
+                'radius': ParameterValue(
+                    LaunchConfiguration('wheel_radius'), value_type=float),
             }],
             remappings=[
                 ('/cmd_vel', LaunchConfiguration('chassis_cmd_topic')),
+                ('/wheel_controller/commands',
+                 '/wheel_controller/commands_raw'),
             ],
             arguments=['--ros-args', '--log-level', log_level],
             output='screen')),

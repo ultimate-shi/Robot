@@ -1,4 +1,4 @@
-"""使用方法：pytest 运行本文件，验证双目机器人组合入口的关键 launch 合同。"""
+"""使用方法：pytest 运行本文件，验证实机兼容入口和 Nav2 的关键 launch 合同。"""
 
 from pathlib import Path
 
@@ -14,59 +14,43 @@ def launch_text(package, filename):
     ).read_text(encoding='utf-8')
 
 
-def test_stereo_robot_selects_mode_from_map_yaml_file():
+def test_stereo_robot_forwards_map_and_real_mode():
     text = launch_text('robot_navigation', 'stereo_robot.launch.py')
 
     assert "'map_yaml_file', default_value=''" in text
-    assert "has_saved_map = PythonExpression" in text
-    assert text.count('condition=UnlessCondition(has_saved_map)') == 3
-    assert "'use_map_server': has_saved_map" in text
+    assert "'map_yaml_file', 'video_device', 'camera_config_file'" in text
+    assert "forwarded['mode'] = 'real'" in text
+    assert "get_package_share_directory('robot_main')" in text
+    main_text = launch_text('robot_main', 'robot.launch.py')
+    assert "'use_map_server': 'true' if map_yaml else 'false'" in main_text
 
 
-def test_stereo_robot_reuses_each_independent_function_once():
+def test_stereo_robot_delegates_composition_to_robot_main():
     text = launch_text('robot_navigation', 'stereo_robot.launch.py')
-    expected = [
-        'description.launch.py',
-        'foxglove.launch.py',
-        'imu.launch.py',
-        'stereo_odometry.launch.py',
-        'state_estimation.launch.py',
-        'wheel_odometry.launch.py',
-        'stereo_camera.launch.py',
-        'stereo_pointcloud_filter.launch.py',
-        'head_mapping_lock.launch.py',
-        'rtabmap_mapping.launch.py',
-        'mapping_snapshot.launch.py',
-        'controllers.launch.py',
-        'chassis_control.launch.py',
-        'nav_velocity_gate.launch.py',
-        'obstacle_avoidance.launch.py',
-        'nav2.launch.py',
-        'semantic_detection.launch.py',
-        'acceptance_sampler.launch.py',
-    ]
+    main_text = launch_text('robot_main', 'robot.launch.py')
 
     assert 'Node(' not in text
     assert 'LifecycleNode(' not in text
-    for filename in expected:
-        assert text.count(filename) == 1
-    assert "'start_foxglove_bridge': 'false'" in text
-    assert "'publish_odometry': 'false'" in text
+    assert text.count('IncludeLaunchDescription(') == 1
+    for filename in ('state_estimation.launch.py', 'nav2.launch.py',
+                     'stereo_odometry.launch.py', 'rtabmap_mapping.launch.py'):
+        assert filename in main_text
 
 
 def test_stereo_robot_preserves_staged_startup():
-    text = launch_text('robot_navigation', 'stereo_robot.launch.py')
+    wrapper_text = launch_text('robot_navigation', 'stereo_robot.launch.py')
+    main_text = launch_text('robot_main', 'robot.launch.py')
     camera_text = launch_text('robot_perception', 'stereo_camera.launch.py')
     nav2_text = launch_text('robot_navigation', 'nav2.launch.py')
     controllers_text = launch_text('robot_control', 'controllers.launch.py')
 
-    assert "'sensor_start_delay', default_value='3.0'" in text
-    assert "'control_start_delay', default_value='3.0'" in text
-    assert "'navigation_start_delay', default_value='14.0'" in text
-    assert "'perception_start_delay', default_value='8.0'" in text
-    assert "'node_start_interval', default_value='0.8'" in text
-    assert 'def stage_delay' in text
-    assert "'node_start_interval': node_interval" in text
+    for name in ('sensor_start_delay', 'control_start_delay',
+                 'navigation_start_delay', 'perception_start_delay',
+                 'node_start_interval'):
+        assert f"'{name}'" in wrapper_text
+        assert f"LaunchConfiguration('{name}')" in main_text
+    assert 'def delayed(delay, action):' in main_text
+    assert 'TimerAction(period=float(delay)' in main_text
     assert "'node_start_interval', default_value='0.0'" in camera_text
     assert "'node_start_interval', default_value='0.0'" in nav2_text
     assert 'target_action=current' in controllers_text
@@ -78,26 +62,28 @@ def test_stereo_robot_preserves_staged_startup():
 
 def test_delayed_callbacks_reuse_top_level_configurations():
     """异步退出回调使用的配置必须存在于顶层作用域，不能只在子 launch 中声明。"""
-    text = launch_text('robot_navigation', 'stereo_robot.launch.py')
+    wrapper_text = launch_text('robot_navigation', 'stereo_robot.launch.py')
+    main_text = launch_text('robot_main', 'robot.launch.py')
 
-    assert "'camera_config_file'" in text
-    assert "'camera_config': LaunchConfiguration('camera_config_file')" in text
-    assert "'controller_manager_config_file'" in text
-    assert "'controller_config_file'" in text
-    assert "'manager_config_file': LaunchConfiguration(\n                    'controller_manager_config_file')" in text
-    assert "'controller_config_file': LaunchConfiguration(\n                    'controller_config_file')" in text
+    for name in ('camera_config_file', 'controller_manager_config_file',
+                 'controller_config_file'):
+        assert f"'{name}'" in wrapper_text
+        assert f"LaunchConfiguration('{name}')" in main_text or (
+            f"'{name}')" in main_text)
+    assert "'camera_config': LaunchConfiguration('camera_config_file')" in main_text
 
 
 def test_localization_and_control_keep_single_odom_owner():
-    text = launch_text('robot_navigation', 'stereo_robot.launch.py')
+    main_text = launch_text('robot_main', 'robot.launch.py')
     odometry_text = launch_text(
         'robot_navigation', 'stereo_odometry.launch.py')
     state_text = launch_text(
         'robot_navigation', 'state_estimation.launch.py')
 
     assert "('imu', '/sensors/imu/data')" in odometry_text
+    assert "'publish_tf': False" in odometry_text
     assert "('odometry/filtered', LaunchConfiguration('output_topic'))" in state_text
-    assert "'publish_odometry': 'false'" in text
+    assert "'publish_odometry': 'false'" in main_text
 
 
 def test_nav2_online_mode_can_disable_static_map_publishers():

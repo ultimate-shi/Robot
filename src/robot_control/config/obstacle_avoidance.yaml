@@ -6,8 +6,8 @@ obstacle_avoidance:
     side_stop_distance: 0.15
     side_warn_distance: 0.30
     range_timeout: 0.35
-    require_valid_ranges: false
-    escape_reverse_enabled: true
+    require_valid_ranges: true  # 安全层失效关闭：对应方向没有新鲜超声波数据时禁止运动
+    escape_reverse_enabled: false  # 碰到障碍物默认只停车，不在未确认周围环境时自动倒车
     escape_trigger_time: 1.0
     escape_reverse_duration: 2.0
     escape_reverse_speed: -0.06

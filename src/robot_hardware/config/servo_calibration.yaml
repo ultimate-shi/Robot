@@ -1,0 +1,9 @@
+# 使用方法：RobotSerialSystem 启动时加载；参数来自旧 hw_ctrl/servo_calib.json。
+servos:
+  # 头部电机最小有效 PWM 较大，停止死区保留约 2.5°，避免编码器抖动触发左右/上下往返修正。
+  - {name: head_yaw, zero_adc: 1982, direction: -1, min_deg: -90.0, max_deg: 90.0, kp: 15.0, ki: 5.0, kd: 1.0, pwm_deadzone: 200, brake_deadzone: 2.0}
+  - {name: head_pitch, zero_adc: 2043, direction: 1, min_deg: -30.0, max_deg: 30.0, kp: 10.0, ki: 0.5, kd: 0.2, pwm_deadzone: 150, brake_deadzone: 2.0}
+  - {name: steer_fl, zero_adc: 2068, direction: 1, min_deg: -90.0, max_deg: 90.0, kp: 20.0, ki: 0.2, kd: 0.05, pwm_deadzone: 75, brake_deadzone: 1.0}
+  - {name: steer_fr, zero_adc: 2035, direction: 1, min_deg: -90.0, max_deg: 90.0, kp: 20.0, ki: 0.2, kd: 0.05, pwm_deadzone: 90, brake_deadzone: 1.0}
+  - {name: steer_rl, zero_adc: 2037, direction: 1, min_deg: -90.0, max_deg: 90.0, kp: 20.0, ki: 0.2, kd: 0.05, pwm_deadzone: 75, brake_deadzone: 1.0}
+  - {name: steer_rr, zero_adc: 2029, direction: 1, min_deg: -90.0, max_deg: 90.0, kp: 20.0, ki: 0.2, kd: 0.05, pwm_deadzone: 95, brake_deadzone: 1.0}

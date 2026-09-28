@@ -45,7 +45,7 @@ class SceneSnapshot:
         )
 
     def detection_list(self):
-        """返回可交给现有 ROS 和网页适配层的独立字典列表。"""
+        """返回可交给任务适配层的独立字典列表。"""
         return deepcopy(list(self.detections))
 
     def audit_dict(self):

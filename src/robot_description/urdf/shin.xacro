@@ -12,7 +12,7 @@
     - mesh_scale : OBJ 网格缩放比例，用于左右/前后镜像 (默认 "0.001 0.001 0.001")
   -->
   <xacro:macro name="shin" 
-               params="suffix parent_link 
+               params="suffix parent_link mimic_joint
                        xyz:='0 0 0' 
                        rpy:='0 0 0'
                        mesh_scale:='0.001 0.001 0.001'">
@@ -52,6 +52,8 @@
       <child link="shin_${suffix}"/>
       <!-- 假设膝盖绕 X 轴旋转，请根据实际模型调整 -->
       <axis xyz="1 0 0"/>
+      <!-- 实机每条腿只有一个主动轴，小腿通过连杆反向补偿大腿角度。 -->
+      <mimic joint="${mimic_joint}" multiplier="-1.0" offset="0.0"/>
       <limit lower="-0.785" upper="0.785" effort="5.0" velocity="1.0"/>
       <dynamics damping="0.05" friction="0.0"/>
     </joint>

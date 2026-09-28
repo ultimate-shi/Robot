@@ -1,4 +1,4 @@
-"""使用方法：SharedRobotState 用本模块冻结场景并等待 Qwen 后的新 YOLO 快照。"""
+"""用途：冻结检测场景并等待新快照；使用方法：任务入口调用 SceneCoordinator。"""
 
 from dataclasses import replace
 import threading

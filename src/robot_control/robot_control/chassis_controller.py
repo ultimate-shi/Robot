@@ -27,6 +27,7 @@
 
 import json
 import math
+import time
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -34,7 +35,8 @@ from rclpy.executors import ExternalShutdownException
 
 from geometry_msgs.msg import Twist, TransformStamped
 from nav_msgs.msg import Odometry
-from std_msgs.msg import Float64MultiArray, String
+from std_msgs.msg import Bool, Float64MultiArray, String
+from sensor_msgs.msg import JointState
 from robot_interfaces.msg import TerrainState
 from tf2_ros import TransformBroadcaster
 from rcl_interfaces.msg import SetParametersResult
@@ -46,13 +48,16 @@ class ChassisController3D(Node):
         super().__init__('chassis_controller')
 
         # ==================== Parameters ====================
-        self.declare_parameter("wheelbase", 0.4)
-        self.declare_parameter("track", 0.2)
-        self.declare_parameter("radius", 0.05)
+        self.declare_parameter("wheelbase", 0.312)
+        self.declare_parameter("track", 0.280)
+        self.declare_parameter("radius", 0.055)
         self.declare_parameter("motion_mode", "crab")
         self.declare_parameter("steering_limit", 1.57)
         self.declare_parameter("ackermann_min_turning_speed", 0.04)
         self.declare_parameter("publish_odometry", True)
+        self.declare_parameter("cmd_vel_timeout", 0.5)
+        self.declare_parameter("steering_ready_tolerance", 0.05)
+        self.declare_parameter("steering_feedback_timeout", 0.3)
         # Terrain parameters
         self.declare_parameter("terrain_check_enabled", True)
         self.declare_parameter("grid_resolution", 0.02)
@@ -97,9 +102,13 @@ class ChassisController3D(Node):
         # ==================== ROS interfaces ====================
         self.create_subscription(Twist, '/cmd_vel', self.cmd_vel_callback, 10)
         self.create_subscription(Float64MultiArray, '/wheel_states', self.wheel_state_callback, 10)
+        self.create_subscription(JointState, '/joint_states', self.steering_feedback_callback, 10)
         self.create_subscription(
             TerrainState, '/perception/terrain_state',
             self.terrain_status_callback, 10)
+        self.create_subscription(
+            Bool, '/wheel_motion/active',
+            self.wheel_motion_active_callback, 10)
 
         self.steer_pub = self.create_publisher(Float64MultiArray, '/steering_controller/commands', 10)
         self.speed_pub = self.create_publisher(Float64MultiArray, '/wheel_controller/commands', 10)
@@ -130,8 +139,14 @@ class ChassisController3D(Node):
         self.prev_angles = [0.0, 0.0, 0.0, 0.0]
 
         self.last_cmd_vel_time = self.get_clock().now()
-        self.cmd_vel_timeout = 0.5
+        self.cmd_vel_timeout = float(
+            self.get_parameter("cmd_vel_timeout").value)
         self.has_received_cmd = False
+        self.wheel_motion_active = False
+        self.steering_feedback = None
+        self.steering_feedback_time = None
+        self.steering_ready_tolerance = float(self.get_parameter('steering_ready_tolerance').value)
+        self.steering_feedback_timeout = float(self.get_parameter('steering_feedback_timeout').value)
 
         # Terrain state
         self.slip_factor = 1.0
@@ -200,8 +215,24 @@ class ChassisController3D(Node):
         self.roll = float(msg.roll)
         self.pitch = float(msg.pitch)
 
+    def wheel_motion_active_callback(self, msg):
+        """定距 Action 执行时暂停常规 Twist 输出，避免覆盖转向和 DMC T 指令。"""
+        self.wheel_motion_active = bool(msg.data)
+
+    def steering_feedback_callback(self, msg):
+        """仅使用真实关节反馈；缺失或过期时不允许驱动轮转动。"""
+        names = (
+            'front_left_steer_joint', 'front_right_steer_joint',
+            'rear_left_steer_joint', 'rear_right_steer_joint')
+        positions = dict(zip(msg.name, msg.position))
+        if all(name in positions and math.isfinite(positions[name]) for name in names):
+            self.steering_feedback = [positions[name] for name in names]
+            self.steering_feedback_time = time.monotonic()
+
     # ==================== 10Hz control loop ====================
     def control_loop(self):
+        if self.wheel_motion_active:
+            return
         current_time = self.get_clock().now()
         if (current_time - self.last_cmd_vel_time).nanoseconds * 1e-9 > self.cmd_vel_timeout:
             self.send_stop()
@@ -239,6 +270,15 @@ class ChassisController3D(Node):
 
         # If terrain blocked, stop
         if self.terrain_blocked:
+            opt_speeds = [0.0, 0.0, 0.0, 0.0]
+
+        # 先让转向关节到位，再驱动轮子。反馈丢失时保持轮速为零。
+        feedback_fresh = (
+            self.steering_feedback_time is not None and
+            time.monotonic() - self.steering_feedback_time <= self.steering_feedback_timeout)
+        if not feedback_fresh or any(
+                abs(target - actual) > self.steering_ready_tolerance
+                for target, actual in zip(opt_angles, self.steering_feedback or [])):
             opt_speeds = [0.0, 0.0, 0.0, 0.0]
 
         # Publish

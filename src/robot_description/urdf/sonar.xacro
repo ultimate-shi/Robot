@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<!-- 使用方法：由 robot.xacro 按 chassis.json 的实机 3+3+1+1 布局创建超声波坐标系。 -->
+<robot xmlns:xacro="http://www.ros.org/wiki/xacro" name="sonar_frames">
+  <xacro:macro name="sonar_frame" params="name parent xyz yaw">
+    <link name="${name}"/>
+    <joint name="${name}_joint" type="fixed">
+      <origin xyz="${xyz}" rpy="0 0 ${yaw}"/>
+      <parent link="${parent}"/>
+      <child link="${name}"/>
+    </joint>
+  </xacro:macro>
+</robot>

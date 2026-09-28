@@ -1,0 +1,8 @@
+# 使用方法：调用 /body_balance/set 设置平衡开关、车身档位和目标姿态。
+bool enabled
+string level
+float64 target_roll_deg
+float64 target_pitch_deg
+---
+bool success
+string message

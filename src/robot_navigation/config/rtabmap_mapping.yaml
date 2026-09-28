@@ -5,6 +5,7 @@ rtabmap:
     odom_frame_id: odom  # 局部连续里程计坐标系；RTAB-Map 根据它估计并修正 map -> odom
     map_frame_id: map  # 全局地图坐标系，也是输出占据栅格地图所在的坐标系
     publish_tf: true  # 是否由 RTAB-Map 发布 map -> odom 变换
+    map_always_update: true  # 即使图优化位姿未变化，也根据静止位置的新观测重新发布地图
     wait_for_transform: 1.0  # 等待视觉里程计发布对应图像时间戳的 odom -> base_link
     subscribe_stereo: true  # 订阅同步后的左、右目图像及相机标定信息作为建图输入
     subscribe_depth: false  # 是否订阅 RGB-D 深度图；本项目使用双目输入，因此关闭
@@ -16,10 +17,13 @@ rtabmap:
     sync_queue_size: 10  # 消息同步器缓存的候选消息数量，用于等待同时间戳的双目数据
     qos: 1  # 图像类订阅使用的 ROS 2 QoS 可靠性编号；1 表示 RELIABLE
     database_path: /tmp/robot_rtabmap_mapping.db  # RTAB-Map 图、特征和地图数据库路径；位于 /tmp，重启系统后可能被清理
-    Rtabmap/DetectionRate: "2.0"  # RTAB-Map 处理传感器数据和创建节点的最高频率，单位 Hz；0 表示不限制
+    Rtabmap/DetectionRate: "1.0"  # RTAB-Map 最多每秒接收一次地图观测；静止更新时限制数据库和 CPU 增长
     Mem/IncrementalMemory: "true"  # 启用增量建图；true 会把新观测加入数据库，false 通常用于已有地图定位
     Mem/InitWMWithAllNodes: "false"  # 启动时是否把数据库全部节点载入工作内存；增量建图关闭可降低启动内存占用
+    Mem/RehearsalSimilarity: "1.0"  # 禁止把同一位置的新画面合并掉，保留静止时环境变化的观测
     RGBD/CreateOccupancyGrid: "true"  # 是否根据传感器数据生成并发布二维/三维占据地图
+    RGBD/LinearUpdate: "0.0"  # 不要求平移即可创建新地图节点；机器人静止时仍处理新画面
+    RGBD/AngularUpdate: "0.0"  # 不要求旋转即可创建新地图节点；与 LinearUpdate 共同启用静止更新
     Reg/Force3DoF: "true"  # 将位姿优化约束为平面 x、y、yaw，避免地面机器人地图产生俯仰和高度漂移
     Grid/FromDepth: "true"  # 从双目/RGB-D 深度数据生成局部占据栅格，而不是依赖激光扫描
     Grid/3D: "false"  # false 生成二维 OccupancyGrid；true 则构建三维占据表示

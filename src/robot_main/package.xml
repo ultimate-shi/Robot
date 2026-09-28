@@ -1,0 +1,14 @@
+<?xml version="1.0"?>
+<!-- 使用方法：ros2 launch robot_main robot.launch.py mode:=real|virtual 启动整车。 -->
+<package format="3">
+  <name>robot_main</name><version>0.1.0</version>
+  <description>机器人实机与数字孪生的唯一整车编排入口</description>
+  <maintainer email="shijiahao@todo.todo">shijiahao</maintainer>
+  <license>TODO: License declaration</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>ament_index_python</depend><depend>launch</depend><depend>launch_ros</depend>
+  <exec_depend>robot_control</exec_depend><exec_depend>robot_description</exec_depend>
+  <exec_depend>robot_hardware</exec_depend><exec_depend>robot_navigation</exec_depend>
+  <exec_depend>robot_perception</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

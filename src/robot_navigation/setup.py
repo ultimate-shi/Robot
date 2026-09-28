@@ -22,5 +22,6 @@ setup(
         'goal_manager = robot_navigation.goal_manager:main',
         'mission_planner = robot_navigation.mission_planner:main',
         'brain_mission = robot_navigation.mission_planner:main',
+        'odometry_covariance_guard_node = robot_navigation.odometry_covariance_guard:main',
     ]},
 )

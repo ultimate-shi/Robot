@@ -1,6 +1,4 @@
-"""使用方法：在工作区执行 colcon build 安装本地大脑、网页和启动配置。"""
-import os
-from glob import glob
+"""作用：安装本地大脑的任务策略组件；使用方法：在工作区执行 colcon build。"""
 from setuptools import find_packages, setup
 
 package_name = 'robot_brain'
@@ -9,17 +7,11 @@ setup(
     data_files=[
         ('share/ament_index/resource_index/packages', ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
-        (os.path.join('share', package_name, 'config'), glob('config/*.yaml')),
-        (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
-        (os.path.join('share', package_name, 'web'), glob('web/*.*')),
     ],
     install_requires=[
-        'setuptools', 'fastapi>=0.110,<1', 'uvicorn>=0.29,<1',
-        'websockets>=12,<16',
+        'setuptools',
     ],
     zip_safe=True, maintainer='shijiahao', maintainer_email='shijiahao@todo.todo',
-    description='机器人本地大模型交互、多用户控制权和任务编排', license='TODO: License declaration',
-    entry_points={'console_scripts': [
-        'brain_web = robot_brain.web_server:main',
-    ]},
+    description='机器人 Qwen 决策核心与任务策略组件', license='TODO: License declaration',
+    entry_points={'console_scripts': []},
 )

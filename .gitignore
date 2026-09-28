@@ -2,6 +2,7 @@ build/
 install/
 log/
 calibration_output/
+calibration_reports/
 __pycache__/
 *.pyc
 maps/

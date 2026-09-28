@@ -2,10 +2,22 @@
 <!-- 使用方法：由 robot_description/urdf/robot.xacro 组合，通常不要单独启动。 -->
 <robot name="robot_hardware" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
+  <xacro:macro name="hardware" params="hardware_plugin servo_calibration_file device_candidates serial_timeout_ms inter_command_delay_ms discovery_retry_count discovery_retry_delay_ms encoder_query_delay_ms command_timeout_ms wheel_diameter sonar_lpf_alpha sonar_min_valid_mm sonar_max_valid_mm">
   <ros2_control name="RobotHardware" type="system">
     <hardware>
-      <!-- 🔥 官方自带插件，无需安装任何依赖！ -->
-      <plugin>mock_components/GenericSystem</plugin>
+      <plugin>${hardware_plugin}</plugin>
+      <param name="device_candidates">${device_candidates}</param>
+      <param name="serial_timeout_ms">${serial_timeout_ms}</param>
+      <param name="inter_command_delay_ms">${inter_command_delay_ms}</param>
+      <param name="discovery_retry_count">${discovery_retry_count}</param>
+      <param name="discovery_retry_delay_ms">${discovery_retry_delay_ms}</param>
+      <param name="encoder_query_delay_ms">${encoder_query_delay_ms}</param>
+      <param name="command_timeout_ms">${command_timeout_ms}</param>
+      <param name="wheel_diameter">${wheel_diameter}</param>
+      <param name="sonar_lpf_alpha">${sonar_lpf_alpha}</param>
+      <param name="sonar_min_valid_mm">${sonar_min_valid_mm}</param>
+      <param name="sonar_max_valid_mm">${sonar_max_valid_mm}</param>
+      <param name="servo_calibration_file">${servo_calibration_file}</param>
     </hardware>
 
     <joint name="lap_body_joint_fr">
@@ -21,23 +33,6 @@
       <state_interface name="position"/>
     </joint>
     <joint name="lap_body_joint_rl">
-      <command_interface name="position"/>
-      <state_interface name="position"/>
-    </joint>
-
-    <joint name="shin_lap_fr_joint_fr">
-      <command_interface name="position"/>
-      <state_interface name="position"/>
-    </joint>
-    <joint name="shin_lap_fl_joint_fl">
-      <command_interface name="position"/>
-      <state_interface name="position"/>
-    </joint>
-    <joint name="shin_lap_rr_joint_rr">
-      <command_interface name="position"/>
-      <state_interface name="position"/>
-    </joint>
-    <joint name="shin_lap_rl_joint_rl">
       <command_interface name="position"/>
       <state_interface name="position"/>
     </joint>
@@ -92,5 +87,6 @@
       <state_interface name="position"/>
     </joint>
   </ros2_control>
+  </xacro:macro>
 
 </robot>

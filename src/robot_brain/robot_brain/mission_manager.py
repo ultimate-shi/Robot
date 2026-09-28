@@ -1,4 +1,4 @@
-"""使用方法：Web层用 MissionManager 保存私有预览并通过租约原子确认任务。"""
+"""作用：保存私有任务预览并通过租约确认；使用方法：由任务入口实例化 MissionManager。"""
 
 import time
 import uuid
@@ -7,7 +7,7 @@ from robot_brain.multi_user import MultiUserMissionState
 
 
 class MissionManager:
-    """只管理网页预览和租约，路径与坐标由 ROS navigation 提供。"""
+    """只管理任务预览和租约，路径与坐标由 ROS navigation 提供。"""
 
     def __init__(self, grace_seconds=10.0):
         self.lease = MultiUserMissionState(grace_seconds=grace_seconds)

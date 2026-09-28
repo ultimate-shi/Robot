@@ -4,7 +4,7 @@
 
   <!-- 大腿模块的XACRO宏定义 -->
   <xacro:macro name="lap" 
-               params="suffix parent_link 
+               params="suffix parent_link lower:='-0.785398' upper:='0.785398'
                        xyz:='0 0 0' 
                        rpy:='0 0 0'
                        mesh_scale:='0.001 0.001 0.001'">
@@ -63,7 +63,7 @@
         - effort: 最大扭矩，单位：牛顿米(N·m)
         - velocity: 最大角速度，单位：弧度/秒(rad/s)
       -->
-      <limit lower="${-pi/4}" upper="${pi/4}" effort="10.0" velocity="1.0"/>
+      <limit lower="${lower}" upper="${upper}" effort="10.0" velocity="1.0"/>
       
       <!-- 
         dynamics 标签：关节动态特性

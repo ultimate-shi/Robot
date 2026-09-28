@@ -1,4 +1,4 @@
-"""使用方法：ros2 launch robot_navigation ply_map.launch.py 发布保存的 PLY 环境点云。"""
+"""使用方法：ros2 launch robot_navigation ply_map.launch.py 发布 PLY；调试点云须显式设 allow_fallback:=true。"""
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
@@ -14,8 +14,8 @@ def generate_launch_description():
             default_value='/workspace/maps/studyroom/studyroom.ply',
             description='需要发布的环境 PLY 点云文件路径'),
         DeclareLaunchArgument(
-            'allow_fallback', default_value='true',
-            description='PLY 文件不可用时是否允许节点使用配置的降级行为'),
+            'allow_fallback', default_value='false',
+            description='仅调试时允许 PLY 不可用后发布两点测试点云'),
         DeclareLaunchArgument(
             'log_level', default_value='warn',
             description='PLY 环境点云发布节点的 ROS 日志级别'),

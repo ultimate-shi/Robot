@@ -23,5 +23,8 @@ setup(
         'obstacle_avoidance = robot_control.obstacle_avoidance:main',
         'head_mapping_lock_node = robot_control.head_mapping_lock:main',
         'four_wheel_odometry_node = robot_control.four_wheel_odometry:main',
+        'wheel_command_guard_node = robot_control.wheel_command_guard:main',
+        'body_balance_node = robot_control.body_balance:main',
+        'wheel_motion_server_node = robot_control.wheel_motion_server:main',
     ]},
 )

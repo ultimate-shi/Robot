@@ -119,7 +119,7 @@ local_costmap:
       width: 4  # 局部代价地图宽度，单位 m
       height: 4  # 局部代价地图高度，单位 m
       resolution: 0.02  # 代价地图栅格分辨率，单位 m
-      robot_radius: 0.25  # 机器人圆形足迹半径，单位 m
+      footprint: "[[-0.231, -0.184], [-0.231, 0.184], [0.231, 0.184], [0.231, -0.184]]"  # 实机 0.422x0.328m 外加 0.02m 安全边界
       plugins: ["voxel_layer", "ultrasonic_scan_layer", "inflation_layer"]  # 局部代价地图层插件列表
       always_send_full_costmap: true  # 是否每次发布完整代价地图
 
@@ -177,7 +177,7 @@ global_costmap:
       publish_frequency: 1.0  # 全局代价地图发布频率，单位 Hz
       global_frame: map  # 全局坐标系名称
       robot_base_frame: base_link  # 机器人底盘坐标系名称
-      robot_radius: 0.25  # 机器人圆形足迹半径，单位 m
+      footprint: "[[-0.231, -0.184], [-0.231, 0.184], [0.231, 0.184], [0.231, -0.184]]"  # 与局部代价地图共用实机矩形足迹
       resolution: 0.02  # 代价地图栅格分辨率，单位 m
       track_unknown_space: true  # 全局代价地图是否保留未知区域
       plugins: ["static_layer", "global_obstacle_layer", "inflation_layer"]  # 全局代价地图层插件列表，静态地图叠加 PLY 动态障碍

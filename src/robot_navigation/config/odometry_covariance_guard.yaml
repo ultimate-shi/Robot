@@ -1,0 +1,8 @@
+# 使用方法：由 state_estimation.launch.py 加载，约束视觉里程计最小协方差。
+odometry_covariance_guard:
+  ros__parameters:
+    input_topic: /visual_odom_raw
+    output_topic: /visual_odom
+    x_variance_floor: 0.02
+    y_variance_floor: 0.02
+    yaw_variance_floor: 0.03

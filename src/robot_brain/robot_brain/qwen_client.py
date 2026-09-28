@@ -1,4 +1,4 @@
-"""使用方法：Web 聊天线程调用 QwenClient，经 localhost 网关获取严格 JSON。"""
+"""作用：调用本地 Qwen 网关并解析白名单提案；使用方法：由任务入口实例化 QwenClient。"""
 
 import ast
 from datetime import datetime
@@ -13,7 +13,6 @@ from urllib.request import Request, urlopen
 from zoneinfo import ZoneInfo
 
 from robot_brain.action_schema import ModelResponse, parse_model_response
-from robot_brain.command_policy import CommandPolicy
 
 
 SYSTEM_INSTRUCTION = '\n'.join((
@@ -60,7 +59,7 @@ class QwenClient:
         self.log_paths = {}
 
     def health(self):
-        """读取推理网关健康状态，供网页显示 Qwen 是否真正可用。"""
+        """读取推理网关健康状态。"""
         request = Request(self.base_url + '/health', method='GET')
         try:
             with urlopen(request, timeout=2.0) as response:
@@ -162,7 +161,7 @@ class QwenClient:
             return finish(ModelResponse(
                 answer='模型返回格式异常，未执行任何机器人动作。'),
                 'rejected')
-        # 这里只返回不可信模型提案；用户命令授权和最新视觉重验由 Web 编排层完成。
+        # 这里只返回不可信模型提案；用户命令授权和最新视觉重验由任务编排层完成。
         return finish(model, parse_mode)
 
     def _log_info(self, message):
@@ -204,7 +203,7 @@ class QwenClient:
                 elif not image:
                     drawing_errors.append('没有与检测时间戳配对的相机帧')
             content = (
-                '使用方法：本文件记录单次网页 Qwen 问答及解析结果。\n'
+                '使用方法：本文件记录单次 Qwen 问答及解析结果。\n'
                 f'时间：{timestamp}\n'
                 f'request_id：{request_id}\n'
                 f'用户输入：{user_text}\n'
@@ -524,42 +523,3 @@ class QwenClient:
         if not isinstance(answer, str) or not answer.strip():
             return None
         return ModelResponse(answer=answer.strip())
-
-    @staticmethod
-    def _repair_action_only(raw):
-        """只修复完整白名单动作对象，其他非标准输出按无动作处理。"""
-        model, mode = QwenClient._parse_with_repair(raw)
-        return model if mode == 'action_wrap' else None
-
-    @staticmethod
-    def _explicit_action(text, detections):
-        """兼容旧测试和调用者，实际命令策略由 CommandPolicy 独立维护。"""
-        return CommandPolicy.explicit_action(text, detections)
-
-    @staticmethod
-    def _validate_scene_action(model, detections):
-        """goto_object 必须引用本轮实际检测标签。"""
-        if model.action is None or model.action.name != 'goto_object':
-            return model
-        requested = str(model.action.arguments.get('label', '')).strip().lower()
-        for item in detections:
-            labels = {
-                str(item.get('label_zh', '')).strip().lower(),
-                str(item.get('class_name', '')).strip().lower(),
-            }
-            labels.discard('')
-            if requested in labels:
-                return model
-        display = model.action.arguments.get('label', '目标物体')
-        return ModelResponse(
-            answer=f'本轮 YOLO 未检测到{display}，未生成机器人动作。')
-
-    @staticmethod
-    def _gate_action_by_request(model, text, detections):
-        """兼容入口：委托独立策略层校验用户原始命令。"""
-        result = CommandPolicy.authorize(text, model, detections)
-        return ModelResponse(answer=result.answer, action=result.action)
-
-    @staticmethod
-    def _preview_answer(action):
-        return CommandPolicy.preview_answer(action)

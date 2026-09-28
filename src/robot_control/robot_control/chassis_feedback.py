@@ -5,7 +5,6 @@
 
 输入：
 - /joint_states：joint_state_broadcaster 发布，包含所有关节的位置和速度。
-- /chassis_mode：当前底盘模式，仅用于状态缓存和调试日志。
 
 输出：
 - /wheel_states：Float64MultiArray，前 4 个值是四轮转向角，后 4 个值是四轮轮速。
@@ -16,10 +15,9 @@ chassis_controller_node 依赖 /wheel_states 计算 /odom 和 odom->base_link TF
 """
 
 import rclpy
-import math
 from rclpy.node import Node
 
-from std_msgs.msg import Float64MultiArray, String
+from std_msgs.msg import Float64MultiArray
 from sensor_msgs.msg import JointState
 from rclpy.executors import ExternalShutdownException
 
@@ -28,9 +26,6 @@ class ChassisFeedback(Node):
 
     def __init__(self):
         super().__init__('chassis_feedback')
-
-        # 运动模式缓存
-        self.current_mode = "unknown"
 
         # 初始化默认数据（防止启动无数据报错）
         self.steer_data = [0.0, 0.0, 0.0, 0.0]  # 4个转向角
@@ -46,14 +41,6 @@ class ChassisFeedback(Node):
             self.joint_callback,
             10
         )
-        # 订阅底盘运动模式
-        self.mode_sub = self.create_subscription(
-            String,
-            '/chassis_mode',
-            self.mode_callback,
-            10
-        )
-
         # ======================
         # 发布轮子状态（给底盘控制器计算里程计）
         # ======================
@@ -82,11 +69,7 @@ class ChassisFeedback(Node):
         # 10Hz固定频率发布
         self.create_timer(0.1, self.publish_feedback)
 
-        self.get_logger().info("✅ Chassis Feedback 启动完成 (带单位日志输出)")
-
-    # 模式订阅回调
-    def mode_callback(self, msg: String):
-        self.current_mode = msg.data
+        self.get_logger().info("Chassis Feedback 启动完成")
 
     # 解析joint_states数据
     def joint_callback(self, msg: JointState):
@@ -99,31 +82,12 @@ class ChassisFeedback(Node):
             self.get_logger().warn(f"未找到关节: {e}，请检查URDF配置")
             return
 
-    # 固定频率发布 + 打印带单位的日志
+    # 固定频率发布反馈
     def publish_feedback(self):
         # 拼接数据
         feedback_msg = Float64MultiArray(data=self.steer_data + self.wheel_speed_data)
         self.feedback_pub.publish(feedback_msg)
 
-        # ======================
-        # 🔥 核心：带单位的清晰日志输出
-        # ======================
-        steer_names = ["左前", "右前", "左后", "右后"]
-        wheel_names = ["左前", "右前", "左后", "右后"]
-        
-        # 打印转向角度（弧度 + 角度 双单位）
-        steer_log = "转向角度: "
-        for i, angle in enumerate(self.steer_data):
-            deg = math.degrees(angle)  # 弧度转角度
-            steer_log += f"{steer_names[i]}: {angle:.2f}rad / {deg:.1f}° | "
-        
-        # 打印轮速（rad/s 单位）
-        speed_log = "轮子转速: "
-        for i, speed in enumerate(self.wheel_speed_data):
-            speed_log += f"{wheel_names[i]}: {speed:.2f}rad/s | "
-
-        # 输出日志
-        # self.get_logger().info(f"当前状态: {self.current_mode} | {steer_log} | {speed_log}")
 
 
 def main(args=None):

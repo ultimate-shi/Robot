@@ -3,6 +3,7 @@ cmake_minimum_required(VERSION 3.8)
 project(robot_interfaces)
 
 find_package(ament_cmake REQUIRED)
+find_package(builtin_interfaces REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
@@ -13,12 +14,18 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/SemanticDetectionArray.msg"
   "msg/TerrainState.msg"
   "msg/MissionState.msg"
+  "msg/ChassisState.msg"
+  "msg/BodyBalanceStatus.msg"
+  "msg/WheelOdometryStatus.msg"
   "srv/DetectObjects.srv"
   "srv/SetDetectionMode.srv"
   "srv/CaptureSample.srv"
   "srv/ConfirmMission.srv"
+  "srv/SetBodyBalance.srv"
+  "srv/ExecuteEncoderMotion.srv"
   "action/PlanMission.action"
-  DEPENDENCIES geometry_msgs nav_msgs std_msgs
+  "action/ExecuteWheelMotion.action"
+  DEPENDENCIES builtin_interfaces geometry_msgs nav_msgs std_msgs
 )
 
 ament_export_dependencies(rosidl_default_runtime)

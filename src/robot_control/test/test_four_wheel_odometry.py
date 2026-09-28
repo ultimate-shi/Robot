@@ -1,4 +1,4 @@
-"""使用方法：pytest 运行本文件，验证未来四轮 JointState 运动学接口。"""
+"""使用方法：pytest 运行本文件，验证四轮反馈运动学和异常降权。"""
 
 import math
 
@@ -33,3 +33,31 @@ def test_four_wheel_odometry_recovers_rigid_body_rotation():
         steering, wheel_speed, 0.05, 0.4, 0.2)
 
     assert np.allclose(result, [0.0, 0.0, yaw_rate], atol=1e-8)
+
+
+def test_dynamic_wheel_positions_follow_original_leg_geometry():
+    """前后腿转动时轮心 X 坐标应按旧 chassis.c 的方向变化。"""
+    positions = FourWheelOdometry.wheel_positions(
+        np.full(4, math.radians(30.0)), 0.312, 0.280, 0.060)
+    assert positions[0, 0] < 0.312 / 2.0
+    assert positions[1, 0] < 0.312 / 2.0
+    assert positions[2, 0] > -0.312 / 2.0
+    assert positions[3, 0] > -0.312 / 2.0
+
+
+def test_robust_solver_marks_single_wheel_outlier():
+    """单轮异常不应直接拖偏全部轮子，且应被硬残差标记。"""
+    positions = FourWheelOdometry.wheel_positions(
+        np.zeros(4), 0.312, 0.280, 0.060)
+    wheel_speed = np.full(4, 0.2 / 0.055)
+    wheel_speed[0] = 1.0 / 0.055
+    solution, residual, weight, suspected = FourWheelOdometry.robust_twist(
+        np.zeros(4), wheel_speed, 0.055, positions,
+        0.05, 0.15, 8)
+    assert suspected[0]
+    assert weight[0] == 0.0
+    assert np.count_nonzero(weight > 0.05) >= 3
+    corrected, _, _, _ = FourWheelOdometry.robust_twist(
+        np.zeros(4), wheel_speed, 0.055, positions,
+        0.05, 0.15, 8, initial_weight=weight)
+    assert math.isclose(corrected[0], 0.2, abs_tol=0.02)

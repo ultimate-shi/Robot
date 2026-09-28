@@ -6,16 +6,14 @@
 它把 8 路超声波 Range 数据合成为稀疏 LaserScan，用于 Foxglove/RViz 调试和兼容。
 
 输入：
-- /ultrasonic/front_fl、front_fr、front_rl、front_rr：安装在前/后侧，随对应轮子转向关节转动。
-- /ultrasonic/side_fl、side_fr、side_rl、side_rr：安装在四条腿外侧，方向相对底盘固定。
-- /joint_states：读取四个转向关节角，用于更新前/后侧超声波方向。
+- /ultrasonic/front_left、front_center、front_right、rear_left、rear_center、rear_right、left、right。
 
 输出：
 - /scan：sensor_msgs/LaserScan，frame_id 为 base_link，角度范围 -pi 到 pi。
 
 注意：
 /scan 只是 8 路超声波展开后的稀疏扫描，不等价于真实 360 度激光雷达。
-外侧超声波不跟随轮子转向；前/后侧超声波会叠加对应轮子的当前转向角。
+八个探头都固定在车体上，不随轮子转向。
 """
 
 import math
@@ -24,42 +22,32 @@ from typing import Dict, Tuple
 import rclpy
 from rclpy.duration import Duration
 from rclpy.node import Node
+from rclpy.qos import qos_profile_sensor_data
 from rclpy.time import Time
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import JointState, LaserScan, Range
 
 
 SENSORS = [
-    "front_fl",
-    "front_fr",
-    "front_rl",
-    "front_rr",
-    "side_fl",
-    "side_fr",
-    "side_rl",
-    "side_rr",
+    "front_left", "front_center", "front_right", "right",
+    "rear_right", "rear_center", "rear_left", "left",
 ]
 
 # 传感器在 base_link 下的安装基准角。
 # ROS 约定：0 为车头 +x，+pi/2 为左侧，-pi/2 为右侧。
 FIXED_SENSOR_ANGLES = {
-    "front_fl": 0.0,
-    "front_fr": 0.0,
-    "front_rl": math.pi,
-    "front_rr": math.pi,
-    "side_fl": math.pi / 2.0,
-    "side_rl": math.pi / 2.0,
-    "side_fr": -math.pi / 2.0,
-    "side_rr": -math.pi / 2.0,
+    "front_left": math.pi / 6.0,
+    "front_center": 0.0,
+    "front_right": -math.pi / 6.0,
+    "right": -math.pi / 2.0,
+    "rear_right": -2.0 * math.pi / 3.0,
+    "rear_center": math.pi,
+    "rear_left": 2.0 * math.pi / 3.0,
+    "left": math.pi / 2.0,
 }
 
-# 只有前/后侧超声波随轮子转向；外侧超声波固定不动。
-STEERING_JOINT_BY_SENSOR = {
-    "front_fl": "front_left_steer_joint",
-    "front_fr": "front_right_steer_joint",
-    "front_rl": "rear_left_steer_joint",
-    "front_rr": "rear_right_steer_joint",
-}
+# 实机八个超声波都固定在车体上，不叠加转向关节角。
+STEERING_JOINT_BY_SENSOR = {}
 
 
 class RangeToScan(Node):
@@ -122,7 +110,7 @@ class RangeToScan(Node):
                 Range,
                 f"/ultrasonic/{sensor}",
                 lambda msg, s=sensor: self.range_callback(msg, s),
-                10,
+                qos_profile_sensor_data,
             )
 
         self.create_subscription(
@@ -147,7 +135,12 @@ class RangeToScan(Node):
         )
 
     def range_callback(self, msg: Range, sensor: str):
-        distance = msg.range if msg.min_range <= msg.range <= msg.max_range else msg.max_range
+        if (not math.isfinite(msg.range)
+                or msg.range < msg.min_range
+                or msg.range > msg.max_range):
+            self.latest.pop(sensor, None)
+            return
+        distance = msg.range
         self.latest[sensor] = (
             float(distance),
             float(msg.field_of_view),

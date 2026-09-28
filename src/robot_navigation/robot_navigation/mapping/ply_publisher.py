@@ -7,6 +7,7 @@
 输入：
 - 参数 ply_file，默认指向工作区 /workspace/maps/studyroom/studyroom.ply。
 - 参数 frame_id，默认 map，表示点云坐标已经在地图坐标系下。
+- 参数 allow_fallback，默认 false；仅显式开启时使用调试点云。
 
 输出：
 - /pointcloud：给 Foxglove/RViz 显示完整房间点云。
@@ -43,7 +44,7 @@ class PLYPublisher(Node):
         self.declare_parameter('publish_period', 0.5)
         self.declare_parameter('display_topic', '/pointcloud')
         self.declare_parameter('perception_topic', '/perception/points')
-        self.declare_parameter('allow_fallback', True)
+        self.declare_parameter('allow_fallback', False)
 
         requested_ply = str(self.get_parameter('ply_file').value).strip()
         self.ply_file = requested_ply if requested_ply else default_ply

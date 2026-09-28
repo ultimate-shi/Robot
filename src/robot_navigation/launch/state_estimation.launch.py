@@ -13,7 +13,13 @@ def generate_launch_description():
     default_config = os.path.join(
         get_package_share_directory('robot_navigation'),
         'config', 'state_estimation.yaml')
+    covariance_config = os.path.join(
+        get_package_share_directory('robot_navigation'),
+        'config', 'odometry_covariance_guard.yaml')
     return LaunchDescription([
+        DeclareLaunchArgument(
+            'covariance_config_file', default_value=covariance_config,
+            description='视觉里程计协方差下限参数 YAML 文件路径'),
         DeclareLaunchArgument(
             'config_file', default_value=default_config,
             description='robot_localization EKF 参数 YAML 文件路径'),
@@ -23,6 +29,16 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'log_level', default_value='warn',
             description='二维 EKF 状态估计节点的 ROS 日志级别'),
+        Node(
+            package='robot_navigation',
+            executable='odometry_covariance_guard_node',
+            name='odometry_covariance_guard',
+            parameters=[LaunchConfiguration('covariance_config_file')],
+            arguments=[
+                '--ros-args', '--log-level',
+                LaunchConfiguration('log_level'),
+            ],
+            output='screen'),
         Node(
             package='robot_localization', executable='ekf_node',
             name='ekf_filter_node',

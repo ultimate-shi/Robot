@@ -1,4 +1,4 @@
-"""使用方法：ros2 launch robot_control controllers.launch.py 启动 ros2_control 和全部关节控制器。"""
+"""使用方法：ros2 launch robot_control controllers.launch.py 启动 ros2_control 和全部关节控制器."""
 
 import os
 
@@ -22,18 +22,70 @@ def generate_launch_description():
     xacro_file = os.path.join(description_share, 'urdf', 'robot.xacro')
     default_controller_config = os.path.join(
         control_share, 'config', 'controllers.yaml')
+    default_servo_calibration = os.path.join(
+        get_package_share_directory('robot_hardware'),
+        'config', 'servo_calibration.yaml')
     log_level = LaunchConfiguration('log_level')
+    hardware_arguments = [
+        'device_candidates', 'serial_timeout_ms', 'inter_command_delay_ms',
+        'discovery_retry_count', 'discovery_retry_delay_ms', 'encoder_query_delay_ms',
+        'command_timeout_ms', 'wheel_diameter', 'sonar_lpf_alpha',
+        'sonar_min_valid_mm', 'sonar_max_valid_mm']
     robot_description = {'robot_description': ParameterValue(
-        Command(['xacro ', xacro_file]), value_type=str)}
+        Command([
+            'xacro ', xacro_file,
+            ' hardware_plugin:=', LaunchConfiguration('hardware_plugin'),
+            ' servo_calibration_file:=',
+            LaunchConfiguration('servo_calibration_file'),
+        ] + [item for name in hardware_arguments
+             for item in (' ' + name + ':=', LaunchConfiguration(name))]),
+        value_type=str)}
     controller_names = [
         'joint_state_broadcaster', 'steering_controller', 'wheel_controller',
         'head_controller',
         'lap_fr_position_controller', 'lap_fl_position_controller',
         'lap_rr_position_controller', 'lap_rl_position_controller',
-        'shin_fr_position_controller', 'shin_fl_position_controller',
-        'shin_rr_position_controller', 'shin_rl_position_controller',
     ]
     actions = [
+        DeclareLaunchArgument(
+            'hardware_plugin', default_value='mock_components/GenericSystem',
+            description='ros2_control SystemInterface 插件名称'),
+        DeclareLaunchArgument(
+            'servo_calibration_file', default_value=default_servo_calibration,
+            description='实机六路舵机标定参数 YAML 文件路径'),
+        DeclareLaunchArgument(
+            'device_candidates', default_value='/dev/ttyACM0,/dev/ttyACM1,/dev/ttyACM2',
+            description='候选串口设备，逗号分隔；插件按身份响应匹配 DMC0/DMC1/SE2'),
+        DeclareLaunchArgument(
+            'serial_timeout_ms', default_value='500',
+            description='单次串口事务超时，单位毫秒'),
+        DeclareLaunchArgument(
+            'inter_command_delay_ms', default_value='3',
+            description='同一串口相邻协议指令间隔，单位毫秒'),
+        DeclareLaunchArgument(
+            'discovery_retry_count', default_value='20',
+            description='控制板身份发现的最大轮数'),
+        DeclareLaunchArgument(
+            'discovery_retry_delay_ms', default_value='700',
+            description='控制板重枚举后再次发现前的等待时间，单位毫秒'),
+        DeclareLaunchArgument(
+            'encoder_query_delay_ms', default_value='20',
+            description='DMC1 相邻编码器参数查询间隔，单位毫秒'),
+        DeclareLaunchArgument(
+            'command_timeout_ms', default_value='500',
+            description='ROS 轮速命令心跳超时，单位毫秒'),
+        DeclareLaunchArgument(
+            'wheel_diameter', default_value='0.110',
+            description='硬件协议换算使用的车轮直径，单位米'),
+        DeclareLaunchArgument(
+            'sonar_lpf_alpha', default_value='0.2',
+            description='超声波低通滤波新样本权重'),
+        DeclareLaunchArgument(
+            'sonar_min_valid_mm', default_value='30',
+            description='SE2 超声波最小有效距离，单位毫米'),
+        DeclareLaunchArgument(
+            'sonar_max_valid_mm', default_value='2500',
+            description='SE2 超声波最大有效距离，单位毫米'),
         DeclareLaunchArgument(
             'manager_config_file', default_value=default_controller_config,
             description='controller_manager 参数 YAML 文件路径；默认与控制器共用同名配置'),
@@ -56,8 +108,9 @@ def generate_launch_description():
             arguments=['--ros-args', '--log-level', log_level],
             output='screen'),
     ]
+
     def create_deferred_spawners(context):
-        """提前解析定时器和退出回调参数，保证被复杂入口延时引用时仍可用。"""
+        """提前解析定时器和退出回调参数，保证被复杂入口延时引用时仍可用."""
         controller_config = LaunchConfiguration(
             'controller_config_file').perform(context)
         resolved_log_level = log_level.perform(context)

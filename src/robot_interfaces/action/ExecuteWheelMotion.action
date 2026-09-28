@@ -1,0 +1,13 @@
+# 使用方法：以四轮目标转角和相对行驶距离执行“先转向、后定距”的底盘动作。
+float64[4] steering_angle_rad
+float64[4] distance_m
+float64 steering_tolerance_rad
+builtin_interfaces/Duration steering_timeout
+builtin_interfaces/Duration motion_timeout
+---
+bool success
+string message
+---
+string phase
+float64[4] steering_error_rad
+float64[4] remaining_distance_m

@@ -55,7 +55,7 @@ echo "RKNN NPU 驱动：${RKNPU_DRIVER_VERSION}"
   exit 1
 }
 
-if [[ -z "${ROBOT_LLM_ENDPOINT:-}" && -z "${ROBOT_VLM_ENDPOINT:-}" ]]; then
+if [[ -z "${ROBOT_LLM_ENDPOINT:-}" ]]; then
   if [[ ! -s "${QWEN_MODEL}" || ! -s "${QWEN_RUNTIME}" ]]; then
     echo "错误：纯文本 Qwen 模型或 RKLLM Runtime 不完整。" >&2
     echo "请先运行 scripts/inference/download_rk3588_models.sh qwen" >&2
@@ -130,6 +130,6 @@ export ROBOT_LLM_MAX_TOKENS="${ROBOT_LLM_MAX_TOKENS:-96}"
 
 echo "YOLO 模型：${ROBOT_YOLO_MODEL}"
 echo "SegFormer 模型：${ROBOT_SEGFORMER_MODEL:-未配置}"
-echo "Qwen 文本服务：${ROBOT_LLM_ENDPOINT:-${ROBOT_VLM_ENDPOINT}}"
+echo "Qwen 文本服务：${ROBOT_LLM_ENDPOINT:-本地常驻服务}"
 echo "推理网关：http://${ROBOT_INFERENCE_HOST}:${ROBOT_INFERENCE_PORT}"
 "${PYTHON_BIN}" "${SCRIPT_DIR}/brain_inference_server.py"

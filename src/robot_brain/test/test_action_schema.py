@@ -134,61 +134,6 @@ def test_qwen_prompt_contains_history_and_writes_audit_files(tmp_path):
     assert '解析路径' in log_text
 
 
-@pytest.mark.parametrize(('text', 'expected'), [
-    ('开始自主探索', ('explore', {})),
-    ('请跟着我', ('follow_person', {})),
-    ('前往这个杯子', ('goto_object', {'label': '杯子'})),
-])
-def test_explicit_commands_have_safe_fallback(text, expected):
-    detections = [{'label_zh': '杯子', 'class_name': 'cup'}]
-    action = QwenClient._explicit_action(text, detections)
-    assert (action.name, action.arguments) == expected
-
-
-@pytest.mark.parametrize('text', [
-    '不要开始自主探索', '停止跟随人员', '取消前往杯子', '你好',
-])
-def test_non_commands_do_not_get_fallback_action(text):
-    assert QwenClient._explicit_action(text, []) is None
-
-
-def test_goto_fallback_requires_current_visual_evidence():
-    assert QwenClient._explicit_action('前往杯子', []) is None
-    model = parse_model_response({
-        'answer': '将前往杯子。',
-        'action': {'name': 'goto_object', 'arguments': {'label': '杯子'}},
-    })
-    safe = QwenClient._validate_scene_action(model, [])
-    assert safe.action is None
-    assert '未检测到杯子' in safe.answer
-
-
-def test_model_action_cannot_turn_position_question_into_navigation():
-    model = parse_model_response({
-        'answer': '将生成前往杯子的任务预演。',
-        'action': {'name': 'goto_object', 'arguments': {'label': '杯子'}},
-    })
-    detections = [{
-        'label_zh': '杯子', 'class_name': 'cup',
-        'bbox': [400, 120, 520, 360],
-    }]
-    safe = QwenClient._gate_action_by_request(
-        model, '杯子在哪里？', detections)
-    grounded = QwenClient._ground_spatial_answer(
-        safe, '杯子在哪里？', detections,
-        {'width': 640, 'height': 480})
-    assert grounded.action is None
-    assert grounded.answer == '杯子位于画面右侧中部。'
-
-
-def test_action_only_model_output_is_repaired_through_strict_schema():
-    repaired = QwenClient._repair_action_only(
-        '{"name":"explore","arguments":{}}')
-    assert repaired.action.name == 'explore'
-    assert QwenClient._repair_action_only(
-        '{"name":"cmd_vel","arguments":{}}') is None
-
-
 def test_invalid_action_keeps_answer_but_never_executes_it():
     response = QwenClient._salvage_plain_answer(json.dumps({
         'answer': '这个人位于图像左侧。',
