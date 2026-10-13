@@ -23,5 +23,6 @@ setup(
         'mission_planner = robot_navigation.mission_planner:main',
         'brain_mission = robot_navigation.mission_planner:main',
         'odometry_covariance_guard_node = robot_navigation.odometry_covariance_guard:main',
+        'magnetic_map_initializer = robot_navigation.magnetic_map_initializer:main',
     ]},
 )

@@ -238,6 +238,23 @@ bool command_wheel_axis(SerialPort * port, std::size_t index, long ticks, int du
   return true;
 }
 
+// 使用方法：仅对已有对应方向 D 曲线的轮位发送 PWM，并核对 D 回包格式。
+bool command_pwm_axis(SerialPort * port, std::size_t index, int pwm, int duration_ms)
+{
+  if (!port || index >= 4 || std::abs(pwm) > 100) return false;
+  const int id = static_cast<int>(index + 4);
+  std::string response;
+  if (!port->transact("D" + std::to_string(id) + " " + std::to_string(pwm) +
+    " " + std::to_string(duration_ms) + "\n", response)) return false;
+  std::stringstream parser(response);
+  std::string command;
+  int absolute_encoder = 0;
+  std::string incremental_encoder;
+  int current = 0;
+  parser >> command >> absolute_encoder >> incremental_encoder >> current;
+  return static_cast<bool>(parser) && command == "D" + std::to_string(id);
+}
+
 // 使用方法：任何故障或取消路径均尝试停车四轴，单轴失败也继续向其余轴发零速。
 bool stop_wheel_axes(SerialPort * port, int duration_ms)
 {
@@ -291,6 +308,9 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_init(
       throw std::invalid_argument("控制板发现重试参数超出范围");
     }
     if (!load_calibration(parameters.at("servo_calibration_file"))) {
+      return hardware_interface::CallbackReturn::ERROR;
+    }
+    if (!load_wheel_calibration(parameters.at("wheel_calibration_file"))) {
       return hardware_interface::CallbackReturn::ERROR;
     }
   } catch (const std::exception & error) {
@@ -396,9 +416,10 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
       std::ostringstream command;
       command << "T " << std::uppercase << std::hex;
       for (std::size_t index = 0; index < 4; ++index) {
-        const double revolutions = request->distance_m[index] /
+        const double revolutions = request->distance_m[axis_to_wheel_[index]] /
           (kPi * wheel_diameter_);
-        const double raw_delta = -revolutions * encoder_cpr_[index] * encoder_direction_[index];
+        const auto & wheel = wheels_[axis_to_wheel_[index]];
+        const double raw_delta = revolutions * encoder_cpr_[index] * wheel.encoder_sign;
         if (!std::isfinite(raw_delta) ||
           std::abs(raw_delta) > static_cast<double>(std::numeric_limits<std::int32_t>::max()))
         {
@@ -653,6 +674,85 @@ bool RobotSerialSystem::load_calibration(const std::string & path)
   }
 }
 
+// 使用方法：启动时校验四个轮位的标定；换电机只需更新此文件，不修改运动学节点。
+bool RobotSerialSystem::load_wheel_calibration(const std::string & path)
+{
+  try {
+    const YAML::Node root = YAML::LoadFile(path)["wheels"];
+    std::array<bool, 4> used{{false, false, false, false}};
+    for (std::size_t wheel = 0; wheel < 4; ++wheel) {
+      const std::string name = std::array<std::string, 4>{{"fl", "fr", "rl", "rr"}}[wheel];
+      const YAML::Node item = root[name];
+      auto & config = wheels_[wheel];
+      config.axis = item["axis"].as<int>();
+      config.encoder_sign = item["encoder_sign"].as<int>();
+      config.drive_sign = item["drive_sign"].as<int>();
+      config.speed_command_sign = item["speed_command_sign"].as<int>();
+      config.speed_mode_enabled = item["speed_mode_enabled"].as<bool>();
+      config.cpr = item["cpr"].as<int>();
+      config.pwm_enabled = item["pwm_enabled"].as<bool>();
+      config.pwm = item["pwm"].as<std::vector<double>>();
+      config.speed = item["speed_rad_s"].as<std::vector<double>>();
+      config.negative_pwm_enabled = item["negative_pwm_enabled"] &&
+        item["negative_pwm_enabled"].as<bool>();
+      if (config.negative_pwm_enabled) {
+        config.negative_drive_sign = item["negative_drive_sign"].as<int>();
+        config.negative_pwm = item["negative_pwm"].as<std::vector<double>>();
+        config.negative_speed = item["negative_speed_rad_s"].as<std::vector<double>>();
+      }
+      config.feedback_gain = item["feedback_gain"].as<double>();
+      config.max_pwm_correction = item["max_pwm_correction"].as<double>();
+      const int axis = config.axis - 4;
+      if (axis < 0 || axis >= 4 || used[axis] ||
+        std::abs(config.encoder_sign) != 1 || std::abs(config.drive_sign) != 1 ||
+        std::abs(config.speed_command_sign) != 1 ||
+        config.cpr <= 0 || !std::isfinite(config.feedback_gain) ||
+        config.feedback_gain < 0 || !std::isfinite(config.max_pwm_correction) ||
+        config.max_pwm_correction < 0 || config.max_pwm_correction > 100 ||
+        config.pwm.size() < 2 ||
+        config.pwm.size() != config.speed.size())
+      {
+        throw std::invalid_argument(name + " 轮位映射或曲线无效");
+      }
+      if (config.negative_pwm_enabled &&
+        (std::abs(config.negative_drive_sign) != 1 ||
+        config.negative_drive_sign == config.drive_sign ||
+        config.negative_pwm.size() < 2 ||
+        config.negative_pwm.size() != config.negative_speed.size()))
+      {
+        throw std::invalid_argument(name + " 负 PWM 曲线或方向无效");
+      }
+      for (std::size_t point = 0; point < config.pwm.size(); ++point) {
+        if (!std::isfinite(config.pwm[point]) || !std::isfinite(config.speed[point]) ||
+          config.pwm[point] <= 0 || config.pwm[point] > 100 || config.speed[point] <= 0 ||
+          (point && (config.pwm[point] <= config.pwm[point - 1] ||
+          config.speed[point] <= config.speed[point - 1])))
+        {
+          throw std::invalid_argument(name + " PWM 曲线必须正值且严格递增");
+        }
+      }
+      for (std::size_t point = 0; point < config.negative_pwm.size(); ++point) {
+        if (!std::isfinite(config.negative_pwm[point]) ||
+          !std::isfinite(config.negative_speed[point]) ||
+          config.negative_pwm[point] <= 0 || config.negative_pwm[point] > 100 ||
+          config.negative_speed[point] <= 0 ||
+          (point && (config.negative_pwm[point] <= config.negative_pwm[point - 1] ||
+          config.negative_speed[point] <= config.negative_speed[point - 1])))
+        {
+          throw std::invalid_argument(name + " 负 PWM 曲线必须正值且严格递增");
+        }
+      }
+      used[axis] = true;
+      axis_to_wheel_[axis] = wheel;
+    }
+    return true;
+  } catch (const std::exception & error) {
+    RCLCPP_ERROR(rclcpp::get_logger("RobotSerialSystem"),
+      "读取车轮标定失败 %s: %s", path.c_str(), error.what());
+    return false;
+  }
+}
+
 bool RobotSerialSystem::query_encoder_parameters()
 {
   encoder_cpr_.fill(0);
@@ -676,6 +776,11 @@ bool RobotSerialSystem::query_encoder_parameters()
       RCLCPP_ERROR(
         rclcpp::get_logger("RobotSerialSystem"),
         "DMC1 编码器参数响应无效: %s", response.c_str());
+      return false;
+    }
+    if (encoder_cpr_[index] != wheels_[axis_to_wheel_[index]].cpr) {
+      RCLCPP_ERROR(rclcpp::get_logger("RobotSerialSystem"),
+        "I%zu CPR 与轮位标定不一致", index + 4);
       return false;
     }
     encoder_initialized_[index] = false;
@@ -715,20 +820,20 @@ bool RobotSerialSystem::read_wheels()
     } catch (...) {
       return false;
     }
-    const double side_sign = (index == 1 || index == 3) ? -1.0 : 1.0;
-    const double linear_velocity = side_sign * ticks_per_second *
-      (kPi * wheel_diameter_) / encoder_cpr_[index];
-    state_velocity_[joint(kWheelJoints[index])] = linear_velocity / (wheel_diameter_ / 2.0);
+    const std::size_t wheel_index = axis_to_wheel_[index];
+    const auto & wheel = wheels_[wheel_index];
+    state_velocity_[joint(kWheelJoints[wheel_index])] =
+      wheel.encoder_sign * ticks_per_second * 2.0 * kPi / encoder_cpr_[index];
     if (encoder_initialized_[index]) {
       const auto previous = static_cast<std::uint32_t>(encoder_count_[index]);
       const std::int32_t delta = static_cast<std::int32_t>(encoder - previous);
-      state_position_[joint(kWheelJoints[index])] +=
-        static_cast<double>(delta) * (-encoder_direction_[index]) * 2.0 * kPi /
+      state_position_[joint(kWheelJoints[wheel_index])] +=
+        static_cast<double>(delta) * wheel.encoder_sign * 2.0 * kPi /
         encoder_cpr_[index];
     }
     encoder_count_[index] = encoder;
     encoder_initialized_[index] = true;
-    wheel_current_[index] = current;
+    wheel_current_[wheel_index] = current;
   }
   if (encoder_motion_active_) {
     bool arrived = true;
@@ -817,10 +922,59 @@ bool RobotSerialSystem::write_wheels()
   // DMC1 的 T 指令由控制板闭环执行；到位前不能被周期 S 指令覆盖。
   if (encoder_motion_active_) return true;
   if (!dmc1_) return false;
+  // 使用方法：先核对四轮命令是否都有已验证的执行模式，避免前三轴已转而末轴才发现不可用。
   for (std::size_t index = 0; index < 4; ++index) {
-    const double angular_velocity = command_velocity_[joint(kWheelJoints[index])];
+    const std::size_t wheel_index = axis_to_wheel_[index];
+    const auto & wheel = wheels_[wheel_index];
+    const double target = command_velocity_[joint(kWheelJoints[wheel_index])];
+    if (!std::isfinite(target)) return false;
+    const bool use_pwm = std::abs(target) >= wheel.speed.front() && wheel.pwm_enabled &&
+      std::signbit(target) == (wheel.drive_sign < 0);
+    const bool use_negative_pwm = wheel.negative_pwm_enabled &&
+      std::abs(target) >= wheel.negative_speed.front() &&
+      std::signbit(target) == (wheel.negative_drive_sign < 0);
+    if (target != 0.0 && !use_pwm && !use_negative_pwm && !wheel.speed_mode_enabled) {
+      RCLCPP_ERROR(rclcpp::get_logger("RobotSerialSystem"),
+        "DMC1 轴 %d 的 S 速度模式未通过实测，拒绝非零关节命令", wheel.axis);
+      return false;
+    }
+  }
+  for (std::size_t index = 0; index < 4; ++index) {
+    const std::size_t wheel_index = axis_to_wheel_[index];
+    auto & wheel = wheels_[wheel_index];
+    const double angular_velocity = command_velocity_[joint(kWheelJoints[wheel_index])];
     if (!std::isfinite(angular_velocity)) return false;
-    const double ticks = angular_velocity * encoder_cpr_[index] / (2.0 * kPi);
+    const bool positive_pwm = wheel.pwm_enabled &&
+      std::abs(angular_velocity) >= wheel.speed.front() &&
+      std::signbit(angular_velocity) == (wheel.drive_sign < 0);
+    const bool negative_pwm = wheel.negative_pwm_enabled &&
+      std::abs(angular_velocity) >= wheel.negative_speed.front() &&
+      std::signbit(angular_velocity) == (wheel.negative_drive_sign < 0);
+    if (positive_pwm || negative_pwm)
+    {
+      const auto & speeds = positive_pwm ? wheel.speed : wheel.negative_speed;
+      const auto & pwms = positive_pwm ? wheel.pwm : wheel.negative_pwm;
+      const int feedback_sign = positive_pwm ? wheel.drive_sign : wheel.negative_drive_sign;
+      const int command_sign = positive_pwm ? 1 : -1;
+      const double target = std::min(std::abs(angular_velocity), speeds.back());
+      auto upper = std::lower_bound(speeds.begin(), speeds.end(), target);
+      const std::size_t point = static_cast<std::size_t>(upper - speeds.begin());
+      const double low_speed = point ? speeds[point - 1] : 0.0;
+      const double low_pwm = point ? pwms[point - 1] : 0.0;
+      const double desired_pwm = low_pwm + (target - low_speed) *
+        (pwms[point] - low_pwm) / (speeds[point] - low_speed);
+      const double measured = feedback_sign * state_velocity_[joint(kWheelJoints[wheel_index])];
+      const double correction = std::clamp(wheel.feedback_gain * (target - measured),
+        -wheel.max_pwm_correction, wheel.max_pwm_correction);
+      const int pwm = static_cast<int>(std::lround(std::clamp(
+        desired_pwm + correction, 0.0, pwms.back())));
+      if (!command_pwm_axis(dmc1_.get(), index, pwm * command_sign, command_timeout_ms_)) {
+        return false;
+      }
+      continue;
+    }
+    const double ticks = angular_velocity * wheel.speed_command_sign *
+      encoder_cpr_[index] / (2.0 * kPi);
     if (!std::isfinite(ticks) || std::abs(ticks) > 32767.0) return false;
     if (!command_wheel_axis(
         dmc1_.get(), index, std::lround(ticks), command_timeout_ms_))
@@ -833,8 +987,9 @@ bool RobotSerialSystem::write_wheels()
 
 bool RobotSerialSystem::write_legs()
 {
-  const std::array<double, 4> minimum = {-45.0, -30.0, -30.0, -45.0};
-  const std::array<double, 4> maximum = {30.0, 45.0, 45.0, 30.0};
+  // 使用方法：DMC0 实测在约 ±30° 停住，先以保守的软件限位拦截更远目标。
+  const std::array<double, 4> minimum = {-30.0, -30.0, -30.0, -30.0};
+  const std::array<double, 4> maximum = {30.0, 30.0, 30.0, 30.0};
   const std::array<double, 4> sign = {-1.0, 1.0, -1.0, 1.0};
   std::ostringstream command;
   command << "R ";

@@ -36,7 +36,6 @@ class FourWheelOdometry(Node):
             'irls_iterations': 5,
             'velocity_variance': 0.02,
             'yaw_rate_variance': 0.03,
-            'wheel_velocity_sign': [1.0, 1.0, 1.0, 1.0],
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -51,10 +50,6 @@ class FourWheelOdometry(Node):
         self.leg_joints = [
             'lap_body_joint_fl', 'lap_body_joint_fr',
             'lap_body_joint_rl', 'lap_body_joint_rr']
-        signs = np.asarray(self.wheel_velocity_sign, dtype=float)
-        if signs.shape != (4,) or np.any(np.abs(np.abs(signs) - 1.0) > 1e-6):
-            raise ValueError('wheel_velocity_sign 必须包含四个 +1 或 -1')
-        self.wheel_velocity_sign = signs
         self.odom_pub = self.create_publisher(Odometry, str(self.output_topic), 20)
         self.status_pub = self.create_publisher(
             WheelOdometryStatus, str(self.status_topic), 10)
@@ -95,10 +90,10 @@ class FourWheelOdometry(Node):
             dtype=float)
         wheel_speed = np.asarray(
             [message.velocity[index[name]] for name in self.wheel_joints],
-            dtype=float) * self.wheel_velocity_sign
+            dtype=float)
         wheel_position = np.asarray(
             [message.position[index[name]] for name in self.wheel_joints],
-            dtype=float) * self.wheel_velocity_sign
+            dtype=float)
         values = np.concatenate((steering, leg_angles, wheel_speed, wheel_position))
         if not np.isfinite(values).all():
             self.last_state = 'non_finite'

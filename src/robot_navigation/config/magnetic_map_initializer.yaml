@@ -1,0 +1,6 @@
+# 使用方法：nav2.launch.py 在 initial_yaw_source:=magnetic 时加载；磁东地图角必须由用户显式传入。
+magnetic_map_initializer:
+  ros__parameters:
+    startup_timeout_sec: 20.0
+    max_imu_age_sec: 0.5
+    max_odom_tf_age_sec: 0.5

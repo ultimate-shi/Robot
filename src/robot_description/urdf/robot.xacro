@@ -5,6 +5,7 @@
   <!-- mode 只决定 ros2_control 插件；模型、关节和控制接口保持完全一致。 -->
   <xacro:arg name="hardware_plugin" default="mock_components/GenericSystem"/>
   <xacro:arg name="servo_calibration_file" default=""/>
+  <xacro:arg name="wheel_calibration_file" default=""/>
   <xacro:arg name="device_candidates" default="/dev/ttyACM0,/dev/ttyACM1,/dev/ttyACM2"/>
   <xacro:arg name="serial_timeout_ms" default="500"/>
   <xacro:arg name="inter_command_delay_ms" default="3"/>
@@ -88,7 +89,7 @@
   <!-- 右前大腿 - 原样 -->
   <xacro:lap suffix="fr" 
              parent_link="body"
-             lower="${-pi/6}" upper="${pi/4}"
+             lower="${-pi/6}" upper="${pi/6}"
              xyz="-0.091 -0.072 0.158"
              rpy="0 0 0"
              mesh_scale="0.001 0.001 0.001"/>
@@ -96,7 +97,7 @@
   <!-- 左前大腿 - Y轴镜像 -->
   <xacro:lap suffix="fl" 
              parent_link="body"
-             lower="${-pi/4}" upper="${pi/6}"
+             lower="${-pi/6}" upper="${pi/6}"
              xyz="0.091 -0.072 0.158"
              rpy="0 0 0"
              mesh_scale="-0.001 0.001 0.001"/> <!-- Y轴镜像 -->
@@ -104,7 +105,7 @@
   <!-- 右后大腿 - X轴镜像 -->
   <xacro:lap suffix="rr" 
              parent_link="body"
-             lower="${-pi/4}" upper="${pi/6}"
+             lower="${-pi/6}" upper="${pi/6}"
              xyz="-0.091 0.072 0.158"
              rpy="0 0 0"
              mesh_scale="0.001 -0.001 0.001"/> <!-- X轴镜像 -->
@@ -112,7 +113,7 @@
   <!-- 左后大腿 - X和Y轴都镜像 -->
   <xacro:lap suffix="rl" 
              parent_link="body"
-             lower="${-pi/6}" upper="${pi/4}"
+             lower="${-pi/6}" upper="${pi/6}"
              xyz="0.091 0.072 0.158"
              rpy="0 0 0"
              mesh_scale="-0.001 -0.001 0.001"/> <!-- X和Y轴镜像 -->
@@ -289,6 +290,7 @@
 
   <xacro:hardware hardware_plugin="$(arg hardware_plugin)"
                   servo_calibration_file="$(arg servo_calibration_file)"
+                  wheel_calibration_file="$(arg wheel_calibration_file)"
                   device_candidates="$(arg device_candidates)"
                   serial_timeout_ms="$(arg serial_timeout_ms)"
                   inter_command_delay_ms="$(arg inter_command_delay_ms)"

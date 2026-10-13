@@ -6,7 +6,7 @@
 
 `robot_perception` 统一实机和仿真感知，包含 UVC 横拼双目采集、拆分/校正/节流/视差/深度/点云过滤、语义检测与分割、地形分析、真实 GY95T IMU、虚拟 IMU、8 路虚拟超声波、Range 转 Scan、快照局部观察和验收诊断。
 
-本包与 `robot_stereo_components` 一起归 `perception_owner` 管理。固定真实相机数据不得与运动虚拟机器人混用。
+本包与 `robot_stereo_components` 共同组成双目和感知链。固定真实相机数据不得与运动虚拟机器人混用。
 
 ## 入口和启动
 
@@ -19,7 +19,7 @@
 
 - 双目主链：`/stereo/image_raw` 到左右 raw/CameraInfo、左右 rect、导航节流图、`/stereo/disparity`、深度、`/stereo/points2`，再输出 `/nav/stereo_obstacle_points` 和 `/stereo/scan`。
 - 语义链消费右目、右目对齐深度和 CameraInfo，经 TF 定位到 `map`，输出类型化检测、覆盖图、语义障碍/清除点；提供 `/perception/detect_objects` 与 `/perception/set_detection_mode`。
-- GY95T 输出 raw IMU，经 Madgwick 生成 `/sensors/imu/data`，该链不发布 TF。
+- GY95T 输出三轴角速度、三轴线加速度，经无磁 Madgwick 生成 `/sensors/imu/data`；另发布 `/sensors/imu/vendor_data` 的厂家姿态、磁校准 Level 与 `/sensors/imu/mag_raw_counts` 原始磁计数。厂家姿态默认标记无效，仅在显式启用且校准质量合格时声明有效；原始计数没有 Tesla 换算系数，不能作为 `sensor_msgs/MagneticField`。该链不发布 TF。
 - 虚拟超声查询 `map -> sonar_*`，输出 8 路 `/ultrasonic/*`；`range_to_scan` 汇总为 `/scan`。
 - 点云、图像和 CameraInfo 必须保留匹配时间戳与 frame；传感器话题需核对 QoS。
 

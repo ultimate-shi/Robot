@@ -17,7 +17,7 @@ def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument(
             'config_file', default_value=config,
-            description='姿态平衡、限幅和过流保护参数 YAML 路径'),
+            description='姿态平衡、FL/FR/RL/RR 分腿角度限位及过流保护参数 YAML 路径'),
         DeclareLaunchArgument(
             'wheelbase', default_value='0.312',
             description='前后轮轴距，单位米'),

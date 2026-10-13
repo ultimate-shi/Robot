@@ -225,9 +225,9 @@ def record(args):
         if cpr <= 0 or direction not in (-1, 1):
             raise ProtocolError(f'I{args.motor} 的 CPR 或方向无效')
         report['cpr'], report['encoder_direction'] = cpr, direction
-        maximum_ms = int(board.exchange(f'J{args.motor}', f'J{args.motor}', 5)[4])
-        if args.duration_ms > maximum_ms:
-            raise ValueError(f'板端 J{args.motor} 单命令最长 {maximum_ms}ms')
+        # maximum_ms = int(board.exchange(f'J{args.motor}', f'J{args.motor}', 5)[4])
+        # if args.duration_ms > maximum_ms:
+        #     raise ValueError(f'板端 J{args.motor} 单命令最长 {maximum_ms}ms')
         board.stop()
         for value in args.values:
             point = record_point(board, args.motor, args.mode, value,
@@ -328,10 +328,10 @@ def main():
     if args.action == 'record':
         if args.mode == 'D' and any(abs(value) > 100 for value in args.values):
             parser.error('D 命令的协议范围是 -100～100%')
-        if (not 0 < args.duration_ms <= 1000 or args.sample_ms <= 0 or args.pause_ms < 0
-                or not 0 < args.stop_duration_ms <= 1000 or args.response_timeout <= 0
-                or args.idle_timeout <= 0):
-            parser.error('命令时长须在 1～1000ms，采样、响应超时须为正，暂停可以为零')
+        # if (not 0 < args.duration_ms <= 1000 or args.sample_ms <= 0 or args.pause_ms < 0
+        #         or not 0 < args.stop_duration_ms <= 1000 or args.response_timeout <= 0
+        #         or args.idle_timeout <= 0):
+        #     parser.error('命令时长须在 1～1000ms，采样、响应超时须为正，暂停可以为零')
         return record(args)
     plot(args.report, args.output)
     return 0

@@ -42,6 +42,64 @@ from tf2_ros import TransformBroadcaster
 from rcl_interfaces.msg import SetParametersResult
 
 
+class SteeringMotionLimiter:
+    """使用方法：每周期输入转向目标与真实反馈，返回允许的轮速比例。"""
+
+    def __init__(self, full_tolerance, ready_tolerance, stop_tolerance,
+                 ready_samples, minimum_scale):
+        if not (all(math.isfinite(value) for value in
+                    (full_tolerance, ready_tolerance, stop_tolerance, minimum_scale))
+                and 0.0 < full_tolerance < ready_tolerance < stop_tolerance
+                and 0.0 < minimum_scale <= 1.0
+                and isinstance(ready_samples, int) and ready_samples >= 1):
+            raise ValueError('转向轮速限制参数无效')
+        self.full_tolerance = full_tolerance
+        self.ready_tolerance = ready_tolerance
+        self.stop_tolerance = stop_tolerance
+        self.ready_samples = ready_samples
+        self.minimum_scale = minimum_scale
+        self.previous_target = None
+        self.last_feedback_sequence = -1
+        self.ready_count = 0
+        self.ready = False
+
+    def reset(self):
+        """命令中断或硬件反馈失效后，重新等待真实转向到位。"""
+        self.ready_count = 0
+        self.ready = False
+
+    def update(self, target, actual, feedback_fresh, feedback_sequence):
+        if self.previous_target is not None and any(
+                abs(current - previous) > self.ready_tolerance
+                for current, previous in zip(target, self.previous_target)):
+            self.reset()
+        self.previous_target = list(target)
+        if (not feedback_fresh or actual is None or len(actual) != len(target) or
+                not all(math.isfinite(value) for value in target) or
+                not all(math.isfinite(value) for value in actual)):
+            self.reset()
+            return 0.0
+
+        largest_error = max(abs(current - measured)
+                            for current, measured in zip(target, actual))
+        if largest_error > self.stop_tolerance:
+            self.reset()
+            return 0.0
+
+        if not self.ready and feedback_sequence != self.last_feedback_sequence:
+            self.ready_count = (
+                self.ready_count + 1 if largest_error <= self.ready_tolerance else 0)
+            self.ready = self.ready_count >= self.ready_samples
+        self.last_feedback_sequence = feedback_sequence
+        if not self.ready:
+            return 0.0
+        if largest_error <= self.full_tolerance:
+            return 1.0
+        fraction = (largest_error - self.full_tolerance) / (
+            self.stop_tolerance - self.full_tolerance)
+        return max(self.minimum_scale, 1.0 - (1.0 - self.minimum_scale) * fraction)
+
+
 class ChassisController3D(Node):
 
     def __init__(self):
@@ -56,7 +114,11 @@ class ChassisController3D(Node):
         self.declare_parameter("ackermann_min_turning_speed", 0.04)
         self.declare_parameter("publish_odometry", True)
         self.declare_parameter("cmd_vel_timeout", 0.5)
-        self.declare_parameter("steering_ready_tolerance", 0.05)
+        self.declare_parameter("steering_ready_tolerance", 0.08)
+        self.declare_parameter("steering_full_speed_tolerance", 0.05)
+        self.declare_parameter("steering_stop_tolerance", 0.15)
+        self.declare_parameter("steering_ready_samples", 2)
+        self.declare_parameter("steering_min_speed_scale", 0.75)
         self.declare_parameter("steering_feedback_timeout", 0.3)
         # Terrain parameters
         self.declare_parameter("terrain_check_enabled", True)
@@ -145,8 +207,15 @@ class ChassisController3D(Node):
         self.wheel_motion_active = False
         self.steering_feedback = None
         self.steering_feedback_time = None
+        self.steering_feedback_sequence = 0
         self.steering_ready_tolerance = float(self.get_parameter('steering_ready_tolerance').value)
         self.steering_feedback_timeout = float(self.get_parameter('steering_feedback_timeout').value)
+        self.steering_limiter = SteeringMotionLimiter(
+            float(self.get_parameter('steering_full_speed_tolerance').value),
+            self.steering_ready_tolerance,
+            float(self.get_parameter('steering_stop_tolerance').value),
+            int(self.get_parameter('steering_ready_samples').value),
+            float(self.get_parameter('steering_min_speed_scale').value))
 
         # Terrain state
         self.slip_factor = 1.0
@@ -186,6 +255,7 @@ class ChassisController3D(Node):
                     return SetParametersResult(successful=False, reason=reason)
                 self.motion_mode = mode_name
                 self.prev_angles = [0.0, 0.0, 0.0, 0.0]
+                self.steering_limiter.reset()
                 self.get_logger().info(f"Mode changed: {self.motion_mode}")
                 self.mode_pub.publish(String(data=self.motion_mode))
             elif param.name == "steering_limit":
@@ -218,6 +288,8 @@ class ChassisController3D(Node):
     def wheel_motion_active_callback(self, msg):
         """定距 Action 执行时暂停常规 Twist 输出，避免覆盖转向和 DMC T 指令。"""
         self.wheel_motion_active = bool(msg.data)
+        if self.wheel_motion_active:
+            self.steering_limiter.reset()
 
     def steering_feedback_callback(self, msg):
         """仅使用真实关节反馈；缺失或过期时不允许驱动轮转动。"""
@@ -228,6 +300,7 @@ class ChassisController3D(Node):
         if all(name in positions and math.isfinite(positions[name]) for name in names):
             self.steering_feedback = [positions[name] for name in names]
             self.steering_feedback_time = time.monotonic()
+            self.steering_feedback_sequence += 1
 
     # ==================== 10Hz control loop ====================
     def control_loop(self):
@@ -245,8 +318,10 @@ class ChassisController3D(Node):
         vy = self.latest_cmd_vel.linear.y
         w = self.latest_cmd_vel.angular.z
 
-        # Mode kinematics
-        if self.motion_mode == "crab":
+        # 安全层短时要求停车时保持已到达的舵角，避免原地回中后又立即转回路线角度。
+        if abs(vx) < 1e-3 and abs(vy) < 1e-3 and abs(w) < 1e-3:
+            angles, speeds = list(self.prev_angles), [0.0] * 4
+        elif self.motion_mode == "crab":
             angles, speeds = self.mode_crab(vx, vy, w)
         elif self.motion_mode == "four_ws":
             angles, speeds = self.mode_four_ws(vx, w)
@@ -272,14 +347,14 @@ class ChassisController3D(Node):
         if self.terrain_blocked:
             opt_speeds = [0.0, 0.0, 0.0, 0.0]
 
-        # 先让转向关节到位，再驱动轮子。反馈丢失时保持轮速为零。
+        # 先确认转向大致到位，再按误差持续降速修正；明显偏离或反馈过期时停车。
         feedback_fresh = (
             self.steering_feedback_time is not None and
             time.monotonic() - self.steering_feedback_time <= self.steering_feedback_timeout)
-        if not feedback_fresh or any(
-                abs(target - actual) > self.steering_ready_tolerance
-                for target, actual in zip(opt_angles, self.steering_feedback or [])):
-            opt_speeds = [0.0, 0.0, 0.0, 0.0]
+        steering_scale = self.steering_limiter.update(
+            opt_angles, self.steering_feedback, feedback_fresh,
+            self.steering_feedback_sequence)
+        opt_speeds = [speed * steering_scale for speed in opt_speeds]
 
         # Publish
         self.steer_pub.publish(Float64MultiArray(data=opt_angles))
@@ -357,7 +432,7 @@ class ChassisController3D(Node):
     def optimize_steering(self, target_angle, target_speed, prev_angle):
         del prev_angle
         if abs(target_speed) < 1e-6:
-            return 0.0, 0.0
+            return max(-self.steering_limit, min(self.steering_limit, target_angle)), 0.0
 
         # 转向电机在 URDF 中限制为 ±90°。超过范围的目标角不能直接发布，
         # 等价转换为反向轮速 + 限幅内舵角，避免前进时轮子转到 180°。
@@ -379,6 +454,7 @@ class ChassisController3D(Node):
     def send_stop(self):
         ang, spd = self.stop_command()
         self.prev_angles = ang
+        self.steering_limiter.reset()
         self.steer_pub.publish(Float64MultiArray(data=ang))
         self.speed_pub.publish(Float64MultiArray(data=spd))
 

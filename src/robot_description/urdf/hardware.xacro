@@ -2,7 +2,7 @@
 <!-- 使用方法：由 robot_description/urdf/robot.xacro 组合，通常不要单独启动。 -->
 <robot name="robot_hardware" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
-  <xacro:macro name="hardware" params="hardware_plugin servo_calibration_file device_candidates serial_timeout_ms inter_command_delay_ms discovery_retry_count discovery_retry_delay_ms encoder_query_delay_ms command_timeout_ms wheel_diameter sonar_lpf_alpha sonar_min_valid_mm sonar_max_valid_mm">
+  <xacro:macro name="hardware" params="hardware_plugin servo_calibration_file wheel_calibration_file device_candidates serial_timeout_ms inter_command_delay_ms discovery_retry_count discovery_retry_delay_ms encoder_query_delay_ms command_timeout_ms wheel_diameter sonar_lpf_alpha sonar_min_valid_mm sonar_max_valid_mm">
   <ros2_control name="RobotHardware" type="system">
     <hardware>
       <plugin>${hardware_plugin}</plugin>
@@ -18,6 +18,7 @@
       <param name="sonar_min_valid_mm">${sonar_min_valid_mm}</param>
       <param name="sonar_max_valid_mm">${sonar_max_valid_mm}</param>
       <param name="servo_calibration_file">${servo_calibration_file}</param>
+      <param name="wheel_calibration_file">${wheel_calibration_file}</param>
     </hardware>
 
     <joint name="lap_body_joint_fr">

@@ -22,6 +22,8 @@ CONTROLLER_TOPICS = [
     '/lap_rr_position_controller/commands',
 ]
 LEG_FRONT = [True, True, False, False]
+DEFAULT_LEG_MIN_DEG = [-30.0, -30.0, -30.0, -30.0]
+DEFAULT_LEG_MAX_DEG = [30.0, 30.0, 30.0, 30.0]
 
 
 class BodyBalance(Node):
@@ -36,6 +38,8 @@ class BodyBalance(Node):
             'hardware_state_topic': '/hardware/chassis_state',
             'control_rate': 10.0,
             'leg_length': 0.060,
+            'leg_min_deg': DEFAULT_LEG_MIN_DEG,
+            'leg_max_deg': DEFAULT_LEG_MAX_DEG,
             'wheelbase': 0.312,
             'track': 0.280,
             'deadzone_deg': 1.0,
@@ -49,7 +53,7 @@ class BodyBalance(Node):
             'hard_margin_mm': 1.0,
             'safe_margin_mm': 0.1,
             'imu_timeout': 0.5,
-            'overload_current_ma': 2300.0,
+            'overload_current_ma': 3200.0,
             'overload_hold': 2.0,
             'recover_current_ma': 1000.0,
             'recover_hold': 2.0,
@@ -62,6 +66,13 @@ class BodyBalance(Node):
             self.declare_parameter(name, value)
         for name in defaults:
             setattr(self, name, self.get_parameter(name).value)
+        self.leg_min_deg = [float(value) for value in self.leg_min_deg]
+        self.leg_max_deg = [float(value) for value in self.leg_max_deg]
+        if (len(self.leg_min_deg) != 4 or len(self.leg_max_deg) != 4 or
+                any(not math.isfinite(low) or not math.isfinite(high) or
+                    low < -90.0 or high > 90.0 or low >= high
+                    for low, high in zip(self.leg_min_deg, self.leg_max_deg))):
+            raise ValueError('四腿角度限位必须各有四项，且位于 -90°～90° 内')
         self.enabled = bool(self.enabled)
         self.level = 'mid'
         self.target_roll = 0.0
@@ -74,6 +85,7 @@ class BodyBalance(Node):
         self.leg_angle_deg = None
         self.leg_current = None
         self.heights = None
+        self.height_center = None
         self.last_command_deg = None
         self.saved_mid_angles = None
         self.restore_until = None
@@ -130,7 +142,9 @@ class BodyBalance(Node):
         index = {name: offset for offset, name in enumerate(message.name)}
         if any(name not in index for name in LEG_NAMES):
             return
-        if any(index[name] >= len(message.position) for name in LEG_NAMES):
+        if any(index[name] >= len(message.position) or
+               not math.isfinite(message.position[index[name]])
+               for name in LEG_NAMES):
             return
         self.leg_angle_deg = [
             math.degrees(message.position[index[name]]) for name in LEG_NAMES]
@@ -156,7 +170,7 @@ class BodyBalance(Node):
             response.success = False
             response.message = 'high/low 是静态档位，不能同时设置姿态目标'
             return response
-        if self.overload_active and level != 'low':
+        if self.overload_active and request.enabled and level != 'low':
             response.success = False
             response.message = '过流保护仍有效，只允许 low 档'
             return response
@@ -165,11 +179,20 @@ class BodyBalance(Node):
         if self.level != 'mid' and level == 'mid':
             self.restore_until = time.monotonic() + float(self.mid_restore_hold)
             self.last_command_deg = None
+        was_enabled = self.enabled
+        previous_level = self.level
         self.enabled = bool(request.enabled)
         self.level = level
+        if not self.enabled or not was_enabled or previous_level != level:
+            self.heights = None
+            self.height_center = None
+            self.last_command_deg = None
         self.target_roll = float(request.target_roll_deg) if level == 'mid' else 0.0
         self.target_pitch = float(request.target_pitch_deg) if level == 'mid' else 0.0
         if not self.enabled:
+            if was_enabled and self.leg_angle_deg:
+                # 使用方法：关闭平衡时立即以实时反馈角保持，避免位置控制器继续追旧目标。
+                self._hold_current_angles()
             self.state = 'disabled'
         response.success = True
         response.message = f'enabled={self.enabled} level={self.level}'
@@ -178,7 +201,7 @@ class BodyBalance(Node):
     def _evaluate_overload(self, now):
         if not self.leg_current:
             return
-        maximum = max(self.leg_current)
+        maximum = max(abs(current) for current in self.leg_current)
         if maximum > float(self.overload_current_ma):
             self.recover_since = None
             if self.overload_since is None:
@@ -205,10 +228,21 @@ class BodyBalance(Node):
 
     def _height_to_degree(self, height_mm, index):
         length_mm = float(self.leg_length) * 1000.0
-        value = math.degrees(math.asin(max(-1.0, min(1.0, height_mm / length_mm))))
+        lower, upper = self._height_limits(index)
+        bounded = max(lower, min(upper, height_mm))
+        value = math.degrees(math.asin(max(-1.0, min(1.0, bounded / length_mm))))
         if not LEG_FRONT[index]:
             value = -value
-        return max(-30.0, min(30.0, value))
+        return max(self.leg_min_deg[index], min(self.leg_max_deg[index], value))
+
+    def _height_limits(self, index):
+        """按前后腿角度方向换算该腿的有符号高度端点，单位 mm。"""
+        length_mm = float(self.leg_length) * 1000.0
+        sign = 1.0 if LEG_FRONT[index] else -1.0
+        endpoints = [
+            sign * length_mm * math.sin(math.radians(degree))
+            for degree in (self.leg_min_deg[index], self.leg_max_deg[index])]
+        return min(endpoints), max(endpoints)
 
     def _angles_to_heights(self):
         length_mm = float(self.leg_length) * 1000.0
@@ -216,13 +250,21 @@ class BodyBalance(Node):
         for index, degree in enumerate(self.leg_angle_deg or [0.0] * 4):
             height = length_mm * math.sin(math.radians(degree))
             result.append(height if LEG_FRONT[index] else -height)
-        average = sum(result) / 4.0
-        return [value - average for value in result]
+        return result
 
     def _publish_commands(self, degrees):
-        for publisher, degree in zip(self.command_publishers, degrees):
+        bounded = [max(low, min(high, degree)) for degree, low, high in
+                   zip(degrees, self.leg_min_deg, self.leg_max_deg)]
+        for publisher, degree in zip(self.command_publishers, bounded):
             publisher.publish(Float64MultiArray(data=[math.radians(degree)]))
-        self.last_command_deg = list(degrees)
+        self.last_command_deg = bounded
+
+    def _hold_current_angles(self):
+        """停止平衡后让底层保持当前反馈；硬件插件继续负责最终软件限位。"""
+        for publisher, degree in zip(self.command_publishers,
+                                     self.leg_angle_deg):
+            publisher.publish(Float64MultiArray(data=[math.radians(degree)]))
+        self.last_command_deg = list(self.leg_angle_deg)
 
     def _control(self):
         now = time.monotonic()
@@ -254,6 +296,7 @@ class BodyBalance(Node):
             return
         if self.heights is None:
             self.heights = self._angles_to_heights()
+            self.height_center = sum(self.heights) / 4.0
         error_roll = self.filtered_roll - self.target_roll
         error_pitch = self.filtered_pitch - self.target_pitch
         if (max(abs(error_roll), abs(error_pitch)) < float(self.deadzone_deg) and
@@ -279,24 +322,28 @@ class BodyBalance(Node):
             +p * (raw_pitch - raw_roll) - d_pitch + d_roll,
             +p * (raw_pitch + raw_roll) - d_pitch - d_roll,
         ]
-        length_mm = float(self.leg_length) * 1000.0
         hard = float(self.hard_margin_mm)
         soft = float(self.soft_margin_mm)
         margin = float(self.safe_margin_mm)
-        height_limit = length_mm * math.sin(math.radians(30.0))
         for index in range(4):
-            distance = height_limit - abs(self.heights[index])
+            lower, upper = self._height_limits(index)
+            distance = (upper - self.heights[index] if steps[index] > 0.0
+                        else self.heights[index] - lower)
             if distance < soft:
                 steps[index] *= max(0.2, distance / soft)
-            if ((self.heights[index] >= height_limit - hard and steps[index] > 0.0) or
-                    (self.heights[index] <= -height_limit + hard and steps[index] < 0.0)):
+            if ((self.heights[index] >= upper - hard and steps[index] > 0.0) or
+                    (self.heights[index] <= lower + hard and steps[index] < 0.0)):
                 steps[index] = 0.0
             self.heights[index] = max(
-                -height_limit + margin,
-                min(height_limit - margin, self.heights[index] + steps[index]))
-        average = sum(self.heights) / 4.0
+                lower + margin,
+                min(upper - margin, self.heights[index] + steps[index]))
+        average = sum(self.heights) / 4.0 - self.height_center
         relaxation = 1.0 if max(abs(error_roll), abs(error_pitch)) < 3.0 else 0.4
-        self.heights = [value - average * relaxation for value in self.heights]
+        self.heights = [
+            max(self._height_limits(index)[0] + margin,
+                min(self._height_limits(index)[1] - margin,
+                    value - average * relaxation))
+            for index, value in enumerate(self.heights)]
         targets = [self._height_to_degree(self.heights[index], index)
                    for index in range(4)]
         previous = self.last_command_deg or list(self.leg_angle_deg)

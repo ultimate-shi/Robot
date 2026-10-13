@@ -70,6 +70,36 @@ def decode_registers(data, accel_range=0, gyro_range=0):
     return accel, gyro, rpy
 
 
+def decode_extended_registers(data):
+    """读取厂家校准质量、磁计原始计数和四元数原始分量；磁计无 SI 换算系数。"""
+    if len(data) < REGISTER_COUNT:
+        raise ValueError(f'GY95T 数据长度不足：{len(data)} < {REGISTER_COUNT}')
+
+    def pair(register):
+        index = register - REG_START
+        return signed_int16_le(data[index], data[index + 1])
+
+    level = int(data[0x1A - REG_START])
+    mag_counts = np.array([pair(0x1D), pair(0x1F), pair(0x21)], dtype=int)
+    quaternion_components = np.array(
+        [pair(0x23), pair(0x25), pair(0x27), pair(0x29)], dtype=float) / 10000.0
+    return level, mag_counts, quaternion_components
+
+
+def rpy_to_quaternion(rpy):
+    """按 ROS ENU 的 ZYX 欧拉角约定，将厂家 RPY 转成 xyzw 四元数。"""
+    roll, pitch, yaw = [float(value) for value in rpy]
+    cr, sr = math.cos(roll / 2.0), math.sin(roll / 2.0)
+    cp, sp = math.cos(pitch / 2.0), math.sin(pitch / 2.0)
+    cy, sy = math.cos(yaw / 2.0), math.sin(yaw / 2.0)
+    return np.array([
+        sr * cp * cy - cr * sp * sy,
+        cr * sp * cy + sr * cp * sy,
+        cr * cp * sy - sr * sp * cy,
+        cr * cp * cy + sr * sp * sy,
+    ])
+
+
 class Gy95tDriver(Node):
     """轮询 GY95T，校验、滤波并发布 sensor_msgs/Imu."""
 
@@ -95,6 +125,10 @@ class Gy95tDriver(Node):
             'orientation_variance': 0.03,
             'angular_velocity_variance': 0.0025,
             'linear_acceleration_variance': 0.04,
+            'vendor_orientation_enabled': False,
+            'vendor_level_min': 80,
+            'vendor_level_max': 120,
+            'vendor_orientation_variance': 0.1,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -109,6 +143,10 @@ class Gy95tDriver(Node):
             Imu, '/sensors/imu/data_raw', qos)
         self.rpy_pub = self.create_publisher(
             Vector3Stamped, '/sensors/imu/vendor_rpy', 10)
+        self.mag_counts_pub = self.create_publisher(
+            Vector3Stamped, '/sensors/imu/mag_raw_counts', 10)
+        self.vendor_pub = self.create_publisher(
+            Imu, '/sensors/imu/vendor_data', qos)
         self.diagnostic_pub = self.create_publisher(
             DiagnosticArray, '/diagnostics', 10)
 
@@ -129,6 +167,8 @@ class Gy95tDriver(Node):
         self._invalid_frames = 0
         self._reconnects = 0
         self._last_error = ''
+        self._mag_level = None
+        self._vendor_orientation_valid = False
         self._thread.start()
         self.create_timer(1.0, self._publish_diagnostics)
 
@@ -143,6 +183,13 @@ class Gy95tDriver(Node):
         self.axis_sign = np.asarray(signs, dtype=float)
         if int(self.median_window) < 1 or int(self.median_window) % 2 == 0:
             raise ValueError('median_window 必须是正奇数')
+        if not 1 <= int(self.vendor_level_min) <= int(self.vendor_level_max) <= 255:
+            raise ValueError('vendor_level_min/max 必须位于 1..255 且 min <= max')
+        if float(self.vendor_orientation_variance) <= 0.0:
+            raise ValueError('vendor_orientation_variance 必须大于零')
+        if bool(self.vendor_orientation_enabled) and (
+                permutation != [0, 1, 2] or signs != [1.0, 1.0, 1.0]):
+            raise ValueError('厂家姿态尚未验证轴重映射，仅允许恒等 imu_link 安装轴')
 
     def _run(self):
         while rclpy.ok() and not self._stop_event.is_set():
@@ -155,10 +202,13 @@ class Gy95tDriver(Node):
                 accel, gyro, rpy = decode_registers(
                     registers,
                     int(self.accel_range_index), int(self.gyro_range_index))
+                level, mag_counts, vendor_quaternion = decode_extended_registers(registers)
                 accel = accel[self.axis_permutation] * self.axis_sign
                 gyro = gyro[self.axis_permutation] * self.axis_sign
                 rpy = rpy[self.axis_permutation] * self.axis_sign
-                self._handle_sample(accel, gyro, rpy, started)
+                mag_counts = mag_counts[self.axis_permutation] * self.axis_sign
+                self._handle_sample(
+                    accel, gyro, rpy, level, mag_counts, vendor_quaternion, started)
                 self._valid_frames += 1
                 self._last_frame_monotonic = time.monotonic()
             except (OSError, ValueError, RuntimeError, SerialException) as exc:
@@ -255,18 +305,50 @@ class Gy95tDriver(Node):
             raise RuntimeError(f'GY95T 响应超时：{len(data)}/{length} 字节')
         return bytes(data)
 
-    def _handle_sample(self, accel, gyro, rpy, stamp_monotonic):
+    def _handle_sample(self, accel, gyro, rpy, level, mag_counts,
+                       vendor_quaternion, stamp_monotonic):
         stamp = self.get_clock().now().to_msg()
         self.raw_pub.publish(self._make_imu(accel, gyro, stamp, unavailable=True))
         self._publish_vendor_rpy(rpy, stamp)
+        self._publish_mag_counts(mag_counts, stamp)
+        self._mag_level = level
 
         if not self._update_bias(gyro, stamp_monotonic):
             return
         accel_filtered = self._filter_vector(accel, self._median_accel, '_filtered_accel')
         gyro_filtered = self._filter_vector(
             gyro - self._gyro_bias, self._median_gyro, '_filtered_gyro')
-        self.filtered_pub.publish(
-            self._make_imu(accel_filtered, gyro_filtered, stamp, unavailable=True))
+        filtered = self._make_imu(accel_filtered, gyro_filtered, stamp, unavailable=True)
+        self.filtered_pub.publish(filtered)
+        vendor = self._make_imu(accel_filtered, gyro_filtered, stamp, unavailable=True)
+        self._vendor_orientation_valid = self._vendor_orientation_is_valid(
+            rpy, level, vendor_quaternion)
+        if self._vendor_orientation_valid:
+            (vendor.orientation.x, vendor.orientation.y,
+             vendor.orientation.z, vendor.orientation.w) = [
+                 float(value) for value in rpy_to_quaternion(rpy)]
+            for index in (0, 4, 8):
+                vendor.orientation_covariance[index] = float(self.vendor_orientation_variance)
+        self.vendor_pub.publish(vendor)
+
+    def _vendor_orientation_is_valid(self, rpy, level, vendor_quaternion):
+        """只在明确授权、校准合格和厂家数据自洽时声明绝对姿态有效。"""
+        if not bool(self.vendor_orientation_enabled):
+            return False
+        if not int(self.vendor_level_min) <= level <= int(self.vendor_level_max):
+            return False
+        if not np.all(np.isfinite(rpy)) or abs(rpy[1]) > math.pi / 2.0 + 0.02:
+            return False
+        # 手册未规定 Q0..Q3 的旋转顺序，仅检查其范数，不把它直接当 ROS 姿态。
+        norm = float(np.linalg.norm(vendor_quaternion))
+        return 0.8 <= norm <= 1.2
+
+    def _publish_mag_counts(self, mag_counts, stamp):
+        message = Vector3Stamped()
+        message.header.stamp = stamp
+        message.header.frame_id = str(self.frame_id)
+        (message.vector.x, message.vector.y, message.vector.z) = [float(v) for v in mag_counts]
+        self.mag_counts_pub.publish(message)
 
     def _update_bias(self, gyro, now):
         if self._bias_ready:
@@ -332,6 +414,8 @@ class Gy95tDriver(Node):
             level, state = DiagnosticStatus.WARN, 'calibrating_gyro_bias'
         elif age > max(0.2, 3.0 / max(1.0, float(self.poll_rate))):
             level, state = DiagnosticStatus.ERROR, 'stale'
+        elif bool(self.vendor_orientation_enabled) and not self._vendor_orientation_valid:
+            level, state = DiagnosticStatus.WARN, 'vendor_orientation_untrusted'
         else:
             level, state = DiagnosticStatus.OK, 'ok'
         status = DiagnosticStatus(
@@ -345,6 +429,9 @@ class Gy95tDriver(Node):
             'bias_ready': self._bias_ready,
             'gyro_bias_rad_s': np.round(self._gyro_bias, 6).tolist(),
             'last_error': self._last_error,
+            'mag_calibration_level': self._mag_level,
+            'vendor_orientation_enabled': bool(self.vendor_orientation_enabled),
+            'vendor_orientation_valid': self._vendor_orientation_valid,
         }
         status.values = [KeyValue(key=str(key), value=str(value)) for key, value in values.items()]
         array = DiagnosticArray()

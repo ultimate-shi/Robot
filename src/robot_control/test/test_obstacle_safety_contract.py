@@ -3,6 +3,8 @@
 from pathlib import Path
 
 import yaml
+from geometry_msgs.msg import Twist
+from robot_control.obstacle_avoidance import stop_if_motion_component_blocked
 
 
 PACKAGE = Path(__file__).parents[1]
@@ -31,3 +33,27 @@ def test_range_subscriptions_use_sensor_qos():
     assert 'lambda msg, t=topic: self.ultrasonic_callback(msg, t),\n                qos_profile_sensor_data' in obstacle_source
     assert 'lambda msg, s=sensor: self.range_callback(msg, s),\n                qos_profile_sensor_data' in range_to_scan_source
     assert 'ESCAPE_REAR_RANGE_STALE' in obstacle_source
+
+
+def test_blocked_component_stops_composite_motion():
+    """复合速度的任一分量被拦截后，不能继续沿错误方向运动。"""
+    arc = Twist()
+    arc.linear.y = 0.03
+    arc.angular.z = 0.10
+    assert stop_if_motion_component_blocked(arc, (0.08, 0.03, 0.10))
+    assert (arc.linear.x, arc.linear.y, arc.angular.z) == (0.0, 0.0, 0.0)
+
+    spin = Twist()
+    spin.angular.z = 0.10
+    assert not stop_if_motion_component_blocked(spin, (0.0, 0.0, 0.10))
+    assert spin.angular.z == 0.10
+
+    diagonal = Twist()
+    diagonal.linear.x = 0.08
+    assert stop_if_motion_component_blocked(diagonal, (0.08, 0.03, 0.0))
+    assert diagonal.linear.x == 0.0
+
+    turn = Twist()
+    turn.linear.x = 0.08
+    assert stop_if_motion_component_blocked(turn, (0.08, 0.0, 0.10))
+    assert turn.linear.x == 0.0

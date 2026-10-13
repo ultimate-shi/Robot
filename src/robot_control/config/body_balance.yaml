@@ -7,6 +7,8 @@ body_balance:
     hardware_state_topic: /hardware/chassis_state
     control_rate: 10.0
     leg_length: 0.060
+    leg_min_deg: [-30.0, -30.0, -30.0, -30.0]  # FL、FR、RL、RR；实测后保守限位，与硬件插件及 URDF 一致，单位 deg
+    leg_max_deg: [30.0, 30.0, 30.0, 30.0]  # FL、FR、RL、RR；实测后保守限位，与硬件插件及 URDF 一致，单位 deg
     wheelbase: 0.312
     track: 0.280
     deadzone_deg: 1.0
@@ -20,7 +22,7 @@ body_balance:
     hard_margin_mm: 1.0
     safe_margin_mm: 0.1
     imu_timeout: 0.5
-    overload_current_ma: 2300.0
+    overload_current_ma: 3200.0  # 四腿绝对电流过载降档阈值，单位 mA
     overload_hold: 2.0
     recover_current_ma: 1000.0
     recover_hold: 2.0

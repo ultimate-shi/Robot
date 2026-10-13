@@ -11,7 +11,7 @@ ros2 launch robot_main robot.launch.py mode:=real
 ros2 launch robot_main robot.launch.py mode:=virtual map_yaml_file:=/path/to/map.yaml
 ```
 
-本包归 `platform_integration_owner` 管理。修改组合关系时需要对应领域 owner 复核参数和接口。
+修改组合关系时需要同步复核相关功能包的参数和接口。
 
 ## 模式组成
 

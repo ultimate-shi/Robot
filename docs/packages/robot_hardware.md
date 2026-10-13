@@ -6,13 +6,14 @@
 
 `robot_hardware` 实现 `robot_hardware/RobotSerialSystem` ros2_control SystemInterface，连接四腿、四个转向、四个驱动轮和双轴头部与 DMC0、DMC1、SE2 串口板，并发布硬件健康和 8 路超声波。
 
-本包与 `robot_control` 一起归 `control_hardware_owner` 管理。设备、协议、看门狗、限位和标定参数必须放在 YAML 或 launch 参数中。
+本包与 `robot_control` 共同组成控制和实机执行链。设备、协议、看门狗、限位和标定参数必须放在 YAML 或 launch 参数中。
 
 ## 入口和配置
 
 - `hardware_bringup.launch.py`：加载模型、controller manager 和控制器。
 - `config/hardware_bringup.yaml`：串口候选、超时、重试、几何参数、超声波滤波范围。
 - `config/servo_calibration.yaml`：头部和转向舵机零点、方向、限位、PID 与死区。
+- `config/wheel_calibration.yaml`：四轮关节到 DMC1 轴映射、反馈和命令方向、CPR、逐轮 D 模式速度曲线。换电机后更新该轮位并重测。
 - 原生串口命令与独占要求见 `docs/hardware_serial_commands.md`。
 
 ## ROS 接口

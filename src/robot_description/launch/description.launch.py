@@ -17,6 +17,7 @@ def generate_launch_description():
     log_level = LaunchConfiguration('log_level')
     hardware_plugin = LaunchConfiguration('hardware_plugin')
     servo_calibration_file = LaunchConfiguration('servo_calibration_file')
+    wheel_calibration_file = LaunchConfiguration('wheel_calibration_file')
     hardware_arguments = [
         'device_candidates', 'serial_timeout_ms', 'inter_command_delay_ms',
         'discovery_retry_count', 'discovery_retry_delay_ms', 'encoder_query_delay_ms',
@@ -27,6 +28,7 @@ def generate_launch_description():
             'xacro ', xacro_file,
             ' hardware_plugin:=', hardware_plugin,
             ' servo_calibration_file:=', servo_calibration_file,
+            ' wheel_calibration_file:=', wheel_calibration_file,
         ] + [item for name in hardware_arguments
              for item in (' ' + name + ':=', LaunchConfiguration(name))]),
         value_type=str)}
@@ -37,6 +39,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'servo_calibration_file', default_value='',
             description='实机舵机标定 YAML；虚拟模式可留空'),
+        DeclareLaunchArgument(
+            'wheel_calibration_file', default_value='',
+            description='实机轮位映射和 D 模式标定 YAML；虚拟模式可留空'),
         DeclareLaunchArgument(
             'device_candidates', default_value='/dev/ttyACM0,/dev/ttyACM1,/dev/ttyACM2',
             description='候选串口设备，逗号分隔；插件按 $info 响应识别控制板'),

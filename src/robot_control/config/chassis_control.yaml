@@ -10,7 +10,11 @@ chassis_controller:
     publish_odometry: true  # 独立旧控制入口保持兼容；完整双目入口覆盖为 false，由 EKF 独占 /odom
     terrain_check_enabled: true
     cmd_vel_timeout: 0.5  # 上游速度命令超时后发布零轮速，单位 s
-    steering_ready_tolerance: 0.05  # 实际转角与目标的最大偏差，单位 rad；超出时轮速为零
+    steering_ready_tolerance: 0.08  # 连续两帧转向角进入此范围后允许低速运动，单位 rad
+    steering_full_speed_tolerance: 0.05  # 转向误差小于此值时不因舵机精度额外降速，单位 rad
+    steering_stop_tolerance: 0.15  # 任一转向误差超过此值立即停车，单位 rad
+    steering_ready_samples: 2  # 首次放行需要连续到位的真实关节反馈帧数
+    steering_min_speed_scale: 0.75  # 接近停车角度前的最低轮速比例，避免小误差反复停走
     steering_feedback_timeout: 0.3  # /joint_states 转向反馈最大允许年龄，单位 s
 
 wheel_command_guard:
@@ -20,24 +24,4 @@ wheel_command_guard:
     heartbeat_topic: /hardware/command_heartbeat
     command_timeout: 0.5
     publish_rate: 20.0
-    max_wheel_command_rad_s: 12.0  # 补偿后及未启用补偿时的最终轮速命令限幅，单位 rad/s
-    wheel_calibration.enabled: false  # 仅在四轮正反向标定表均有效且实机验收后启用
-    wheel_calibration.max_compensation_ratio: 2.0  # 补偿命令与原目标之比的上限
-    # 四轮顺序与 wheel_controller 一致；命令和实测值均为正数幅值，单位 rad/s。
-    # -1.0 表示尚未标定；使用浮点哨兵保持 ROS 参数数组类型明确，启用时会被校验拒绝。
-    wheel_calibration.fl.forward.commands: [-1.0]
-    wheel_calibration.fl.forward.measured: [-1.0]
-    wheel_calibration.fl.reverse.commands: [-1.0]
-    wheel_calibration.fl.reverse.measured: [-1.0]
-    wheel_calibration.fr.forward.commands: [-1.0]
-    wheel_calibration.fr.forward.measured: [-1.0]
-    wheel_calibration.fr.reverse.commands: [-1.0]
-    wheel_calibration.fr.reverse.measured: [-1.0]
-    wheel_calibration.rl.forward.commands: [-1.0]
-    wheel_calibration.rl.forward.measured: [-1.0]
-    wheel_calibration.rl.reverse.commands: [-1.0]
-    wheel_calibration.rl.reverse.measured: [-1.0]
-    wheel_calibration.rr.forward.commands: [-1.0]
-    wheel_calibration.rr.forward.measured: [-1.0]
-    wheel_calibration.rr.reverse.commands: [-1.0]
-    wheel_calibration.rr.reverse.measured: [-1.0]
+    max_wheel_command_rad_s: 1.8  # 四轮架空 D100% 稳态最慢轮约 1.878rad/s；统一留余量，单位 rad/s

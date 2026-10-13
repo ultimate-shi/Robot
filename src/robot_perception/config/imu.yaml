@@ -20,6 +20,10 @@ gy95t_driver:
     orientation_variance: 0.03  # 姿态方差占位；原始话题会用 -1 标记姿态不可用
     angular_velocity_variance: 0.0025  # 角速度协方差对角线初值，单位 (rad/s)^2
     linear_acceleration_variance: 0.04  # 加速度协方差对角线初值，单位 (m/s^2)^2
+    vendor_orientation_enabled: false  # 默认不把厂家磁航向标为可信；装车轴向和地图参考验证后显式开启
+    vendor_level_min: 80  # 厂家磁场校准 Level 最小可信值，100 最佳
+    vendor_level_max: 120  # 厂家磁场校准 Level 最大可信值，超界时姿态协方差首项为 -1
+    vendor_orientation_variance: 0.1  # 厂家姿态三轴协方差初值，单位 rad^2，需现场标定
 
 imu_filter_madgwick:
   ros__parameters:
@@ -29,4 +33,3 @@ imu_filter_madgwick:
     gain: 0.1  # Madgwick 姿态校正增益
     zeta: 0.0  # 不在此节点重复估计陀螺仪零偏
     remove_gravity_vector: false  # 保留加速度中的重力分量，不用于位置积分
-

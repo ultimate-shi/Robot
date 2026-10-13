@@ -1,0 +1,12 @@
+# 使用方法：由 test/leg_range_hardware_probe.py 读取；仅在固定架空且有人现场监护时运行。
+leg_range_hardware_probe:
+  step_deg: 3.0  # 单次位置目标最大增量，单位 deg
+  initial_probe_deg: 3.0  # 每条腿到端点前的小角度方向确认，单位 deg
+  instant_current_limit_ma: 3200.0  # 单帧腿电流立即停止门槛，单位 mA
+  joint_tolerance_deg: 0.7  # 单步到位允许误差，单位 deg
+  other_leg_tolerance_deg: 1.5  # 非目标腿允许偏移，单位 deg
+  progress_deg: 0.3  # 判断角度反馈有进展的最小变化，单位 deg
+  wheel_speed_max_rad_s: 0.05  # 测试前及测试中允许的最大车轮角速度
+  feedback_timeout_s: 0.7  # 关节和硬件状态最大允许失联时间
+  stall_timeout_s: 1.5  # 无角度反馈进展时的停机时间
+  step_timeout_s: 6.0  # 单步最长等待时间

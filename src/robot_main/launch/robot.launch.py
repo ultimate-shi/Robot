@@ -85,6 +85,12 @@ def generate_launch_description():
             'initial_yaw', default_value='0.0',
             description='已有地图模式 map 到 odom 的初始偏航角，单位弧度'),
         DeclareLaunchArgument(
+            'initial_yaw_source', default_value='manual',
+            description='已有地图的初始航向来源：manual 使用 initial_yaw；magnetic 仅允许实机且须提供 magnetic_east_yaw_in_map'),
+        DeclareLaunchArgument(
+            'magnetic_east_yaw_in_map', default_value='',
+            description='磁 ENU 东轴在 map 坐标中的偏航角，单位弧度；选择 magnetic 时必须显式设置'),
+        DeclareLaunchArgument(
             'controller_manager_config_file',
             default_value=os.path.join(control_share, 'config', 'controllers.yaml'),
             description='controller_manager 参数 YAML 路径'),
@@ -95,12 +101,17 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'chassis_control_config_file',
             default_value=os.path.join(control_share, 'config', 'chassis_control.yaml'),
-            description='实机底盘运动学与轮速看门狗参数 YAML；可加载已验收的逐轮补偿配置'),
+            description='底盘运动学与轮速超时保护参数 YAML'),
         DeclareLaunchArgument(
             'servo_calibration_file',
             default_value=os.path.join(
                 hardware_share, 'config', 'servo_calibration.yaml'),
             description='实机六路舵机标定 YAML 路径'),
+        DeclareLaunchArgument(
+            'wheel_calibration_file',
+            default_value=os.path.join(
+                hardware_share, 'config', 'wheel_calibration.yaml'),
+            description='实机四轮轴映射、方向和 D 模式曲线 YAML 路径'),
         DeclareLaunchArgument(
             'device_candidates',
             default_value=','.join(hardware_defaults['device_candidates']),
@@ -242,6 +253,20 @@ def generate_launch_description():
             raise RuntimeError(
                 'virtual 模式没有实时双目建图源，请显式传入 map_yaml_file；'
                 '实机在线建图请使用 mode:=real')
+        initial_yaw_source = LaunchConfiguration(
+            'initial_yaw_source').perform(context).strip().lower()
+        if initial_yaw_source not in ('manual', 'magnetic'):
+            raise RuntimeError("initial_yaw_source 只允许 'manual' 或 'magnetic'")
+        if initial_yaw_source == 'magnetic':
+            if mode != 'real' or not map_yaml:
+                raise RuntimeError(
+                    'magnetic 初始航向只允许实机加载已有地图时使用')
+            if not LaunchConfiguration(
+                    'magnetic_east_yaw_in_map').perform(context).strip():
+                raise RuntimeError(
+                    'magnetic 初始航向必须显式提供 magnetic_east_yaw_in_map')
+            if LaunchConfiguration('use_imu').perform(context).strip().lower() != 'true':
+                raise RuntimeError('magnetic 初始航向必须启用 use_imu:=true')
         log_level = LaunchConfiguration('log_level').perform(context)
         control_delay = float(LaunchConfiguration('control_start_delay').perform(context))
         sensor_delay = float(LaunchConfiguration('sensor_start_delay').perform(context))
@@ -274,6 +299,8 @@ def generate_launch_description():
                 'hardware_plugin': plugin,
                 'servo_calibration_file': LaunchConfiguration(
                     'servo_calibration_file'),
+                'wheel_calibration_file': LaunchConfiguration(
+                    'wheel_calibration_file'),
                 'log_level': log_level,
                 **hardware_arguments}),
             include('robot_description', 'foxglove.launch.py', {
@@ -283,6 +310,8 @@ def generate_launch_description():
                 'hardware_plugin': plugin,
                 'servo_calibration_file': LaunchConfiguration(
                     'servo_calibration_file'),
+                'wheel_calibration_file': LaunchConfiguration(
+                    'wheel_calibration_file'),
                 'manager_config_file': LaunchConfiguration(
                     'controller_manager_config_file'),
                 'controller_config_file': LaunchConfiguration(
@@ -316,6 +345,7 @@ def generate_launch_description():
                     'output_topic': '/cmd_vel_safe',
                     'log_level': log_level})),
             include('robot_navigation', 'state_estimation.launch.py', {
+                'two_d_mode_override': 'true' if mode == 'virtual' else 'false',
                 'log_level': log_level}),
             delayed(navigation_delay, include('robot_navigation', 'nav2.launch.py', {
                 'map_yaml_file': map_yaml,
@@ -325,6 +355,9 @@ def generate_launch_description():
                 'initial_x': LaunchConfiguration('initial_x'),
                 'initial_y': LaunchConfiguration('initial_y'),
                 'initial_yaw': LaunchConfiguration('initial_yaw'),
+                'initial_yaw_source': LaunchConfiguration('initial_yaw_source'),
+                'magnetic_east_yaw_in_map': LaunchConfiguration(
+                    'magnetic_east_yaw_in_map'),
                 'log_level': log_level})),
         ]
         if mode == 'virtual':
@@ -341,6 +374,8 @@ def generate_launch_description():
         if LaunchConfiguration('use_imu').perform(context).lower() == 'true':
             common.append(include('robot_perception', 'imu.launch.py', {
                 'device': LaunchConfiguration('imu_device'),
+                'vendor_orientation_enabled': (
+                    'true' if initial_yaw_source == 'magnetic' else 'false'),
                 'log_level': log_level}))
         common.extend([
             delayed(control_delay + 2.0, include(

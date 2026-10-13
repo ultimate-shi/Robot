@@ -1,0 +1,12 @@
+# 使用方法：scripts/serial/check_four_legs.py 用 --values 指定角度时读取本配置；架空并独占 DMC0 串口后运行。
+check_four_legs:
+  device_candidates: [/dev/ttyACM0, /dev/ttyACM1, /dev/ttyACM2, /dev/ttyACM3, /dev/ttyACM4, /dev/ttyACM5, /dev/ttyACM6, /dev/ttyACM7, /dev/ttyACM8]  # 按 $info 识别 DMC0，不按端口号猜测
+  response_timeout_s: 0.5  # 单条串口命令等待响应的最长时间
+  idle_timeout_s: 0.03  # 收到数据后等待一行结束的空闲时间
+  current_limit_ma: 3200  # 任一腿绝对电流达到此值即终止，单位 mA
+  tolerance_deg: 0.7  # 判定目标到位的角度误差
+  minimum_motion_deg: 0.5  # 每次点动至少应出现的位移
+  other_leg_tolerance_deg: 1.5  # 非目标腿允许的最大位置变化
+  motion_timeout_s: 3.0  # 单次点动最长等待时间
+  sample_period_s: 0.1  # 四腿状态查询间隔
+  pause_s: 0.3  # 两次点动之间的停顿

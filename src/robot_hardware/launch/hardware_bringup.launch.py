@@ -40,6 +40,10 @@ def generate_launch_description():
             'servo_calibration_file', default_value=calibration,
             description='六路舵机零位、方向和 PID 标定 YAML 路径'),
         DeclareLaunchArgument(
+            'wheel_calibration_file',
+            default_value=os.path.join(hardware_share, 'config', 'wheel_calibration.yaml'),
+            description='四轮轴映射、方向和 D 模式曲线 YAML 路径'),
+        DeclareLaunchArgument(
             'controller_config_file', default_value=controllers,
             description='底盘 ros2_control 控制器配置 YAML 路径'),
         DeclareLaunchArgument(
@@ -88,6 +92,8 @@ def generate_launch_description():
             'hardware_plugin': 'robot_hardware/RobotSerialSystem',
             'servo_calibration_file': LaunchConfiguration(
                 'servo_calibration_file'),
+            'wheel_calibration_file': LaunchConfiguration(
+                'wheel_calibration_file'),
             'log_level': LaunchConfiguration('log_level'),
             **hardware_arguments,
         }),
@@ -95,6 +101,8 @@ def generate_launch_description():
             'hardware_plugin': 'robot_hardware/RobotSerialSystem',
             'servo_calibration_file': LaunchConfiguration(
                 'servo_calibration_file'),
+            'wheel_calibration_file': LaunchConfiguration(
+                'wheel_calibration_file'),
             'manager_config_file': LaunchConfiguration(
                 'controller_config_file'),
             'controller_config_file': LaunchConfiguration(

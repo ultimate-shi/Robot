@@ -6,7 +6,7 @@
 
 `robot_description` 保存实机与虚拟模式共用的 URDF/Xacro、碰撞和惯性、网格、传感器外参及 ros2_control 接口。模型必须以实车结构和坐标关系为准。
 
-本包归 `platform_integration_owner` 管理；轮腿和控制接口变化需与 `control_hardware_owner` 联调，相机、IMU、超声波外参变化需与 `perception_owner` 联调。
+轮腿和控制接口变化需与 `robot_control`、`robot_hardware` 联调；相机、IMU、超声波外参变化需与 `robot_perception` 联调。
 
 ## 资源和入口
 

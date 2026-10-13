@@ -58,6 +58,18 @@ SENSOR_LABELS = {
 }
 
 
+def stop_if_motion_component_blocked(cmd, requested_motion):
+    """使用方法：安全层否决任一计划运动分量时，整条复合速度命令停车。"""
+    actual = (cmd.linear.x, cmd.linear.y, cmd.angular.z)
+    if not any(abs(requested) > 0.001 and abs(filtered) <= 0.001
+               for requested, filtered in zip(requested_motion, actual)):
+        return False
+    cmd.linear.x = 0.0
+    cmd.linear.y = 0.0
+    cmd.angular.z = 0.0
+    return True
+
+
 class ObstacleAvoidanceNode(Node):
     ACTIVE_GOAL_STATUSES = {
         GoalStatus.STATUS_ACCEPTED,
@@ -251,6 +263,7 @@ class ObstacleAvoidanceNode(Node):
             cmd.linear.x = self.latest_cmd_vel_raw.linear.x
             cmd.linear.y = self.latest_cmd_vel_raw.linear.y
             cmd.angular.z = self.latest_cmd_vel_raw.angular.z
+        requested_motion = (cmd.linear.x, cmd.linear.y, cmd.angular.z)
 
         warnings = []
 
@@ -382,6 +395,10 @@ class ObstacleAvoidanceNode(Node):
                 cmd.linear.x *= slip
                 if slip < 0.5:
                     warnings.append(f"SLIPPING:{slip:.2f}")
+
+        # 任一计划分量被安全层否决后停车，避免弧线或蟹行被意外改成直行。
+        if stop_if_motion_component_blocked(cmd, requested_motion):
+            warnings.append('MOTION_COMPONENT_BLOCKED_STOP')
 
         detected_ultrasonic = self._detected_ultrasonic()
         self._log_detected_ultrasonic(detected_ultrasonic, warnings)

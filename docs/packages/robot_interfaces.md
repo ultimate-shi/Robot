@@ -2,9 +2,9 @@
 <!-- 使用方法：新增或修改 msg、srv、action 前阅读；修改后检查全部生产者和消费者。 -->
 # robot_interfaces 功能包
 
-## 职责与归属
+## 职责与边界
 
-`robot_interfaces` 是感知、任务规划、控制和硬件之间的稳定类型契约，不包含运行节点、launch 或参数文件。本包归 `platform_integration_owner` 管理。
+`robot_interfaces` 是感知、任务规划、控制和硬件之间的稳定类型契约，不包含运行节点、launch 或参数文件。
 
 ## 接口清单
 

@@ -48,6 +48,26 @@ struct ServoConfig
   int stuck_state{0};
 };
 
+// 使用方法：每个轮位由 wheel_calibration.yaml 定义，轴号与方向均不泄漏到控制层。
+struct WheelConfig
+{
+  int axis{0};
+  int encoder_sign{1};
+  int drive_sign{1};
+  int speed_command_sign{1};
+  bool speed_mode_enabled{true};
+  int cpr{0};
+  bool pwm_enabled{false};
+  std::vector<double> pwm;
+  std::vector<double> speed;
+  bool negative_pwm_enabled{false};
+  int negative_drive_sign{-1};
+  std::vector<double> negative_pwm;
+  std::vector<double> negative_speed;
+  double feedback_gain{0.0};
+  double max_pwm_correction{0.0};
+};
+
 class RobotSerialSystem : public hardware_interface::SystemInterface
 {
 public:
@@ -69,6 +89,7 @@ public:
 private:
   bool discover_controllers();
   bool load_calibration(const std::string & path);
+  bool load_wheel_calibration(const std::string & path);
   bool query_encoder_parameters();
   bool read_wheels();
   bool read_legs();
@@ -95,6 +116,8 @@ private:
   std::unique_ptr<SerialPort> se2_;
   std::array<int, 4> encoder_cpr_{{0, 0, 0, 0}};
   std::array<int, 4> encoder_direction_{{0, 0, 0, 0}};
+  std::array<WheelConfig, 4> wheels_{};
+  std::array<std::size_t, 4> axis_to_wheel_{{0, 1, 2, 3}};
   std::array<std::int64_t, 4> encoder_count_{{0, 0, 0, 0}};
   std::array<std::uint32_t, 4> encoder_motion_target_{{0, 0, 0, 0}};
   bool encoder_motion_active_{false};

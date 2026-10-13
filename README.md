@@ -8,10 +8,9 @@ SLAM、Nav2 路径规划、局部避障和底盘控制。
 
 ```text
 Robot/
-├── .codex/                         # 项目级专业 Agent 与并发配置
 ├── AGENTS.md                      # 仓库开发约定和验证要求
 ├── docker/                         # ROS 2 Jazzy ARM64 容器镜像
-├── docs/                           # 包说明、多 Agent、标定和验收文档
+├── docs/                           # 功能包、标定和验收文档
 ├── scripts/                        # 环境安装、镜像构建、相机配置和启动脚本
 ├── src/
 │   ├── robot_interfaces/           # 感知、任务与控制的 msg/srv/action
@@ -26,13 +25,6 @@ Robot/
 ├── progress.md                     # 按日期记录开发过程、卡点和踩坑
 └── README.md
 ```
-
-## 多 Agent 协作
-
-项目在 `.codex/agents/` 定义了跨包协调、本地大脑、感知、导航、控制硬件和平台集成 Agent。
-复杂问题可以让相关 Agent 并行做只读排查，再按文件划分唯一写入者并统一验证。职责表、跨包
-协作流程、调用示例和每个功能包的中文文档见
-[`docs/multi_agent_workflow.md`](docs/multi_agent_workflow.md)。
 
 ## 多 Package 架构
 
@@ -55,9 +47,49 @@ Robot/
 - `/hardware/chassis_state`：三块控制板、看门狗、输出锁定和电流状态。
 - `/wheel/odometry_status`：逐轮残差、权重、疑似故障和动态协方差状态。
 - `/execute_wheel_motion`：先转向后执行四轮定距的 `ExecuteWheelMotion` Action。
+- 手工串口终端：`python3 scripts/serial/line_serial_terminal.py /dev/ttyACM0` 在本地编辑完整命令，按回车后整行发送并显示响应；使用前须停止其他串口进程。
 - 单轮串口采样：`scripts/serial/single_motor_curve.py record` 按显式指定的 D/S 测试点记录 JSON 和速度、电流 PNG；运行前须独占 DMC1 串口并架空车轮。具体命令见 `docs/motion_control_commands.md`。
 - `/hardware/stop_encoder_motion`：取消或超时后停止 DMC1 定距目标；定距期间还监测 `/wheel_motion/active` 租约。
 - `/body_balance/set`、`/body_balance/status`：姿态平衡控制与状态。
+
+四条主动腿当前统一采用 **−30°～+30°** 的保守 ROS 软件行程；左前实测负向约 −29°
+平稳停住，右前实测正向约 +28° 平稳停住。左后已独立到达约 −19.5° 和 +19.7°，
+角度增加对应实物收缩；峰值电流 2664mA，因此暂未继续扩大行程。右后在起点约 −2.9°
+向正、负方向各点动约 3° 均无运动反馈，现场亦未见运动或听到驱动声；之后用户手工确认
+四腿均可走到 ±30°，但右后腿仍须经 ROS 反馈链复验。
+DMC0 固件源码尚未取得，四腿软件端点均未全部验收。
+需要绕过 ROS 直接核对 DMC0 四腿点动时，在停用 ROS 硬件进程和 `vctrl.service`、
+固定架空后运行 `python3 scripts/serial/check_four_legs.py --values=2,0,-2,0 --confirm-suspended`；
+脚本按显式填写的绝对 ROS 角度逐腿测试，不设置角度软件限位，异常时保持当前位置。它直接访问
+DMC0，不经过 `RobotSerialSystem`；参数及单腿用法见
+[`docs/hardware_serial_commands.md`](docs/hardware_serial_commands.md)。
+平衡节点在 `robot_control/config/body_balance.yaml` 使用同一组限位并保留软边界、
+单周期步进和过流降档。架空逐腿端点检查可在实机控制器启动且车轮静止后运行
+`python3 /workspace/src/robot_control/test/leg_range_hardware_probe.py --confirm-suspended`，
+脚本在平衡服务存在时先关闭自动平衡，
+监测关节反馈、腿电流和硬件故障；伸展/收缩的实物方向仍须现场观察记录。
+固定架空不能验证 IMU 闭环使车身恢复水平。实机手动倾斜预检中，左低对应负 roll、
+右低对应正 roll、前低对应负 pitch、后低对应正 pitch；左低时隔离目标和每腿约 ±1°
+的短时实机测试均给出左侧伸展、右侧收缩方向，但左后腿在短时实测中贴近临时下限，
+未取得该腿独立位移证据。平衡节点按带符号电流的绝对值判断过流，并保持启用前的
+四腿共同高度基准；关闭平衡时会发送四腿当前反馈角给位置控制器保持。
+2026-10-13 四轮接地短测中，车头确实前低，IMU pitch 中位数由 −9.31° 变为
+−8.96°，方向正确但未恢复水平；每腿起点附近最多上调约 2° 的临时目标下，实际腿角
+因响应延迟越过 2.7° 停测窗，峰值电流 2978mA，随即停止并将四腿保持在反馈角。
+普通硬件启动后现场观察到四轮转向持续动作；临时中位 PWM 可使其短时静止，但测试后
+又观察到左前、左后、右后转向约 90°、右前略小于 90°，且转向小幅运动；当时 ROS
+反馈仅约 −11°～+8°。随后停用 ROS 并架空直读 SE2，原始角度约为 −91°、−70°、
+−99°、−97°，与现场轮组方向一致，说明转向在两次采样之间发生了明显变化。
+左前单独低速回直时，现场确认其他轮组也跟着转动。再次架空检查中，左前曾回到约
+−1.5°；单独驱动右前时现场看到头部运动，单独驱动头部左右轴时又看到某个轮组运动，
+具体轮位未能辨认。最终反馈约为左前 −5°、右前 −7°、左后 −105°、右后 −105°、
+头部左右 +73°、俯仰 −38°，不能宣称六路舵机已回中。现已停止舵机输出，四轮驱动
+速度为零，四腿通过独占 DMC0 串口逐腿回到约 0°。排查 SE2 输出通道、接线及供电
+串动原因前，不继续舵机自动回中或落地自动平衡。完整姿态闭环水平效果尚未验收。
+架空 IMU 姿态方向预检可先启动 `imu.launch.py` 与保持关闭的
+`body_balance.launch.py`，再运行
+`python3 /workspace/src/robot_control/test/imu_balance_observer.py --duration-s 20`；
+该观察工具只记录 `/body_balance/status` 的横滚、俯仰，不发送腿部命令。
 
 ## Python 功能分层
 
@@ -93,8 +125,11 @@ splitter_backend:=python
 
 真实建图由 `rtabmap_odom/stereo_odometry` 输出 `/visual_odom_raw`，经过协方差下限保护后
 得到 `/visual_odom`，再由
-`robot_localization` 二维 EKF 统一输出 `/odom` 和 `odom -> base_link`。当前融合 GY95T 的
-yaw 角速度、四轮实际反馈生成的 `/wheel/odom` 和双目视觉位姿。
+`robot_localization` 三维 EKF 统一输出 `/odom` 和 `odom -> base_link`。当前融合 GY95T 的
+roll/pitch 与三轴角速度、四轮实际反馈生成的平面 `/wheel/odom` 和双目视觉三维位姿。
+`/odom.twist` 包含三轴线速度与三轴角速度估计；IMU 不直接测量线速度，垂直位置与速度依赖
+视觉三维位姿质量，视觉失效时不可把预测值当作可靠高度。
+虚拟模式没有独立三维传感输入，统一入口仍以二维 EKF 运行，避免把未观测的高度和倾角当作估计结果。
 RTAB-Map 继续负责 `map -> odom`，视觉里程计不再单独发布冲突 TF。
 
 本次传感器融合功能按 ROS Package 分工如下：
@@ -241,6 +276,26 @@ ros2 launch robot_main robot.launch.py mode:=real map_yaml_file:=/workspace/maps
 
 虚拟模式加载 `mock_components/GenericSystem`；实机模式加载
 `robot_hardware/RobotSerialSystem`，自动在 `/dev/ttyACM0..8` 中识别 DMC0、DMC1 和 SE2。
+四轮 ROS 关节命令由硬件插件按 `robot_hardware/config/wheel_calibration.yaml` 映射到 DMC1 轴；
+插件负责编码器方向、CPR 与单轮 D 模式 PWM 曲线反查。底盘控制节点和 ros2_control 控制器
+只传标准关节速度。正 PWM 曲线来自 `calibration_reports/wheel/*_d_manual.json` 的架空测试：
+D4/D6/D7 对应 ROS 负方向，D5 对应正方向；右后 D7 负 PWM 的 ROS 正方向也已实测至 100%，
+并单独存于该轮位的负 PWM 曲线。其他轮位未测方向仍由 DMC1 S 速度模式控制。高于实测速度范围时
+D 模式钳在最大实测点，右后低于首个实测速度的非零目标会被拒绝，不能保证所有速度都可跟踪。
+2026-10-13 架空逐轮 D100% 三秒复测：ROS 正向稳态速度幅值为 FL 1.917、FR 1.880、RL 2.006、RR 1.984rad/s，
+ROS 负向依次为 1.878、1.947、1.930、1.912rad/s；
+`chassis_control.yaml` 将统一关节速度命令上限设为 1.8rad/s。RR 在先前 2800mA 测试门槛下触发停车，
+按现场指定的 3200mA 门槛复测完成。轮电机采样示例与四腿过流相关默认门槛现统一为 3200mA；
+此上限来自架空测试；未标定的反向 D 曲线尚未写入硬件配置，装车负载下的持续跟速仍需验证。
+更换某轮电机或调整接线后，先架空逐轴确认轮位和 ROS 正方向，再更新该轮位的 `axis`、
+`encoder_sign`、`speed_command_sign`、`drive_sign`、`cpr` 与重测的正反向 PWM/轮速点；
+启动时插件会拒绝重复轴号、非单调曲线和与控制板 I 参数不一致的 CPR。
+不得将正 PWM 的 D 曲线直接套用到反向或 S 模式，也不得把右后轮当前反馈符号未经复测改回旧假设。
+2026-10-10 架空 ROS 实测发现：右后轮的 S7 对 +0.727rad/s 目标，两种命令符号均接近
+1.9～2.0rad/s，无法闭环跟速；`speed_mode_enabled: false` 保持 S7 关闭。右后已测两个 PWM
+方向可由硬件接口反查和有限反馈修正。架空 `/cmd_vel_safe` 测试在 +0.06m/s 稳定段达到四轮
+约 +1.09rad/s，−0.06m/s 时 RR 约比目标低 7.7%。之后改为转向反馈连续确认、误差比例降速和明显偏离停车，安全层也会在复合速度任一分量受阻时整条停车；架空 16 段三模式复测均超过 5 秒有效轮动，峰值轮电流 2664mA（测试停止门槛 3100mA）。装车负载、实际位移与导航闭环尚未验收，暂不用于整车导航。详细步骤、数据和限制见
+[四轮方向标定、PWM 曲线与 ROS 速度验收](docs/wheel_calibration_and_speed_test.md)。
 串口候选、发现重试、事务/命令超时、轮径、轴距、轮距和腿长以
 `robot_hardware/config/hardware_bringup.yaml` 为统一启动默认值，并由 `robot_main` 同时传给
 硬件插件、运动学、轮速里程计和平衡节点；现场可用同名 launch 参数覆盖。
@@ -258,7 +313,7 @@ ros2 service call /hardware/recover std_srvs/srv/Trigger '{}'
 脚本会警告它与 ROS 2 争用控制板；实机启动前必须执行
 `sudo systemctl stop vctrl.service`，禁止两个硬件驱动同时连接串口。控制链为
 `Nav2 -> /cmd_vel_nav -> 超声波安全层 -> /cmd_vel_safe -> 三模式运动学 -> ros2_control`。
-轮速命令经过独立 500 ms 看门狗，转向未到位时轮速保持零；定距 Action 的 T 指令有独立停车服务和动作租约。8 路超声波统一为前3、后3、左1、右1。SE2 的 Range
+轮速命令经过独立 500 ms 看门狗，转向反馈未进入允许误差时轮速保持零，到位后按误差比例调速；定距 Action 的 T 指令有独立停车服务和动作租约。8 路超声波统一为前3、后3、左1、右1。SE2 的 Range
 话题使用传感器 Best Effort QoS，避障和 `/scan` 合成节点使用相同 QoS 接收。最终安全层默认
 失效关闭：当前运动方向没有新鲜测距就输出零速；遇障默认停车，不自动倒车。SE2 原始测距
 默认只接受 30~2500mm，低于 30mm 的探头振铃/无回波异常值发布为 `NaN`，不会伪装成
@@ -291,7 +346,7 @@ ros2 launch robot_perception stereo_camera.launch.py video_device:=/dev/video0
 ros2 launch robot_navigation stereo_mapping.launch.py video_device:=/dev/video0
 ```
 
-建图入口默认启动 GY95T，并把 `/sensors/imu/data` 同时送入双目视觉里程计和二维 EKF：
+建图入口默认启动 GY95T，并把 `/sensors/imu/data` 同时送入双目视觉里程计和三维 EKF：
 
 ```bash
 ros2 launch robot_navigation stereo_mapping.launch.py \
@@ -309,7 +364,7 @@ ros2 launch robot_navigation stereo_mapping.launch.py \
 若启动时报 `XML or text declaration not at start of entity`，请确认已重新构建
 `robot_description`，且 `robot.xacro` 的 `<?xml ...?>` 声明位于文件第一行。
 
-该入口启动真实相机、双目视觉里程计、二维 EKF、过滤后的建图障碍点云、RTAB-Map、
+该入口启动真实相机、双目视觉里程计、三维 EKF、过滤后的建图障碍点云、RTAB-Map、
 头部建图归中、机器人模型、快照管理和 Foxglove，不启动虚拟底盘和 Nav2。默认
 `require_head_feedback:=false` 适合摄像头机械固定向前的手持验证；接入实机头部闭环后应改为
 `true`，并确保 `/head_controller/commands` 有控制器订阅且 `/joint_states` 返回实际角度。
@@ -320,11 +375,12 @@ ros2 launch robot_navigation stereo_mapping.launch.py \
 IMU 固定在同一刚性支架上，摄像头正前、IMU 水平，启动后先静止至少 2 秒完成陀螺仪零偏
 估计，再缓慢移动整个支架；不能让摄像头相对 IMU 单独转动。
 
-GY95T 驱动读取附件协议的 `0x08-0x2A` 寄存器，发布
-`/sensors/imu/raw_unfiltered`、`/sensors/imu/data_raw` 和内部姿态对照
+GY95T 驱动读取厂家协议的 `0x08-0x2A` 寄存器，发布
+`/sensors/imu/raw_unfiltered`、`/sensors/imu/data_raw`、厂家姿态
+`/sensors/imu/vendor_data`、磁计原始计数 `/sensors/imu/mag_raw_counts`（不是 Tesla）和
 `/sensors/imu/vendor_rpy`。原始角速度和加速度经过三点中值、10 Hz 一阶低通及静止零偏
-校正，随后由无磁 Madgwick 输出 `/sensors/imu/data`。首版 EKF 只使用 yaw 角速度，不使用
-线加速度积分或易受电机干扰的磁航向。装车后必须按前倾、左倾和逆时针转动检查
+校正，随后由无磁 Madgwick 输出 `/sensors/imu/data`。EKF 融合其 roll/pitch 与三轴角速度；
+尚未把磁航向作为连续测量，也未把线加速度直接积分成线速度。装车后必须按前倾、左倾和逆时针转动检查
 `axis_permutation` 与 `axis_sign`。
 
 二维地图由 RTAB-Map 从已同步的双目深度生成，并通过 `Grid/NoiseFilteringRadius` 与
@@ -389,11 +445,19 @@ ros2 launch robot_navigation stereo_robot.launch.py \
 给定的 `initial_x`、`initial_y`、`initial_yaw` 用于发布 `map -> odom` 初始关系。不传该参数时，
 不会启动静态地图服务器或静态 `map -> odom`，两者均由在线 RTAB-Map 提供，避免重复发布。
 
-两种模式都启动同一套 GY95T、双目视觉里程计和二维 EKF：`/visual_odom` 与 IMU yaw 角速度
+实机已有地图可在现场标定地图轴与磁东夹角、完成 GY95T 软硬铁校准并核对安装轴后，选择
+`initial_yaw_source:=magnetic magnetic_east_yaw_in_map:=<弧度>`。其中角度表示磁 ENU 东轴
+在 `map` 中的偏航角，必须显式给出；它不是地理真北或机器人当前 yaw。此模式等待 GY95T 的
+校准 Level、厂家姿态和 EKF TF 均有效，再一次性确定 `map -> odom` 朝向；超时不会启动
+Nav2 导航。默认 `manual` 继续使用 `initial_yaw`，在线 RTAB-Map、虚拟模式不得启用地磁模式。
+
+实机模式启动 GY95T、双目视觉里程计和三维 EKF：`/visual_odom` 与 IMU 三轴角速度、roll/pitch
 融合为 `/odom`，并由 EKF 发布 `odom -> base_link`。默认 `use_imu:=true`；没有映射 GY95T
 设备时应传入 `use_imu:=false`。已有地图模式当前不启动 AMCL，必须让机器人从命令给定的已知
 地图位姿开始；如果启动位置不确定，需要后续接入 RTAB-Map localization 或 AMCL，而不能靠
 IMU 推断地图中的绝对位置。
+三维位姿还需现场核对 `/visual_odom_raw.pose.covariance`；视觉 z/roll/pitch 缺少有效方差时
+保护节点会将它们标为高不确定度，不能仅凭 `/odom` 中有六个数值就认定六轴速度可信。
 
 完整双目入口会覆盖 `chassis_controller.publish_odometry=false`，禁止旧底盘积分同时发布
 `/odom` 和 `odom -> base_link`；真实轮侧反馈应通过 `/wheel/odom` 进入 EKF。单独运行旧控制
@@ -455,7 +519,7 @@ GY95T 开始发布滤波数据前还会静止估计约 2 秒
 | `stereo_odometry.yaml` | 双目视觉里程计参数 |
 | `rtabmap_mapping.yaml` | RTAB-Map 在线建图参数 |
 | `mapping_snapshot.yaml` | 二维地图和三维点云快照参数 |
-| `state_estimation.yaml` | 视觉、IMU 和四轮反馈里程计的二维 EKF 参数 |
+| `state_estimation.yaml` | 视觉、IMU 和四轮反馈里程计的三维 EKF 参数 |
 | `nav2.yaml` | Nav2 控制器、规划器、代价地图和行为树参数 |
 | `stereo_robot.yaml` | 在线双目及独立 SegFormer 语义层的 Nav2 覆盖参数 |
 | `controllers.yaml` | ros2_control 管理器以及轮子、转向和关节控制器参数 |

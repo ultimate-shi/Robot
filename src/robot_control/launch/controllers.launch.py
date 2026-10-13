@@ -25,6 +25,9 @@ def generate_launch_description():
     default_servo_calibration = os.path.join(
         get_package_share_directory('robot_hardware'),
         'config', 'servo_calibration.yaml')
+    default_wheel_calibration = os.path.join(
+        get_package_share_directory('robot_hardware'),
+        'config', 'wheel_calibration.yaml')
     log_level = LaunchConfiguration('log_level')
     hardware_arguments = [
         'device_candidates', 'serial_timeout_ms', 'inter_command_delay_ms',
@@ -37,6 +40,8 @@ def generate_launch_description():
             ' hardware_plugin:=', LaunchConfiguration('hardware_plugin'),
             ' servo_calibration_file:=',
             LaunchConfiguration('servo_calibration_file'),
+            ' wheel_calibration_file:=',
+            LaunchConfiguration('wheel_calibration_file'),
         ] + [item for name in hardware_arguments
              for item in (' ' + name + ':=', LaunchConfiguration(name))]),
         value_type=str)}
@@ -53,6 +58,9 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'servo_calibration_file', default_value=default_servo_calibration,
             description='实机六路舵机标定参数 YAML 文件路径'),
+        DeclareLaunchArgument(
+            'wheel_calibration_file', default_value=default_wheel_calibration,
+            description='实机四轮轴映射、方向和 D 模式曲线 YAML 文件路径'),
         DeclareLaunchArgument(
             'device_candidates', default_value='/dev/ttyACM0,/dev/ttyACM1,/dev/ttyACM2',
             description='候选串口设备，逗号分隔；插件按身份响应匹配 DMC0/DMC1/SE2'),

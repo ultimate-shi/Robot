@@ -2,11 +2,11 @@
 <!-- 使用方法：修改横拼图拆分、标定加载、QoS 或高带宽图像路径前先阅读本文件。 -->
 # robot_stereo_components 功能包
 
-## 职责与归属
+## 职责与边界
 
 `robot_stereo_components` 提供 `stereo_splitter_cpp`，将 UVC 横向拼接图拆成左右图像并发布匹配的 CameraInfo。包内没有独立 launch/config，由 `robot_perception/stereo_camera.launch.py` 传入话题、左右顺序、标定 URL 和限频参数。
 
-本包与 `robot_perception` 一起归 `perception_owner` 管理。Python splitter 作为调试回退，默认链路使用本 C++ 节点。
+本包与 `robot_perception` 共同组成双目和感知链。Python splitter 作为调试回退，默认链路使用本 C++ 节点。
 
 ## 接口和行为
 

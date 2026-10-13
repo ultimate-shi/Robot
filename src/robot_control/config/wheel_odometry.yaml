@@ -18,4 +18,3 @@ four_wheel_odometry:
     irls_iterations: 5  # 鲁棒加权最小二乘最大迭代次数
     velocity_variance: 0.02  # vx、vy 协方差初值，单位 (m/s)^2
     yaw_rate_variance: 0.03  # yaw_rate 协方差初值，单位 (rad/s)^2
-    wheel_velocity_sign: [1.0, 1.0, 1.0, 1.0]  # 左前、右前、左后、右后轮速方向符号

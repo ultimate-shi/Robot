@@ -1,8 +1,12 @@
-# 使用方法：由 state_estimation.launch.py 加载，约束视觉里程计最小协方差。
+# 使用方法：由 state_estimation.launch.py 加载；平面零方差提升到下限，三维未知方差标为高不确定度。
 odometry_covariance_guard:
   ros__parameters:
-    input_topic: /visual_odom_raw
-    output_topic: /visual_odom
-    x_variance_floor: 0.02
-    y_variance_floor: 0.02
-    yaw_variance_floor: 0.03
+    input_topic: /visual_odom_raw  # 原始双目视觉里程计输入
+    output_topic: /visual_odom  # 供 EKF 融合的视觉里程计输出
+    x_variance_floor: 0.02  # x 位姿方差下限，单位 m²
+    y_variance_floor: 0.02  # y 位姿方差下限，单位 m²
+    z_variance_floor: 0.1  # z 位姿方差下限，单位 m²
+    roll_variance_floor: 0.1  # roll 位姿方差下限，单位 rad²
+    pitch_variance_floor: 0.1  # pitch 位姿方差下限，单位 rad²
+    yaw_variance_floor: 0.03  # yaw 位姿方差下限，单位 rad²
+    invalid_variance: 1000000.0  # NaN、无穷、负方差及 z/roll/pitch 零方差的高不确定度替代值

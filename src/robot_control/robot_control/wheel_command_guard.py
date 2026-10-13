@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""使用方法：置于底盘运动学与轮速控制器之间；可加载实测轮速曲线并保持超时停车。"""
+"""使用方法：置于底盘运动学与轮速控制器之间，仅保持命令超时停车。"""
 
 import math
 import time
@@ -8,9 +8,6 @@ import rclpy
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from std_msgs.msg import Empty, Float64MultiArray
-
-from robot_control.wheel_curve_model import WHEEL_NAMES, DIRECTIONS, WheelCurveModel
-
 
 class WheelCommandGuard(Node):
     """让普通 JointGroupVelocityController 具备独立于上游进程的命令超时."""
@@ -22,14 +19,7 @@ class WheelCommandGuard(Node):
         self.declare_parameter('heartbeat_topic', '/hardware/command_heartbeat')
         self.declare_parameter('command_timeout', 0.5)
         self.declare_parameter('publish_rate', 20.0)
-        self.declare_parameter('max_wheel_command_rad_s', 12.0)
-        self.declare_parameter('wheel_calibration.enabled', False)
-        self.declare_parameter('wheel_calibration.max_compensation_ratio', 2.0)
-        for wheel in WHEEL_NAMES:
-            for direction in DIRECTIONS:
-                prefix = f'wheel_calibration.{wheel}.{direction}'
-                self.declare_parameter(f'{prefix}.commands', [-1.0])
-                self.declare_parameter(f'{prefix}.measured', [-1.0])
+        self.declare_parameter('max_wheel_command_rad_s', 1.8)
         self.input_topic = str(self.get_parameter('input_topic').value)
         self.output_topic = str(self.get_parameter('output_topic').value)
         self.timeout = float(self.get_parameter('command_timeout').value)
@@ -41,19 +31,6 @@ class WheelCommandGuard(Node):
             raise ValueError('发布频率必须为正且有限')
         if not math.isfinite(self.maximum) or self.maximum <= 0:
             raise ValueError('最大轮速命令必须为正且有限')
-        self.calibration = None
-        if bool(self.get_parameter('wheel_calibration.enabled').value):
-            curves = {}
-            for wheel in WHEEL_NAMES:
-                curves[wheel] = {}
-                for direction in DIRECTIONS:
-                    prefix = f'wheel_calibration.{wheel}.{direction}'
-                    curves[wheel][direction] = (
-                        self.get_parameter(f'{prefix}.commands').value,
-                        self.get_parameter(f'{prefix}.measured').value)
-            self.calibration = WheelCurveModel(
-                curves, self.maximum,
-                self.get_parameter('wheel_calibration.max_compensation_ratio').value)
         self.latest = [0.0] * 4
         self.last_message = None
         self.publisher = self.create_publisher(
@@ -84,8 +61,6 @@ class WheelCommandGuard(Node):
         output = [0.0] * 4
         if fresh:
             for index, target in enumerate(self.latest):
-                if self.calibration is not None:
-                    target = self.calibration.compensate(WHEEL_NAMES[index], target)
                 output[index] = max(-self.maximum, min(self.maximum, target))
         self.publisher.publish(Float64MultiArray(data=output))
         self.heartbeat.publish(Empty())

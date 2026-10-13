@@ -4,17 +4,17 @@
 
 ## 职责与边界
 
-`robot_navigation` 负责视觉里程计与协方差保护、多源 EKF、RTAB-Map、地图快照、Nav2、人工目标、物体停靠/跟随/探索的路径预演与确认，以及离线 PLY 地图发布。本包归 `navigation_owner` 管理。
+`robot_navigation` 负责视觉里程计与协方差保护、多源 EKF、RTAB-Map、地图快照、Nav2、人工目标、物体停靠/跟随/探索的路径预演与确认，以及离线 PLY 地图发布。
 
 任务规划只产生预览和经确认的导航目标，实际运动交给 Nav2 和控制安全链。
 
 ## 节点、launch 和配置
 
-- 节点：`mapping_snapshot_manager`、`publish_ply`、`goal_manager`、`mission_planner`（兼容别名 `brain_mission`）、`odometry_covariance_guard_node`。
+- 节点：`mapping_snapshot_manager`、`publish_ply`、`goal_manager`、`mission_planner`（兼容别名 `brain_mission`）、`odometry_covariance_guard_node`、`magnetic_map_initializer`。
 - `stereo_odometry.launch.py`：输出 `/visual_odom_raw`，不发布 TF。
-- `state_estimation.launch.py`：融合 `/visual_odom`、`/sensors/imu/data`、`/wheel/odom`，输出 `/odom` 和 `odom -> base_link`。
+- `state_estimation.launch.py`：实机三维 EKF 融合视觉三维位姿、IMU roll/pitch 与三轴角速度、轮侧平面速度，输出 `/odom` 和 `odom -> base_link`；视觉新轴无效协方差不得被当作高可信测量。没有独立三维传感源的虚拟模式通过 `two_d_mode_override:=true` 保持二维约束。
 - `rtabmap_mapping.launch.py`：输出 `/map`、`/mapping/cloud_map` 和 `map -> odom`。
-- `nav2.launch.py`：启动完整 Nav2 栈；速度经 `/cmd_vel_nav_raw`、`/cmd_vel_nav_smoothed` 进入控制包。
+- `nav2.launch.py`：启动完整 Nav2 栈；静态地图可显式选择经校准地磁姿态初始化 `map -> odom` 航向，在线建图仍由 RTAB-Map 独占该 TF；速度经 `/cmd_vel_nav_raw`、`/cmd_vel_nav_smoothed` 进入控制包。
 - `stereo_mapping.launch.py` 组合真实双目建图；`robot.launch.py`、`stereo_robot.launch.py` 是转发到 `robot_main` 的兼容入口。
 - 各链路参数位于 `config/` 的同名 YAML，地图快照是运行产物，不应提交。
 

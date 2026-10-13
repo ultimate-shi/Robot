@@ -16,13 +16,6 @@
 - `scripts/`、`docker/`、`docs/`：运行脚本、Jazzy ARM64 容器和专项文档。
 - `README.md`：当前使用方法；`progress.md`：按日期记录开发过程。
 
-## 多 Agent 协作
-
-- 复杂任务由 `system_coordinator` 负责拆分、指定文件所有者、汇总结果和最终验证；不要让多个 Agent 同时修改同一文件。
-- 按包调用项目级专业 Agent：`brain_owner` 负责 `robot_brain`；`perception_owner` 负责 `robot_perception`、`robot_stereo_components`；`navigation_owner` 负责 `robot_navigation`；`control_hardware_owner` 负责 `robot_control`、`robot_hardware`；`platform_integration_owner` 负责 `robot_interfaces`、`robot_description`、`robot_main`。
-- 跨包故障应优先并行做只读排查，再由协调 Agent 按接口边界分配写入任务。消息、服务、Action、TF 或统一 launch 的改动必须通知 `platform_integration_owner` 复核。
-- Agent 的项目配置位于 `.codex/agents/`，详细分工、协作流程和调用示例见 `docs/multi_agent_workflow.md`；包级事实以 `docs/packages/` 和当前代码为准。
-
 ## 开发约定
 
 - 代码注释和修改说明使用中文；保持现有 ROS 话题、服务、Action、TF 和可执行入口兼容，确需变更时同步说明影响。

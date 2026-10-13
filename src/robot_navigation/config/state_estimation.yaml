@@ -1,9 +1,9 @@
-# 使用方法：由 state_estimation.launch.py 加载，统一融合视觉、IMU 和四轮反馈里程计。
+# 使用方法：由 state_estimation.launch.py 加载；实机以视觉三维位姿、IMU 姿态/角速度和轮侧平面速度估计 /odom。
 ekf_filter_node:
   ros__parameters:
     frequency: 30.0  # EKF 输出频率，单位 Hz
     sensor_timeout: 0.2  # 输入超过该时间未更新时只执行预测，单位 s
-    two_d_mode: true  # 小车建图只估计平面位置、航向和平面速度
+    two_d_mode: false  # 保留底盘升降、俯仰、侧倾与三轴角速度；缺测维度由 EKF 预测且不视为可信测量
     publish_tf: true  # EKF 是 odom 到 base_link 的唯一 TF 发布者
     publish_acceleration: false  # 当前不输出未经可靠约束的线加速度状态
     print_diagnostics: true  # 向 /diagnostics 发布输入和配置问题
@@ -14,35 +14,36 @@ ekf_filter_node:
     transform_time_offset: 0.0  # 不人为前移 TF 时间戳
     transform_timeout: 0.1  # 等待传感器外参 TF 的最长时间，单位 s
 
-    odom0: /visual_odom  # RTAB stereo_odometry 的纯视觉输出
-    odom0_config: [true, true, false,
-                   false, false, true,
+    odom0: /visual_odom  # RTAB stereo_odometry 的三维视觉位姿输出
+    odom0_config: [true, true, true,
+                   true, true, true,
                    false, false, false,
                    false, false, false,
-                   false, false, false]  # 只融合视觉 x、y、yaw，避免重复使用同源速度
+                   false, false, false]  # 融合视觉三维位姿，不重复使用同源速度
     odom0_queue_size: 10  # 视觉消息输入队列深度
     odom0_differential: false  # /visual_odom 已是连续 odom 位姿
     odom0_relative: false  # 保留视觉里程计自身的启动原点
     odom0_pose_rejection_threshold: 3.0  # 拒绝过大的视觉位姿创新
 
-    imu0: /sensors/imu/data  # 无磁 Madgwick 输出
+    imu0: /sensors/imu/data  # 无磁 Madgwick 输出；地磁航向须完成校准和地图轴对齐后另行接入
     imu0_config: [false, false, false,
+                  true, true, false,
                   false, false, false,
-                  false, false, false,
-                  false, false, true,
-                  false, false, false]  # 首版只融合陀螺仪 yaw 角速度
+                  true, true, true,
+                  false, false, false]  # 融合重力约束的 roll/pitch 与三轴角速度；IMU 不提供线速度
     imu0_queue_size: 100  # IMU 高频消息队列深度
     imu0_differential: false  # 角速度本身不是姿态差分量
-    imu0_relative: false  # 当前未融合绝对姿态
-    imu0_remove_gravitational_acceleration: false  # 当前不融合线加速度
-    imu0_twist_rejection_threshold: 2.0  # 拒绝异常角速度创新
+    imu0_relative: false  # roll/pitch 使用重力参考，不用启动姿态作为零点
+    imu0_remove_gravitational_acceleration: false  # 暂不融合线加速度，避免高度和速度无约束积分漂移
+    imu0_twist_rejection_threshold: 2.0  # Jazzy ros_filter.cpp 实际读取此参数；用于拒绝 IMU 角速度异常创新
+    imu0_pose_rejection_threshold: 3.0  # 拒绝与当前姿态预测严重冲突的 IMU roll/pitch
 
-    odom1: /wheel/odom  # 四轮实际转角、轮速和编码器融合输出
+    odom1: /wheel/odom  # 四轮实际转角、轮速和编码器的平面速度输出
     odom1_config: [false, false, false,
                    false, false, false,
                    true, true, false,
                    false, false, true,
-                   false, false, false]  # 轮侧只融合 vx、vy、yaw_rate
+                   false, false, false]  # 轮侧只测 vx、vy、yaw_rate；不得把 vz、roll/pitch_rate 的默认零值当测量
     odom1_queue_size: 20  # 轮式里程计输入队列深度
     odom1_differential: false  # 输入使用瞬时 twist，不对积分位姿求差分
     odom1_relative: false  # 当前不融合轮式绝对位姿

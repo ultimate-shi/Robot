@@ -38,6 +38,10 @@ def generate_launch_description():
                               description='已有地图初始 Y，单位米'),
         DeclareLaunchArgument('initial_yaw', default_value='0.0',
                               description='已有地图初始偏航角，单位弧度'),
+        DeclareLaunchArgument('initial_yaw_source', default_value='manual',
+                              description='已有地图初始航向来源：manual 或 magnetic'),
+        DeclareLaunchArgument('magnetic_east_yaw_in_map', default_value='',
+                              description='磁 ENU 东轴在 map 中的偏航角；磁模式必填，单位弧度'),
         DeclareLaunchArgument(
             'nav2_params_file',
             default_value=os.path.join(nav_share, 'config', 'nav2.yaml'),
@@ -106,6 +110,7 @@ def generate_launch_description():
             'map_yaml_file', 'video_device', 'camera_config_file', 'use_imu',
             'wait_imu_to_init', 'require_head_feedback', 'imu_device',
             'use_wheel_odometry', 'initial_x', 'initial_y', 'initial_yaw',
+            'initial_yaw_source', 'magnetic_east_yaw_in_map',
             'nav2_params_file', 'nav2_overrides_file', 'controller_config_file',
             'controller_manager_config_file', 'left_calibration_file',
             'right_calibration_file', 'publish_compressed',
