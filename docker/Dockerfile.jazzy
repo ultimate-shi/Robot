@@ -54,6 +54,8 @@ RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" \
         ros-jazzy-pointcloud-to-laserscan \
         ros-jazzy-robot-state-publisher \
         ros-jazzy-robot-localization \
+        ros-jazzy-rosbag2-py \
+        ros-jazzy-rosbag2-storage-mcap \
         ros-jazzy-rtabmap-odom \
         ros-jazzy-rtabmap-slam \
         ros-jazzy-rtabmap-util \
@@ -65,7 +67,7 @@ RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" \
         v4l-utils \
     && python3 -m pip install --break-system-packages --no-cache-dir \
         --index-url "${PYPI_MIRROR}" \
-        plyfile==1.1.3 fastapi==0.116.1 uvicorn==0.35.0 \
+        plyfile==1.1.3 fastapi==0.116.1 uvicorn==0.35.0 mcap==1.3.1 \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace

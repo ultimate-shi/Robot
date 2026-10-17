@@ -39,6 +39,31 @@ def test_goto_object_requires_only_label():
         'task': 'goto_object', 'label': '杯子'}
 
 
+def test_qwen_health_reads_inference_state_from_web_gateway(monkeypatch):
+    """统一入口自身可用时，也必须识别推理离线。"""
+    class Response:
+        def __init__(self, payload):
+            self.payload = payload
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def read(self):
+            return json.dumps(self.payload).encode()
+
+    module = __import__('robot_brain.qwen_client', fromlist=['urlopen'])
+    payload = {'state': 'ok', 'inference': {'state': 'ok', 'llm_ready': True}}
+    monkeypatch.setattr(module, 'urlopen', lambda *_args, **_kwargs: Response(payload))
+    client = QwenClient('http://127.0.0.1:9100')
+    assert client.health()['llm_ready'] is True
+    payload['inference'] = {'state': 'unavailable'}
+    with pytest.raises(RuntimeError, match='推理服务不可用'):
+        client.health()
+
+
 @pytest.mark.parametrize('payload', [
     {'answer': '绕过确认', 'action': {
         'name': 'goto_object', 'arguments': {'label': '杯子', 'x': 1.0}}},

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 使用方法：bash scripts/inference/start_yolo_gateway.sh；常驻启动 YOLO、纯文本 Qwen 和 9100 网关。
+# 使用方法：bash scripts/inference/start_yolo_gateway.sh；常驻启动 YOLO、纯文本 Qwen 和本机推理 Socket。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -50,8 +50,8 @@ echo "RKNN NPU 驱动：${RKNPU_DRIVER_VERSION}"
   echo "错误：缺少 OpenCV、NumPy 或 RKNNLite2。" >&2
   exit 1
 }
-"${PYTHON_BIN}" -c 'import fastapi, uvicorn' 2>/dev/null || {
-  echo "错误：缺少 FastAPI/uvicorn。" >&2
+"${PYTHON_BIN}" -c 'import fastapi, uvicorn, yaml' 2>/dev/null || {
+  echo "错误：缺少 FastAPI、uvicorn 或 PyYAML。" >&2
   exit 1
 }
 
@@ -123,13 +123,12 @@ else
   unset ROBOT_SEGMENTER_PLUGIN
   echo "警告：SegFormer 模型不存在，YOLO 正常启动，导航语义分割将降级：${SEGFORMER_MODEL}" >&2
 fi
-export ROBOT_INFERENCE_HOST="${ROBOT_INFERENCE_HOST:-127.0.0.1}"
-export ROBOT_INFERENCE_PORT="${ROBOT_INFERENCE_PORT:-9100}"
+export ROBOT_WEB_CONFIG="${ROBOT_WEB_CONFIG:-${REPO_DIR}/src/robot_web/config/web.yaml}"
 export ROBOT_LLM_MODEL="${ROBOT_LLM_MODEL:-qwen2.5-3b-instruct-w8a8-rk3588}"
 export ROBOT_LLM_MAX_TOKENS="${ROBOT_LLM_MAX_TOKENS:-96}"
 
 echo "YOLO 模型：${ROBOT_YOLO_MODEL}"
 echo "SegFormer 模型：${ROBOT_SEGFORMER_MODEL:-未配置}"
 echo "Qwen 文本服务：${ROBOT_LLM_ENDPOINT:-本地常驻服务}"
-echo "推理网关：http://${ROBOT_INFERENCE_HOST}:${ROBOT_INFERENCE_PORT}"
+echo "推理服务通过本机 Socket 接入 9100 网页入口。"
 "${PYTHON_BIN}" "${SCRIPT_DIR}/brain_inference_server.py"

@@ -1,0 +1,198 @@
+<!-- 使用方法：启动 9100 网页入口后访问 http://127.0.0.1:9100/log/ 查询历史 MCAP 日志。 -->
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>机器人日志</title>
+  <style>
+    :root { font-family: system-ui, sans-serif; color: #18212f; background: #f2f5f8; }
+    body { margin: 0; }
+    header { background: #172d43; color: white; padding: 20px 5vw; }
+    h1 { margin: 0; font-size: 24px; }
+    header p { margin: 6px 0 0; color: #cddae7; }
+    main { max-width: 1360px; margin: auto; padding: 24px 5vw; }
+    .panel { background: white; border: 1px solid #dde4eb; border-radius: 12px; padding: 20px; margin-bottom: 18px; box-shadow: 0 3px 14px #1c37500b; }
+    .filter-panel { position: sticky; top: 0; z-index: 10; max-height: calc(100vh - 16px); overflow-y: auto; }
+    .fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+    label { font-size: 13px; font-weight: 650; display: grid; gap: 5px; }
+    input, select { width: 100%; box-sizing: border-box; padding: 10px; border: 1px solid #c9d5df; border-radius: 7px; font: inherit; background: white; }
+    button { border: 0; border-radius: 7px; background: #17657b; color: white; padding: 10px 16px; font: inherit; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: default; }
+    .actions { display: flex; align-items: center; gap: 12px; margin-top: 16px; flex-wrap: wrap; }
+    .pagination { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+    .muted { color: #607589; font-size: 13px; }
+    .error { color: #a42626; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { text-align: left; padding: 10px; border-bottom: 1px solid #e5eaf0; vertical-align: top; }
+    th { font-size: 12px; color: #607589; }
+    td { font-size: 13px; }
+    td.summary { max-width: 500px; overflow-wrap: anywhere; }
+    .link { background: transparent; color: #17657b; padding: 0; }
+    .scroll { overflow-x: auto; }
+    .details { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 55vh; overflow: auto; background: #f5f7f9; padding: 12px; border-radius: 7px; }
+    dialog { width: min(760px, calc(100vw - 40px)); max-height: 85vh; box-sizing: border-box; border: 0; border-radius: 12px; padding: 24px; box-shadow: 0 20px 60px #101c3580; }
+    dialog::backdrop { background: #14223599; }
+    .dialog-head { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+    .dialog-head h2 { margin: 0; }
+    @media (max-width: 800px) { table { min-width: 760px; } }
+    @media (max-width: 600px) {
+      .filter-panel { padding: 12px; }
+      .fields { grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); }
+      .pagination { margin-left: 0; }
+    }
+  </style>
+</head>
+<body>
+  <header><h1>机器人日志</h1><p>查询已完成的录制；大消息请下载 MCAP，在 Foxglove 中回放。</p></header>
+  <main>
+    <section class="panel filter-panel">
+      <form id="filters">
+        <div class="fields">
+          <label>开始时间<input name="start" type="datetime-local"></label>
+          <label>结束时间<input name="end" type="datetime-local"></label>
+          <label>Topic<input name="topic"></label>
+          <label>Service<input name="service"></label>
+          <label>Action<input name="action"></label>
+          <label>关键词<input name="keyword"></label>
+          <label>每页条数<select name="page_size"><option>100</option><option>200</option><option>500</option><option>1000</option></select></label>
+        </div>
+        <div class="actions">
+          <button type="submit">查询</button>
+          <span id="status" class="muted"></span>
+          <div class="pagination">
+            <button id="previous" type="button" disabled>上一页</button>
+            <span id="page-info" class="muted">第 1 页</span>
+            <button id="next" type="button" disabled>下一页</button>
+          </div>
+        </div>
+      </form>
+    </section>
+    <section class="panel">
+      <div class="scroll"><table>
+        <thead><tr><th>时间</th><th>类别</th><th>名称</th><th>节点</th><th>内容</th><th></th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table></div>
+    </section>
+  </main>
+  <dialog id="detail">
+    <div class="dialog-head"><h2>消息详情</h2><button id="close-detail" type="button">关闭</button></div>
+    <div id="detail-body"></div>
+  </dialog>
+  <script>
+    const form = document.querySelector('#filters');
+    const rows = document.querySelector('#rows');
+    const status = document.querySelector('#status');
+    const previous = document.querySelector('#previous');
+    const next = document.querySelector('#next');
+    const pageInfo = document.querySelector('#page-info');
+    const detail = document.querySelector('#detail');
+    let currentPage = 0;
+    let cursors = [null];
+    let params = new URLSearchParams();
+
+    function localDateTime(date) {
+      return new Date(date.getTime() - date.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+    }
+    const now = new Date();
+    form.elements.end.value = localDateTime(now);
+    form.elements.start.value = localDateTime(new Date(now.getTime() - 3600000));
+
+    function timeNs(value) { return value ? String(BigInt(new Date(value).getTime()) * 1000000n) : null; }
+    function formatTime(ns) { return new Date(Number(ns) / 1e6).toLocaleString('zh-CN', {hour12: false}); }
+    function cell(tr, value, className = '') {
+      const td = document.createElement('td');
+      td.textContent = value;
+      td.className = className;
+      tr.append(td);
+      return td;
+    }
+    function readFilters() {
+      const values = new FormData(form);
+      params = new URLSearchParams();
+      for (const name of ['topic', 'service', 'action', 'keyword']) {
+        const value = String(values.get(name)).trim();
+        if (value) params.set(name, value);
+      }
+      for (const [field, key] of [['start', 'start_ns'], ['end', 'end_ns']]) {
+        const value = timeNs(values.get(field));
+        if (value) params.set(key, value);
+      }
+      params.set('page_size', String(values.get('page_size')));
+    }
+    async function load(pageIndex) {
+      const query = new URLSearchParams(params);
+      query.set('cursor_mode', 'true');
+      const cursor = cursors[pageIndex];
+      if (cursor) {
+        query.set('before_id', cursor.before_id);
+        query.set('before_ts_ns', cursor.before_ts_ns);
+      }
+      status.textContent = '查询中…';
+      status.className = 'muted';
+      previous.disabled = true;
+      next.disabled = true;
+      try {
+        const response = await fetch('./api/logs?' + query);
+        const data = await response.json();
+        if (!response.ok) throw Error(data.detail || response.statusText);
+        rows.replaceChildren();
+        for (const item of data.items) {
+          const tr = document.createElement('tr');
+          cell(tr, formatTime(item.ts_ns));
+          cell(tr, item.category);
+          cell(tr, item.name);
+          cell(tr, item.node || '—');
+          cell(tr, item.summary, 'summary');
+          const td = cell(tr, '');
+          const button = document.createElement('button');
+          button.className = 'link';
+          button.textContent = '详情';
+          button.onclick = () => showDetail(item.id);
+          td.append(button);
+          rows.append(tr);
+        }
+        currentPage = pageIndex;
+        cursors = cursors.slice(0, pageIndex + 1);
+        if (data.next_cursor) cursors.push(data.next_cursor);
+        pageInfo.textContent = '第 ' + (currentPage + 1) + ' 页';
+        previous.disabled = currentPage === 0;
+        next.disabled = !data.next_cursor;
+        status.textContent = '本页 ' + data.items.length + ' 条';
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = 'error';
+      }
+    }
+    async function showDetail(id) {
+      try {
+        const response = await fetch('./api/logs/' + id);
+        const data = await response.json();
+        if (!response.ok) throw Error(data.detail || response.statusText);
+        const body = document.querySelector('#detail-body');
+        body.replaceChildren();
+        const meta = document.createElement('p');
+        meta.textContent = formatTime(data.ts_ns) + ' · ' + data.category + ' · ' + data.name + ' · ' + data.type_name + ' · ' + data.size_bytes + ' B';
+        const pre = document.createElement('pre');
+        pre.className = 'details';
+        pre.textContent = data.payload || data.summary;
+        const link = document.createElement('a');
+        link.href = './api/logs/' + id + '/mcap';
+        link.textContent = '下载所属 MCAP 片段';
+        body.append(meta, pre, link);
+        detail.showModal();
+      } catch (error) {
+        status.textContent = error.message;
+        status.className = 'error';
+      }
+    }
+    form.addEventListener('submit', event => { event.preventDefault(); readFilters(); cursors = [null]; load(0); });
+    previous.addEventListener('click', () => load(currentPage - 1));
+    next.addEventListener('click', () => load(currentPage + 1));
+    document.querySelector('#close-detail').addEventListener('click', () => detail.close());
+    detail.addEventListener('click', event => { if (event.target === detail) detail.close(); });
+    readFilters();
+    load(0);
+  </script>
+</body>
+</html>

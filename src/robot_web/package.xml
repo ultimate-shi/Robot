@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<!-- 作用：声明机器人网页入口包；使用方法：colcon build --packages-select robot_web。 -->
+<package format="3">
+  <name>robot_web</name><version>0.1.0</version>
+  <description>机器人 9100 统一网页和 HTTP API 入口</description>
+  <maintainer email="shijiahao@todo.todo">shijiahao</maintainer>
+  <license>TODO: License declaration</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <exec_depend>robot_logging</exec_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

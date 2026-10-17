@@ -59,11 +59,15 @@ class QwenClient:
         self.log_paths = {}
 
     def health(self):
-        """读取推理网关健康状态。"""
+        """读取统一入口中的推理健康状态，兼容旧推理网关响应。"""
         request = Request(self.base_url + '/health', method='GET')
         try:
             with urlopen(request, timeout=2.0) as response:
-                return json.loads(response.read().decode('utf-8'))
+                payload = json.loads(response.read().decode('utf-8'))
+                inference = payload.get('inference', payload)
+                if inference.get('state') == 'unavailable':
+                    raise RuntimeError('推理服务不可用')
+                return inference
         except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
             raise RuntimeError(f'推理网关健康检查失败: {exc}') from exc
 

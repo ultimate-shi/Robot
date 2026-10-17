@@ -9,6 +9,7 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 WORKSPACE_DIR="$(cd -- "${SCRIPT_DIR}/../.." && pwd)"
 CONTAINER_NAME="robot-jazzy"
 IMAGE_NAME="robot-jazzy:local"
+LOG_ROOT="/var/lib/robot-logs"
 
 if ! docker image inspect "${IMAGE_NAME}" >/dev/null 2>&1; then
   echo "未找到 ${IMAGE_NAME}，请先运行 bash scripts/docker/build_jazzy_image.sh" >&2
@@ -28,6 +29,9 @@ if docker container inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
     MISSING_CHASSIS_DEVICES=()
     if ! docker exec "${CONTAINER_NAME}" test -d /host-dev; then
       echo "当前容器尚未启用动态 /host-dev 设备映射，请停止后用本脚本重建。" >&2
+    fi
+    if ! docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' "${CONTAINER_NAME}" | grep -qx "${LOG_ROOT}"; then
+      echo "当前容器未挂载 ${LOG_ROOT}；请停止容器并用本脚本重建，日志采集才能写入宿主机。" >&2
     fi
     for index in {0..8}; do
       device="/dev/ttyACM${index}"
@@ -110,6 +114,16 @@ else
 fi
 
 # 容器仅提供 Jazzy 环境，不执行 colcon build，也不启动任何 ROS launch。
+if [[ ! -d "${LOG_ROOT}/routine" || ! -d "${LOG_ROOT}/incidents" ||
+      ! -d "${LOG_ROOT}/index" ]]; then
+  # Docker bind mount 会创建宿主目录；在一次性容器中将其交给当前宿主用户。
+  docker run --rm \
+    --volume "${LOG_ROOT}:/robot-log-host" \
+    --env "HOST_UID=$(id -u)" --env "HOST_GID=$(id -g)" \
+    --entrypoint bash "${IMAGE_NAME}" -lc '
+      install -d -m 2775 -o "${HOST_UID}" -g "${HOST_GID}" \
+        /robot-log-host /robot-log-host/routine /robot-log-host/incidents /robot-log-host/index'
+fi
 docker run --rm --detach --interactive --tty \
   --name "${CONTAINER_NAME}" \
   --network host \
@@ -119,6 +133,7 @@ docker run --rm --detach --interactive --tty \
   "${IMU_DEVICE_ARGS[@]}" \
   "${CHASSIS_DEVICE_ARGS[@]}" \
   --volume "${WORKSPACE_DIR}:/workspace" \
+  --volume "${LOG_ROOT}:${LOG_ROOT}" \
   --workdir /workspace \
   "${IMAGE_NAME}" \
   bash -lc '

@@ -1,4 +1,12 @@
-// 使用方法：由 controller_manager 通过 robot_hardware_plugins.xml 加载，不单独运行。
+// 文件作用：实现实机 ros2_control SystemInterface，连接 DMC0 腿部控制板、DMC1 轮驱动板和
+// SE2 头部/转向舵机及超声波板。由 controller_manager 根据 robot_hardware_plugins.xml 加载，
+// 不作为独立节点运行；串口路径、超时和标定文件由 hardware.xacro 中的硬件参数传入。
+// 调用顺序：on_init 读取配置和标定 → on_configure 注册 ROS 接口 → on_activate 发现控制板；
+// 激活后 controller_manager 按 update_rate 周期调用 read 读取反馈、write 下发命令，
+// 停用时调用 on_deactivate。定距动作、手动恢复和心跳则由 on_configure 注册的 ROS 回调处理。
+// 协议分工：DMC0 使用 R 查询/设置四腿；DMC1 使用 I 查询编码器、S 查询或设置轮速、
+// D 设置已标定方向的 PWM、T 执行四轮定距；SE2 使用 f 读取六路舵机 ADC 与八路超声波、
+// U 下发六路舵机 PWM。ROS 关节命令是目标值，实际串口输出由每轮反馈和标定计算。
 #include "robot_hardware/robot_serial_system.hpp"
 
 #include <cerrno>
@@ -43,6 +51,7 @@ constexpr auto kStuckDetect = std::chrono::milliseconds(800);
 constexpr auto kStuckCooldown = std::chrono::milliseconds(1000);
 constexpr int kStuckMaxAttempts = 3;
 
+// 关节顺序用于 ROS 数组到板端字段的转换；SE2 六通道顺序还须与标定文件一致。
 const std::array<std::string, 4> kLegJoints = {
   "lap_body_joint_fl", "lap_body_joint_fr", "lap_body_joint_rl", "lap_body_joint_rr"};
 const std::array<std::string, 4> kSteerJoints = {
@@ -73,6 +82,7 @@ std::vector<std::string> split(const std::string & value, char delimiter)
   return result;
 }
 
+// 将角度误差折回 [-180°, 180°]，避免编码器跨越一圈边界时选择错误方向。
 double shortest_angle_deg(double value)
 {
   while (value > 180.0) value -= 360.0;
@@ -81,6 +91,7 @@ double shortest_angle_deg(double value)
 }
 }  // namespace
 
+// 每块板独占一个实例；所有命令和回包都经 transact 串行化，避免并发回调读错响应。
 class SerialPort
 {
 public:
@@ -89,6 +100,7 @@ public:
 
   ~SerialPort() {close_port();}
 
+  // discover_controllers 识别候选设备时调用；配置 115200 8N1、DTR/RTS 和读超时。
   bool open_port()
   {
     close_port();
@@ -127,6 +139,7 @@ public:
     return true;
   }
 
+  // 实例销毁、重新发现或打开失败时关闭设备，释放串口独占句柄。
   void close_port()
   {
     if (fd_ >= 0) {
@@ -135,6 +148,8 @@ public:
     }
   }
 
+  // 所有板端命令共用的同步事务：保证指令间隔，写完整行，等待一条有效换行回包。
+  // 返回 false 表示串口失败、超时或板端错误；调用方还须核对各协议字段及设备身份。
   bool transact(const std::string & command, std::string & response)
   {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -196,7 +211,8 @@ private:
 
 namespace
 {
-// 使用方法：DMC1 单轴 S 命令和停车共用此校验，必须核对 ID、完整字段及板端错误码。
+// write_wheels 的 S 速度分支、stop_wheel_axes 的停车分支调用；index=0..3 对应板端 S4..S7。
+// ticks 是编码器计数/秒，duration_ms 是板端命令有效期；校验 ID、字段和错误码后才算成功。
 bool command_wheel_axis(SerialPort * port, std::size_t index, long ticks, int duration_ms)
 {
   if (!port || index >= 4) return false;
@@ -238,7 +254,8 @@ bool command_wheel_axis(SerialPort * port, std::size_t index, long ticks, int du
   return true;
 }
 
-// 使用方法：仅对已有对应方向 D 曲线的轮位发送 PWM，并核对 D 回包格式。
+// write_wheels 在目标轮速进入已标定 D 曲线时调用；发送 D4..D7 和带符号 PWM。
+// D 模式仅用于已实测的方向，回包命令名必须与目标轴一致。
 bool command_pwm_axis(SerialPort * port, std::size_t index, int pwm, int duration_ms)
 {
   if (!port || index >= 4 || std::abs(pwm) > 100) return false;
@@ -255,7 +272,8 @@ bool command_pwm_axis(SerialPort * port, std::size_t index, int pwm, int duratio
   return static_cast<bool>(parser) && command == "D" + std::to_string(id);
 }
 
-// 使用方法：任何故障或取消路径均尝试停车四轴，单轴失败也继续向其余轴发零速。
+// 停用、故障、T 动作取消或提交结果不明时调用；逐轴发 S 零速。
+// 即使某一轴失败仍继续停车其余三轴，最终合并报告是否全部成功。
 bool stop_wheel_axes(SerialPort * port, int duration_ms)
 {
   bool all_stopped = true;
@@ -267,6 +285,8 @@ bool stop_wheel_axes(SerialPort * port, int duration_ms)
 }
 }  // namespace
 
+// controller_manager 创建插件后首先调用；解析 URDF 硬件参数、建立关节索引、加载六路舵机
+// 与四轮标定。这里只校验静态配置，不打开串口；失败会阻止硬件进入后续生命周期阶段。
 hardware_interface::CallbackReturn RobotSerialSystem::on_init(
   const hardware_interface::HardwareComponentInterfaceParams & params)
 {
@@ -320,6 +340,8 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_init(
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
+// controller_manager 配置硬件时调用一次；在硬件节点上注册状态/诊断/超声波发布器，
+// 以及心跳、定距动作租约订阅和手动恢复、定距动作服务。此时尚未使能实机输出。
 hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
   const rclcpp_lifecycle::State &)
 {
@@ -332,6 +354,7 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
     sonar_pubs_[index] = node->create_publisher<sensor_msgs::msg::Range>(
       kSonarTopics[index], rclcpp::SensorDataQoS());
   }
+  // 轮速保护节点定期发布心跳；write 发现心跳过期会清零轮速，并停止活动的 T 动作。
   heartbeat_sub_ = node->create_subscription<std_msgs::msg::Empty>(
     "/hardware/command_heartbeat", rclcpp::SystemDefaultsQoS(),
     [this](const std_msgs::msg::Empty::SharedPtr) {
@@ -344,6 +367,7 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
       bool stop = false;
       {
         std::lock_guard<std::mutex> lock(encoder_motion_mutex_);
+        // Action 运行期间定期发 true 维持租约；结束发 false 取消 T 并重新武装下一次动作。
         // 停止后仅允许下一次 false -> true 动作重新提交 T，拒绝晚到的旧请求。
         if (message->data && wheel_motion_rearm_ready_) {
           encoder_motion_cancelled_ = false;
@@ -359,6 +383,7 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
         latch_fault("定距动作结束后 DMC1 停车失败");
       }
     });
+  // Action 取消时由 wheel_motion_server 调用，立即向 DMC1 四轴发送零速。
   stop_encoder_motion_service_ = node->create_service<std_srvs::srv::Trigger>(
     "/hardware/stop_encoder_motion",
     [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
@@ -368,6 +393,7 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
       response->message = response->success ? "DMC1 定距动作已停止" : "DMC1 停车失败，硬件已锁定";
       if (!response->success) latch_fault("DMC1 定距动作取消停车失败");
     });
+  // 故障锁定后的人工恢复入口；不在普通控制周期中自动重连控制板。
   recovery_service_ = node->create_service<std_srvs::srv::Trigger>(
     "/hardware/recover",
     [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
@@ -378,6 +404,7 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
         response->message = "硬件未锁定";
         return;
       }
+      // 故障锁定后显式调用才重新发现三块板；发现失败保持锁定，不自动恢复输出。
       if (!discover_controllers()) {
         response->success = false;
         response->message = "控制板仍未全部连接，保持锁定";
@@ -390,6 +417,7 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
       response->success = true;
       response->message = "三块控制板已重新识别，输出已恢复";
     });
+  // wheel_motion_server 的 ExecuteWheelMotion Action 调用此内部服务提交 DMC1 定距目标。
   encoder_motion_service_ =
     node->create_service<robot_interfaces::srv::ExecuteEncoderMotion>(
     "/hardware/execute_encoder_motion",
@@ -402,6 +430,8 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
         response->message = "硬件未使能";
         return;
       }
+      // ExecuteWheelMotion Action 经此服务提交一次四轮相对位移；要求运行租约和心跳均有效。
+      // T 是 DMC1 的绝对编码器目标，执行期间周期 write_wheels 不再发送 S/D 覆盖它。
       std::unique_lock<std::mutex> lock(encoder_motion_mutex_);
       const auto now = std::chrono::steady_clock::now();
       if (encoder_motion_active_ || encoder_motion_cancelled_ || !wheel_motion_lease_active_ ||
@@ -455,6 +485,8 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
+// controller_manager 激活硬件时调用；扫描串口并核验 I/S/R/f 协议，再开放输出。
+// 位置命令先置为当前关节反馈、轮速置零，避免激活瞬间追逐未初始化的旧目标。
 hardware_interface::CallbackReturn RobotSerialSystem::on_activate(
   const rclcpp_lifecycle::State &)
 {
@@ -481,6 +513,7 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_activate(
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
+// controller_manager 停用硬件时调用；先关闭正常写入，再向轮轴发零速、舵机发中性 PWM。
 hardware_interface::CallbackReturn RobotSerialSystem::on_deactivate(
   const rclcpp_lifecycle::State &)
 {
@@ -489,6 +522,7 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_deactivate(
   return hardware_interface::CallbackReturn::SUCCESS;
 }
 
+// 初始化阶段向 ros2_control 暴露 URDF 声明的位置/速度反馈存储地址；read 会更新这些值。
 std::vector<hardware_interface::StateInterface> RobotSerialSystem::export_state_interfaces()
 {
   std::vector<hardware_interface::StateInterface> interfaces;
@@ -504,6 +538,7 @@ std::vector<hardware_interface::StateInterface> RobotSerialSystem::export_state_
   return interfaces;
 }
 
+// 初始化阶段向关节控制器暴露目标位置/速度存储地址；write 从这些值生成板端指令。
 std::vector<hardware_interface::CommandInterface> RobotSerialSystem::export_command_interfaces()
 {
   std::vector<hardware_interface::CommandInterface> interfaces;
@@ -519,6 +554,8 @@ std::vector<hardware_interface::CommandInterface> RobotSerialSystem::export_comm
   return interfaces;
 }
 
+// 激活后的每个 controller_manager 控制周期调用；依次读取 DMC1 轮、DMC0 腿和 SE2 舵机/
+// 超声波，再发布硬件状态。任一查询失败即锁定故障并返回 ERROR，阻止继续正常控制。
 hardware_interface::return_type RobotSerialSystem::read(
   const rclcpp::Time & time, const rclcpp::Duration & period)
 {
@@ -537,6 +574,8 @@ hardware_interface::return_type RobotSerialSystem::read(
   return hardware_interface::return_type::OK;
 }
 
+// 激活后的每个控制周期调用；检查轮速心跳和 T 动作租约，再依次写 DMC1、DMC0、SE2。
+// 心跳过期时把轮速目标置零；定距动作租约失效时主动停车。串口写入失败会锁定硬件。
 hardware_interface::return_type RobotSerialSystem::write(
   const rclcpp::Time &, const rclcpp::Duration & period)
 {
@@ -573,6 +612,8 @@ hardware_interface::return_type RobotSerialSystem::write(
   return hardware_interface::return_type::OK;
 }
 
+// on_activate 和 /hardware/recover 调用；按设备身份发现 DMC0、DMC1、SE2，不能仅靠端口号推断。
+// 三块板齐全后查询 I/S/R/f 验证协议及初始反馈；失败关闭串口并按配置次数重试。
 bool RobotSerialSystem::discover_controllers()
 {
   dmc0_.reset();
@@ -646,6 +687,8 @@ bool RobotSerialSystem::discover_controllers()
   return ok;
 }
 
+// on_init 调用；按 SE2 的 U/f 六通道顺序加载 ADC 零位、方向、角度限位和舵机 PID 参数。
+// 顺序为头部 yaw/pitch、转向 FL/FR/RL/RR；只读配置，不向舵机发送命令。
 bool RobotSerialSystem::load_calibration(const std::string & path)
 {
   try {
@@ -674,7 +717,8 @@ bool RobotSerialSystem::load_calibration(const std::string & path)
   }
 }
 
-// 使用方法：启动时校验四个轮位的标定；换电机只需更新此文件，不修改运动学节点。
+// on_init 调用；校验四轮到 DMC1 轴号的唯一映射、编码器方向和 S/D 模式标定曲线。
+// 换电机或轮位时更新 YAML；启动时拒绝重复或越界轴号，物理接线仍须现场核对。
 bool RobotSerialSystem::load_wheel_calibration(const std::string & path)
 {
   try {
@@ -753,6 +797,8 @@ bool RobotSerialSystem::load_wheel_calibration(const std::string & path)
   }
 }
 
+// discover_controllers 识别 DMC1 后调用；逐轴发送 I4..I7，取得编码器 CPR 和方向。
+// CPR 必须与轮位标定一致；同时清除首次采样标志，避免旧计数形成虚假里程增量。
 bool RobotSerialSystem::query_encoder_parameters()
 {
   encoder_cpr_.fill(0);
@@ -792,6 +838,8 @@ bool RobotSerialSystem::query_encoder_parameters()
   return true;
 }
 
+// read 每周期以及 discover_controllers 首次协议校验时调用；发送无参数 S 查询四轮。
+// 将板端计数/速度换算为 ROS 弧度和弧度每秒，记录电流；T 动作到位时清除活动标志。
 bool RobotSerialSystem::read_wheels()
 {
   std::string response;
@@ -848,6 +896,8 @@ bool RobotSerialSystem::read_wheels()
   return true;
 }
 
+// read 每周期以及启动校验时调用；向 DMC0 发送无参数 R，解析四腿角度、角速度和电流。
+// 板端以百分之一度返回，按各腿安装方向换算为 ROS 弧度反馈。
 bool RobotSerialSystem::read_legs()
 {
   std::string response;
@@ -877,6 +927,8 @@ bool RobotSerialSystem::read_legs()
   return true;
 }
 
+// read 每周期以及启动校验时调用；向 SE2 发送 f，同时取得六路舵机 ADC 和八路超声波。
+// ADC 经标定换算为头部/转向关节角；有效超声波换算为米并低通滤波，异常距离标为无效。
 bool RobotSerialSystem::read_servos_and_sonar(double)
 {
   std::string response;
@@ -916,6 +968,9 @@ bool RobotSerialSystem::read_servos_and_sonar(double)
   return true;
 }
 
+// write 每周期调用；T 定距动作运行时不覆盖板端目标，否则按四轮目标角速度逐轴下发。
+// 有对应方向的实测 PWM 曲线且速度达到其首点时发 D4..D7；其余允许的情况发 S4..S7。
+// 非零命令若既无可用 D 曲线又未验证 S 模式，会在发送任何轮轴命令前整体拒绝。
 bool RobotSerialSystem::write_wheels()
 {
   std::lock_guard<std::mutex> lock(encoder_motion_mutex_);
@@ -952,6 +1007,7 @@ bool RobotSerialSystem::write_wheels()
       std::signbit(angular_velocity) == (wheel.negative_drive_sign < 0);
     if (positive_pwm || negative_pwm)
     {
+      // 曲线插值得到前馈 PWM，再根据最新轮速反馈做有界修正；板端只收到带符号 PWM。
       const auto & speeds = positive_pwm ? wheel.speed : wheel.negative_speed;
       const auto & pwms = positive_pwm ? wheel.pwm : wheel.negative_pwm;
       const int feedback_sign = positive_pwm ? wheel.drive_sign : wheel.negative_drive_sign;
@@ -973,6 +1029,7 @@ bool RobotSerialSystem::write_wheels()
       }
       continue;
     }
+    // S 模式将 ROS rad/s 换成板端编码器计数/秒；零轮速也走此分支以明确停车。
     const double ticks = angular_velocity * wheel.speed_command_sign *
       encoder_cpr_[index] / (2.0 * kPi);
     if (!std::isfinite(ticks) || std::abs(ticks) > 32767.0) return false;
@@ -985,6 +1042,8 @@ bool RobotSerialSystem::write_wheels()
   return true;
 }
 
+// write 每周期调用；把四腿位置目标限制在已验证的 ±30° 内，换成百分之一度后发送 DMC0 R。
+// 这里负责关节目标下发；真实角度在下一轮 read_legs 才更新。
 bool RobotSerialSystem::write_legs()
 {
   // 使用方法：DMC0 实测在约 ±30° 停住，先以保守的软件限位拦截更远目标。
@@ -1004,6 +1063,9 @@ bool RobotSerialSystem::write_legs()
   return dmc0_ && dmc0_->transact(command.str(), response);
 }
 
+// write 每周期调用；读取头部两轴和四个转向轴的位置目标，按 f 查询得到的 ADC 反馈计算 PWM。
+// SE2 每次收到完整的 U 六通道命令，字段顺序为头部 yaw/pitch、转向 FL/FR/RL/RR。
+// 相同目标不会清除 PID 状态；目标变化超过 0.01° 才重置积分和卡滞检测。
 bool RobotSerialSystem::write_servos(double dt)
 {
   auto set_target = [this](std::size_t index, double target) {
@@ -1034,6 +1096,8 @@ bool RobotSerialSystem::write_servos(double dt)
   return se2_ && se2_->transact(command.str(), response);
 }
 
+// on_deactivate 和 latch_fault 调用；先停止 DMC1 定距/轮速，再给 SE2 六路发 1500 中性 PWM。
+// 这是停机输出，不修改 DMC0 腿部位置目标；返回值用于报告停车事务是否全部成功。
 bool RobotSerialSystem::stop_outputs()
 {
   bool ok = stop_encoder_motion();
@@ -1042,6 +1106,8 @@ bool RobotSerialSystem::stop_outputs()
   return ok;
 }
 
+// T 动作取消、租约失效、故障或停用时调用；加锁防止与服务端提交 T 同时操作 DMC1。
+// 撤销动作租约、清零 ROS 轮速目标，并逐轴发送 S 零速，防止 T 在服务结束后继续运动。
 bool RobotSerialSystem::stop_encoder_motion()
 {
   std::lock_guard<std::mutex> lock(encoder_motion_mutex_);
@@ -1054,6 +1120,8 @@ bool RobotSerialSystem::stop_encoder_motion()
   return stopped;
 }
 
+// read/write 或控制板回调遇到不可继续控制的错误时调用；关闭正常输出并尝试停车。
+// 错误保持锁定，只有显式调用 /hardware/recover 且重新发现三块板成功才恢复。
 void RobotSerialSystem::latch_fault(const std::string & reason)
 {
   fault_ = reason;
@@ -1063,6 +1131,8 @@ void RobotSerialSystem::latch_fault(const std::string & reason)
   RCLCPP_ERROR(rclcpp::get_logger("RobotSerialSystem"), "%s；已锁定，需调用 /hardware/recover", reason.c_str());
 }
 
+// read 每周期调用，包含读失败路径；发布 /hardware/chassis_state、八路 /ultrasonic/*
+// 和 /diagnostics。无效测距发 NaN，供下游安全层识别数据缺失。
 void RobotSerialSystem::publish_telemetry(const rclcpp::Time & stamp)
 {
   robot_interfaces::msg::ChassisState state;
@@ -1105,12 +1175,16 @@ void RobotSerialSystem::publish_telemetry(const rclcpp::Time & stamp)
   diagnostics_pub_->publish(diagnostics);
 }
 
+// write_servos 对每个 SE2 通道调用；根据目标角和最近一次 f 反馈计算板端 PWM。
+// 误差进入停止死区时输出 1500；卡滞时暂时冷却并限制重试；其余情况执行带限幅的 PID。
+// index=0/1 为头部，2..5 为转向；参数来自 servo_calibration.yaml。
 int RobotSerialSystem::servo_pwm(std::size_t index, double dt)
 {
   auto & servo = servos_[index];
   const double bounded_target = std::clamp(servo.target, servo.minimum, servo.maximum);
   if (std::abs(bounded_target - servo.target) > 1e-9) servo.target = bounded_target;
   double error = shortest_angle_deg(servo.target - servo.current);
+  // 目标附近不继续追逐 ADC 抖动；返回中性 PWM，同时清除积分和卡滞状态。
   if (std::abs(error) < kPidDeadzoneDeg + servo.brake_deadzone) {
     servo.integral = 0.0;
     servo.last_error = 0.0;
@@ -1119,6 +1193,7 @@ int RobotSerialSystem::servo_pwm(std::size_t index, double dt)
     return kServoNeutral;
   }
   const auto now = std::chrono::steady_clock::now();
+  // 大误差却无足够位移时先冷却，再有限次数重试；超过次数保持中性输出。
   if (servo.stuck_state == 2 || servo.stuck_state == 3) {
     if (std::abs(error) < kStuckErrorDeg) {
       servo.stuck_state = 0;
@@ -1156,6 +1231,7 @@ int RobotSerialSystem::servo_pwm(std::size_t index, double dt)
     servo.stuck_state = 0;
     servo.stuck_attempts = 0;
   }
+  // 仅在接近目标时积累积分，防止远距离误差导致积分饱和。
   if (std::abs(error) < kIntegralSeparationDeg) {
     servo.integral = std::clamp(
       servo.integral + error * dt, -kIntegralMaximum, kIntegralMaximum);
@@ -1177,6 +1253,8 @@ int RobotSerialSystem::servo_pwm(std::size_t index, double dt)
   return pwm;
 }
 
+// read_servos_and_sonar 对每路 ADC 调用；先扣零位并处理一圈回绕，再按安装方向换算角度。
+// 首帧直接初始化，其后以最短角差平滑反馈，最后按机械范围裁剪并转成 ROS 弧度。
 double RobotSerialSystem::adc_to_radians(std::size_t index, int adc)
 {
   auto & servo = servos_[index];
@@ -1195,6 +1273,7 @@ double RobotSerialSystem::adc_to_radians(std::size_t index, int adc)
   return servo.current * kDegToRad;
 }
 
+// 初始化校验及所有读写路径按关节名查数组下标；缺少 URDF 关节时抛错，避免静默错位。
 std::size_t RobotSerialSystem::joint(const std::string & name) const
 {
   const auto iterator = joint_index_.find(name);

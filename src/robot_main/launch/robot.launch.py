@@ -242,6 +242,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'log_level', default_value=str(defaults['log_level']),
             description='整车各 ROS 节点日志级别'),
+        DeclareLaunchArgument(
+            'start_logging', default_value='true',
+            description='是否随整车启动 MCAP 日常采集与异常录制管理器'),
+        DeclareLaunchArgument(
+            'logging_config_file', default_value='',
+            description='日志参数 YAML 路径；留空使用 robot_logging 的默认配置'),
     ]
 
     def compose(context):
@@ -360,6 +366,13 @@ def generate_launch_description():
                     'magnetic_east_yaw_in_map'),
                 'log_level': log_level})),
         ]
+        if LaunchConfiguration('start_logging').perform(context).lower() == 'true':
+            logging_share = get_package_share_directory('robot_logging')
+            logging_config = LaunchConfiguration('logging_config_file').perform(context)
+            common.insert(1, include('robot_logging', 'logging.launch.py', {
+                'mode': mode,
+                'config_file': logging_config or os.path.join(
+                    logging_share, 'config', 'logging.yaml')}))
         if mode == 'virtual':
             common.extend([
                 include('robot_navigation', 'ply_map.launch.py', {

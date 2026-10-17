@@ -1,0 +1,27 @@
+# 使用方法：robot_logging/logging.launch.py 读取；迁移 SSD 时只改根目录的挂载点。
+logging:
+  root: /var/lib/robot-logs
+  require_mount: true  # 容器必须看到独立 bind mount，避免误写 Docker 层
+  max_total_bytes: 5000000000
+  min_free_bytes: 5000000000
+  retention_days: 7
+  segment_bytes: 268435456
+  segment_seconds: 900
+  incident_seconds: 10
+  incident_max_bytes: 2000000000
+  incident_cooldown_seconds: 60
+  index_max_message_bytes: 2048
+  index_max_bytes: 1500000000
+  poll_seconds: 2
+  # 常规采集按类型排除大消息；地图和代价地图也可能很大。
+  routine_excluded_types:
+    - sensor_msgs/msg/Image
+    - sensor_msgs/msg/CompressedImage
+    - theora_image_transport/msg/Packet
+    - sensor_msgs/msg/PointCloud2
+    - stereo_msgs/msg/DisparityImage
+    - nav_msgs/msg/OccupancyGrid
+    - nav2_msgs/msg/Costmap
+    - nav2_msgs/msg/CostmapUpdate
+    - rtabmap_msgs/msg/MapData
+  routine_excluded_regex: '/(map_updates|costmap|mapData|cloud_map)(/|$)|^/controller_manager/(statistics|introspection_data)/full$'

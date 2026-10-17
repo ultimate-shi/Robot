@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""使用方法：由 start_yolo_gateway.sh 启动纯文本 Qwen 与感知推理网关。
+"""使用方法：由 start_yolo_gateway.sh 启动纯文本 Qwen 与感知推理服务。
 
 本程序串行调度 YOLO 与常驻纯文本 Qwen。
 """
@@ -9,6 +9,8 @@ import base64
 import importlib
 import json
 import os
+from pathlib import Path
+import sys
 import time
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
@@ -16,6 +18,10 @@ from urllib.request import Request, urlopen
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 import uvicorn
+
+WORKSPACE_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(WORKSPACE_ROOT / 'src' / 'robot_web'))
+from robot_web.config import load_config  # noqa: E402
 
 
 class DetectRequest(BaseModel):
@@ -277,7 +283,18 @@ async def chat(request: ChatRequest):
 
 
 if __name__ == '__main__':
-    uvicorn.run(
-        app, host=os.environ.get('ROBOT_INFERENCE_HOST', '127.0.0.1'),
-        port=int(os.environ.get('ROBOT_INFERENCE_PORT', '9100')),
-    )
+    socket_path = load_config()['inference_socket']
+    socket_path.parent.mkdir(parents=True, exist_ok=True)
+    if socket_path.exists():
+        import socket
+        with socket.socket(socket.AF_UNIX) as probe:
+            try:
+                probe.connect(str(socket_path))
+            except OSError:
+                socket_path.unlink()
+            else:
+                raise RuntimeError(f'推理 Socket 已被占用：{socket_path}')
+    try:
+        uvicorn.run(app, uds=str(socket_path))
+    finally:
+        socket_path.unlink(missing_ok=True)

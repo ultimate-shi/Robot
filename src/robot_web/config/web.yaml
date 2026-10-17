@@ -1,0 +1,9 @@
+# 作用：配置唯一的 9100 网页入口与本机推理 Socket；使用方法：由 robot_web 和推理脚本读取。
+web:
+  host: 0.0.0.0
+  port: 9100
+  inference_socket_name: robot-inference.sock
+  log_config: ../../robot_logging/config/logging.yaml
+  request_timeout_seconds: 60
+  chat_timeout_seconds: 200
+  health_timeout_seconds: 3

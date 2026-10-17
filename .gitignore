@@ -1,6 +1,8 @@
+# 使用方法：忽略构建、运行和安装工具生成的文件，不提交这些产物。
 build/
 install/
 log/
+*.egg-info/
 calibration_output/
 calibration_reports/
 __pycache__/

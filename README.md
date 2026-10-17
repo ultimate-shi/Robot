@@ -20,6 +20,8 @@ Robot/
 │   ├── robot_perception/           # 双目、YOLO、深度、地形和虚拟传感器
 │   ├── robot_navigation/           # RTAB-Map、Nav2、停靠点、跟随和探索预演
 │   ├── robot_control/              # 四轮转向、里程计、速度门控和最终安全层
+│   ├── robot_logging/              # MCAP 采集、索引和只读日志网页
+│   ├── robot_web/                  # 宿主机 9100 统一网页和 HTTP API 入口
 │   ├── robot_description/          # URDF、ros2_control 描述和 mesh
 │   └── robot_stereo_components/    # 高带宽双目处理 C++ 节点
 ├── progress.md                     # 按日期记录开发过程、卡点和踩坑
@@ -35,6 +37,55 @@ Robot/
 依赖方向固定为：`robot_brain` 保留独立决策核心，ROS 任务入口待重新接入；`robot_navigation` 通过类型化消息消费感知结果；`robot_control` 不依赖 Qwen、相机
 或导航实现。Qwen 只能建议 `goto_object`、`follow_person`、`explore`，不能发布 Topic、
 生成坐标或取得控制权。
+
+## MCAP 日志查询
+
+`robot_main/robot.launch.py` 默认以 `start_logging:=true` 启动 `robot_logging` 的日常 MCAP
+录制器、异常监测器和索引器。日常录制小消息、`/rosout` 和已发布的服务事件；图像、点云、
+视差图、Theora 视频包、地图和控制器完整统计等大消息只在异常片段中完整录制。
+ROS 日志达到 ERROR/FATAL 时自动触发，
+也可手动调用：
+
+```bash
+ros2 service call /logging/trigger_incident std_srvs/srv/Trigger '{}'
+```
+
+异常片段从触发时开始录制 10 秒；同一片段内的重复触发合并，结束后冷却 60 秒。
+每个 MCAP 文件在 256 MB 或 15 分钟先到时切片，整车每次启动生成独立会话目录。
+根目录为宿主机和容器共同可见的 `/var/lib/robot-logs/`，其中 `routine/`、
+`incidents/` 和 `index/` 分别保存日常录制、异常录制及 SQLite 查询索引。
+默认总占用上限 5 GB、系统最少留空 5 GB、最长保留 7 天；空间不足时先删除最旧的已完成
+会话，仍不足则拒绝新增录制。当前车载盘容量不能保证所有消息留满 7 天。
+
+首次使用先重建 Jazzy 镜像并用 `scripts/docker/run_jazzy_container.sh` 重建容器，以便安装
+MCAP 依赖并挂载日志目录；旧容器不能在运行中追加挂载。随后安装宿主机 9100 网页入口，
+设置 systemd 用户服务开机自启并清理旧的 8088 独立服务：
+
+```bash
+bash scripts/docker/build_jazzy_image.sh
+bash scripts/docker/run_jazzy_container.sh
+bash scripts/logging/install_log_web.sh
+```
+
+日志网页可从本机 `http://127.0.0.1:9100/log/` 或同一局域网的
+`http://192.168.0.115:9100/log/` 访问，推理 API 保持 `/v1/detect`、`/v1/segment`
+和 `/v1/chat`。`/health` 返回网页入口、日志索引与推理服务各自的状态；推理停止后，
+日志页仍可查询，推理 API 返回 503。入口监听 IPv4 网卡，不按来源 IP 过滤；
+网络能到达 9100 的设备都可访问。推理进程通过
+`$XDG_RUNTIME_DIR/robot-inference.sock` 接入，不占用另一个网页端口。入口参数位于
+`src/robot_web/config/web.yaml`，可通过 `ROBOT_WEB_CONFIG` 指向另一份配置文件；
+日志目录和采集策略参数仍位于 `src/robot_logging/config/logging.yaml`。
+日志网页可以按时间、topic、service、action 和关键词
+筛选；打开页面时默认查询最近 1 小时，每页可选 100、200、500 或 1000 条，
+通过游标式上一页、下一页翻页，不逐页跳过历史消息或每页计算精确总数；
+三字以上的关键词使用 SQLite 全文索引，较短关键词仍可查询。
+点“详情”会弹窗显示小消息并提供 MCAP 下载。
+筛选面板和翻页按钮固定在页面顶部，滚动日志列表时仍可操作；窄屏下可在面板内滚动查看全部筛选项。
+图像与点云用 Foxglove 打开下载的异常片段回放。
+索引只展开原始数据不超过 2 KiB 的消息；较大消息仍完整保存在 MCAP 中。
+service 请求和响应只有在相应 ROS 节点启用标准 introspection 时才会出现，
+MCAP 录制不会自动生成未发布的服务事件。参数集中在
+`src/robot_logging/config/logging.yaml`，更换 SSD 时保持相同挂载路径即可。
 
 关键类型化接口：
 
@@ -501,7 +552,11 @@ GY95T 开始发布滤波数据前还会静止估计约 2 秒
 ./scripts/inference/start_yolo_gateway.sh
 ```
 
-网关在 9100 端口提供检测、分割和纯文本推理接口，使用同一把 NPU 锁串行调度。
+推理进程通过本机 Socket 接入常驻的 9100 网页入口，使用同一把 NPU 锁串行调度。
+启动推理前先运行上述网页入口安装脚本；`systemctl --user status robot-web.service`
+可检查入口状态。后续机器人操作页面使用 `/robot/`，本次尚未创建。
+当前入口没有登录验证；若接入不受信任的网络，应增加身份验证。ROS Topic、Service、Action
+和当前 8765 端口的 Foxglove Bridge 不会自动通过 9100 提供。
 需要外部语言模型时可设置 `ROBOT_LLM_ENDPOINT` 和 `ROBOT_LLM_FALLBACK_ENDPOINT`。
 右目校正图、右目对齐深度和语义结果仍由 `robot_perception` 的 ROS 节点提供；验收采样
 可通过 `acceptance_sampler.launch.py` 独立启动。
