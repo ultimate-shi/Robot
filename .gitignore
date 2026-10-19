@@ -11,3 +11,4 @@ maps/
 acceptance_dataset/
 qwen_logs/
 model/
+.DS_Store
