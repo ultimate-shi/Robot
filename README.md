@@ -21,3 +21,5 @@ source install/setup.bash
 
 STM32 工程可分别用 STM32CubeMX/CubeIDE 或自带的 CMake 配置打开。每个工程的 `build/`
 输出不纳入版本控制。
+SE2（`Sevo_Echo_F103_V2`）固件的六路舵机 PWM 启动值均为 1500 µs；某路收到非中位命令后，
+若 100 ms 内没有新命令，该路自动回到 1500 µs 并持续输出。重新生成 CubeMX 代码时需保留此配置。

@@ -1,5 +1,6 @@
 /*
- * servo.c
+ * tim_servo.c：六路舵机 PWM 初始化、命令更新和 100 ms 超时回中。
+ * 使用方法：启动时调用 init_servo()，周期调用 process_servo()。
  *
  *  Created on: Sep 7, 2025
  *      Author: Luke 1281772125@qq.com
@@ -16,6 +17,7 @@ extern TIM_HandleTypeDef htim2;
 
 #define SERVO_CYCLE_LOW_US	485.0f
 #define SERVO_CYCLE_HIGH_US	2515.0f
+#define SERVO_NEUTRAL_US        1500U
 
 ServoTIM _servo_timers[SERVO_NUMS];					//舵机硬件Timer
 
@@ -41,6 +43,8 @@ int16_t set_servo_timer(uint8_t ch, TIM_HandleTypeDef * tim, uint32_t tim_ch) {
 // 设置舵机的PWM, us = 500 ~ 2500
 void set_servo_pwm(uint16_t ch, uint16_t us) {
 	const ServoTIM *st = &_servo_timers[ch];
+	// 先写入比较值，再启用输出，避免重新开启时发出旧脉宽。
+	__HAL_TIM_SET_COMPARE(st->tim, st->ch, us);
 	if(_servo_status[ch].pwm_us == 0 && us > 0) //若PWM处于关闭状态，则打开
 	{
 		HAL_TIM_PWM_Start(st->tim, st->ch);
@@ -49,7 +53,6 @@ void set_servo_pwm(uint16_t ch, uint16_t us) {
     {
     	HAL_TIM_PWM_Stop(st->tim, st->ch);
     }
-	__HAL_TIM_SET_COMPARE(st->tim, st->ch, us);
     //Save status
     _servo_status[ch].update_ms = millis();
     _servo_status[ch].pwm_us = us;
@@ -72,21 +75,20 @@ int16_t init_servo()
     set_servo_timer(4, &htim2, TIM_CHANNEL_3);
     set_servo_timer(5, &htim2, TIM_CHANNEL_4);
 	
-    //复位舵机
+    // 六路启动即输出中位脉宽。
     for(int16_t i=0; i<SERVO_NUMS; i++) {
     	_servo_status[i].pwm_us = 0;
-        _servo_status[i].update_ms = millis();
-        set_servo_pwm(i, _servo_status[i].pwm_us);
+        set_servo_pwm(i, SERVO_NEUTRAL_US);
     }
     return 0;
 }
 
-//上位机至少要维持10Hz的更新率，否则舵机将会被关闭
+// 上位机超过 100 ms 未更新时，非中位输出回到 1500 us，保持 PWM 开启。
 void process_servo(uint32_t now_ms) {
     for(int16_t i=0; i<SERVO_NUMS; i++) {
-        if(get_servo_pwm(i) > 0 
+        if(_servo_status[i].pwm_us != 0 && _servo_status[i].pwm_us != SERVO_NEUTRAL_US
         && (now_ms - _servo_status[i].update_ms) >= SERVO_UPDATE_INTERVAL) {
-            set_servo_pwm(i, 0);
+            set_servo_pwm(i, SERVO_NEUTRAL_US);
         }
     }
 }
