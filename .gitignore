@@ -12,3 +12,11 @@ acceptance_dataset/
 qwen_logs/
 model/
 .DS_Store
+
+# 根目录仅纳入 ROS 2、STM32、项目说明和本忽略规则。
+/*
+!/ROS2/
+!/STM32/
+!/AGENTS.md
+!/README.md
+!/.gitignore
