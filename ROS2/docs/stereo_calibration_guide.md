@@ -92,7 +92,7 @@ ls -l /dev/stereo_camera
 镜像：
 
 ```bash
-cd /home/radxa/Robot
+cd /home/radxa/Robot/ROS2
 sudo bash scripts/stereo/install_stereo_camera_udev.sh
 # 重新插拔相机并确认 /dev/stereo_camera 存在
 bash scripts/docker/build_jazzy_image.sh
@@ -157,7 +157,7 @@ A3，或把 9×7 格子的统一边长缩小到 25 mm，并按打印后的真实
 例如实际边长为 29.82 mm：
 
 ```bash
-cd /home/radxa/Robot
+cd /home/radxa/Robot/ROS2
 bash scripts/stereo/run_stereo_calibration.sh calibrate 0.02982
 ```
 

@@ -1,20 +1,21 @@
-<!-- 使用方法：所有在 /home/radxa/Robot 内工作的开发者和代理必须遵守本文件。 -->
+<!-- 使用方法：本文件约定适用于 Robot 仓库；ROS 2 工作区位于 ROS2/。 -->
 # Repository Guidelines
 
 ## 项目定位
 
-本仓库是 ROS 2 Jazzy 机器人小车工作区，目标是让实机与仿真共用模型、传感器接口、运动控制和导航链路，逐步形成数字孪生。修改底盘、轮子、头部、传感器、TF、控制参数或地图时，应优先保证与实车结构和坐标关系一致。
+仓库的 ROS 2 Jazzy 机器人小车工作区位于 `ROS2/`，目标是让实机与仿真共用模型、传感器接口、运动控制和导航链路，逐步形成数字孪生；STM32 控制板工程位于仓库根目录 `STM32/`。修改底盘、轮子、头部、传感器、TF、控制参数或地图时，应优先保证与实车结构和坐标关系一致。
 
 当前已具备默认虚拟机器人、双目视觉处理、IMU、RTAB-Map 建图、地图快照、Nav2 导航预演、分级避障，以及 DMC0/DMC1/SE2 实机底盘和 8 路超声波接入。固定在环境中的真实相机数据不得与运动中的虚拟机器人混用。
 
 ## 主要目录
 
-- `src/robot_{brain,perception,navigation,control}/`：按职责拆分的 Python 节点、launch、配置和测试。
-- `src/robot_hardware/`、`src/robot_main/`：实机 ros2_control 插件与整车统一编排入口。
-- `src/robot_interfaces/`、`src/robot_description/`：跨包 ROS 接口与静态机器人模型资源。
-- `src/robot_stereo_components/`：高带宽双目处理 C++ 节点。
-- `scripts/`、`docker/`、`docs/`：运行脚本、Jazzy ARM64 容器和专项文档。
-- `README.md`：当前使用方法；`progress.md`：按日期记录开发过程。
+- `ROS2/src/robot_{brain,perception,navigation,control}/`：按职责拆分的 Python 节点、launch、配置和测试。
+- `ROS2/src/robot_hardware/`、`ROS2/src/robot_main/`：实机 ros2_control 插件与整车统一编排入口。
+- `ROS2/src/robot_interfaces/`、`ROS2/src/robot_description/`：跨包 ROS 接口与静态机器人模型资源。
+- `ROS2/src/robot_stereo_components/`：高带宽双目处理 C++ 节点。
+- `ROS2/scripts/`、`ROS2/docker/`、`ROS2/docs/`：运行脚本、Jazzy ARM64 容器和专项文档。
+- `ROS2/README.md`：ROS 2 使用方法；`ROS2/progress.md`：按日期记录开发过程。
+- `STM32/`：STM32F103 和 STM32F401 控制板工程。
 
 ## 开发约定
 
@@ -30,6 +31,7 @@
 ## 构建与验证
 
 ```bash
+cd ROS2
 colcon build --symlink-install
 source install/setup.bash
 ```
@@ -38,4 +40,4 @@ source install/setup.bash
 
 ## 文档记录
 
-每次修改如果有结构性的变化要同步更新 `README.md` 中受影响的现状或用法，并只编辑 `progress.md` 当天的记录，简要写明：本次修改、验证结果、当前卡点和踩坑；没有卡点或踩坑时明确写“无”。
+每次修改如果有结构性的变化要同步更新根目录 `README.md` 和 `ROS2/README.md` 中受影响的现状或用法，并只编辑 `ROS2/progress.md` 当天的记录，简要写明：本次修改、验证结果、当前卡点和踩坑；没有卡点或踩坑时明确写“无”。
