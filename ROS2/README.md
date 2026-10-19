@@ -136,8 +136,8 @@ DMC0，不经过 `RobotSerialSystem`；参数及单腿用法见
 左前单独低速回直时，现场确认其他轮组也跟着转动。再次架空检查中，左前曾回到约
 −1.5°；单独驱动右前时现场看到头部运动，单独驱动头部左右轴时又看到某个轮组运动，
 具体轮位未能辨认。最终反馈约为左前 −5°、右前 −7°、左后 −105°、右后 −105°、
-头部左右 +73°、俯仰 −38°，不能宣称六路舵机已回中。当时已停止舵机输出；新版 SE2
-固件启动和命令超时后会持续输出 1500 µs，烧录后需重新核对实物状态。四轮驱动
+头部左右 +73°、俯仰 −38°，不能宣称六路舵机已回中。SE2 固件启动和命令超时后均
+关闭舵机 PWM 输出；重新启用时先写入新脉宽。四轮驱动
 速度为零，四腿通过独占 DMC0 串口逐腿回到约 0°。排查 SE2 输出通道、接线及供电
 串动原因前，不继续舵机自动回中或落地自动平衡。完整姿态闭环水平效果尚未验收。
 架空 IMU 姿态方向预检可先启动 `imu.launch.py` 与保持关闭的
@@ -624,10 +624,15 @@ bash scripts/docker/build_jazzy_image.sh
 
 RTAB-Map 会安装 PCL、VTK 等较大依赖，构建前建议至少预留约 8 GB。
 
-日常构建并启动默认虚拟机器人：
+日常构建并启动虚拟机器人：
 
 ```bash
-bash scripts/docker/run_robot_jazzy.sh
+bash scripts/docker/run_jazzy_container.sh
+docker exec -it robot-jazzy bash
+colcon build --symlink-install
+source install/setup.bash
+ros2 launch robot_main robot.launch.py mode:=virtual \
+  map_yaml_file:=/workspace/maps/studyroom/studyroom.yaml
 ```
 
 只启动容器，不自动构建和运行 launch：
@@ -659,9 +664,5 @@ bash scripts/stereo/run_stereo_calibration.sh calibrate 0.030
 
 ## 测试
 
-```bash
-colcon build --symlink-install
-source install/setup.bash
-
-
-更完整但保持精简的开发约定见 `AGENTS.md`。
+完整构建和虚拟模式启动命令见上文。更完整但保持精简的开发约定见
+[`AGENTS.md`](../AGENTS.md)。

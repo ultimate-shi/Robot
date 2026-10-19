@@ -65,17 +65,24 @@ def test_removed_legacy_compositions_are_not_present():
         assert not (launch_directory / filename).exists()
 
 
-def test_each_top_level_config_is_used_by_a_launch():
-    """根 config YAML 应有同名入口，或由组合 launch 显式引用。"""
-    launch_sources = [
+def test_each_top_level_config_has_a_consumer():
+    """根 config YAML 应由 launch 或人工检测脚本引用。"""
+    consumers = [
         path.read_text(encoding='utf-8')
         for path in SOURCE_DIRECTORY.glob('*/launch/*.launch.py')
     ]
+    consumers.extend(
+        path.read_text(encoding='utf-8')
+        for path in SOURCE_DIRECTORY.glob('*/test/*.py')
+    )
+    consumers.extend(
+        path.read_text(encoding='utf-8')
+        for path in SOURCE_DIRECTORY.parent.glob('scripts/**/*.py')
+    )
     for config in sorted(SOURCE_DIRECTORY.glob('*/config/*.yaml')):
         launch = config.parents[1] / 'launch' / f'{config.stem}.launch.py'
-        assert launch.exists() or any(
-            f"'{config.name}'" in source for source in launch_sources
-        ), f'{config} 没有 launch 入口或引用'
+        assert launch.exists() or any(config.name in source for source in consumers), (
+            f'{config} 没有 launch 或脚本入口引用')
 
 
 def test_all_launch_arguments_have_descriptions():
