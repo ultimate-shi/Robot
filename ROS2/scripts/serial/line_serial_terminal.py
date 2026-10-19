@@ -210,6 +210,7 @@ def run_terminal(args: argparse.Namespace) -> int:
                 print(f"[等待 {args.response_timeout:g} 秒后无响应]")
                 continue
             text = response.decode(args.encoding, errors="replace")
+            sys.stdout.write("串口返回：")
             sys.stdout.write(text)
             if not text.endswith(("\n", "\r")):
                 sys.stdout.write("\n")

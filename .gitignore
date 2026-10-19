@@ -15,3 +15,7 @@
 /ROS2/maps/
 /ROS2/model/
 /ROS2/qwen_logs/
+
+# Python 字节码缓存。
+__pycache__/
+*.pyc
