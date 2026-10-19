@@ -5,3 +5,13 @@
 !/AGENTS.md
 !/README.md
 !/.gitignore
+
+# ROS 2 构建产物与本地生成的数据。
+/ROS2/build/
+/ROS2/calibration_output/
+/ROS2/calibration_reports/
+/ROS2/install/
+/ROS2/log/
+/ROS2/maps/
+/ROS2/model/
+/ROS2/qwen_logs/
