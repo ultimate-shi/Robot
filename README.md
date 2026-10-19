@@ -12,6 +12,7 @@ Robot/
 ├── docker/                         # ROS 2 Jazzy ARM64 容器镜像
 ├── docs/                           # 功能包、标定和验收文档
 ├── scripts/                        # 环境安装、镜像构建、相机配置和启动脚本
+├── STM32/                          # STM32F103 与 STM32F401 控制板工程
 ├── src/
 │   ├── robot_interfaces/           # 感知、任务与控制的 msg/srv/action
 │   ├── robot_main/                 # 实机与虚拟模式唯一整车启动入口
@@ -27,6 +28,10 @@ Robot/
 ├── progress.md                     # 按日期记录开发过程、卡点和踩坑
 └── README.md
 ```
+
+STM32 控制板工程独立放在 `STM32/`，包含 `Sevo_Echo_F103_V2` 和
+`motor2_stm32f401rct6_mini` 两个工程。每个工程可单独用 STM32CubeMX/CubeIDE 或其自带
+CMake 配置打开；构建输出保留在各工程的 `build/` 下并由 Git 忽略。
 
 ## 多 Package 架构
 
