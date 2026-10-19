@@ -17,6 +17,7 @@ extern TIM_HandleTypeDef htim2;
 
 #define SERVO_CYCLE_LOW_US	485.0f
 #define SERVO_CYCLE_HIGH_US	2515.0f
+#define SERVO_NEUTRAL_US        1500U
 
 ServoTIM _servo_timers[SERVO_NUMS];					//舵机硬件Timer
 
@@ -74,21 +75,20 @@ int16_t init_servo()
     set_servo_timer(4, &htim2, TIM_CHANNEL_3);
     set_servo_timer(5, &htim2, TIM_CHANNEL_4);
 	
-    // 六路初始化时关闭 PWM 输出。
+    // 六路初始化时输出 1500 us 中位脉宽。
     for(int16_t i=0; i<SERVO_NUMS; i++) {
     	_servo_status[i].pwm_us = 0;
-        _servo_status[i].update_ms = millis();
-        set_servo_pwm(i, 0);
+        set_servo_pwm(i, SERVO_NEUTRAL_US);
     }
     return 0;
 }
 
-// 上位机至少维持 10 Hz 更新率，否则关闭该路 PWM 输出。
+// 上位机超过 100 ms 未更新时，非中位输出回到 1500 us，保持 PWM 开启。
 void process_servo(uint32_t now_ms) {
     for(int16_t i=0; i<SERVO_NUMS; i++) {
-        if(get_servo_pwm(i) > 0
+        if(_servo_status[i].pwm_us != 0 && _servo_status[i].pwm_us != SERVO_NEUTRAL_US
         && (now_ms - _servo_status[i].update_ms) >= SERVO_UPDATE_INTERVAL) {
-            set_servo_pwm(i, 0);
+            set_servo_pwm(i, SERVO_NEUTRAL_US);
         }
     }
 }
