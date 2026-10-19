@@ -40,6 +40,10 @@
       "selected_by": [
         {
           "name": "gnu-tools-for-stm32",
+          "version": "14.3.1+st.2"
+        },
+        {
+          "name": "gnu-tools-for-stm32",
           "version": ">=13.3.1+st.1 <14.3.1+st.99999"
         }
       ]
@@ -49,6 +53,10 @@
       "version": "14.3.1+st.2",
       "platform": "x86_64-darwin",
       "selected_by": [
+        {
+          "name": "gnu-tools-for-stm32",
+          "version": "14.3.1+st.2"
+        },
         {
           "name": "gnu-tools-for-stm32",
           "version": ">=13.3.1+st.1 <14.3.1+st.99999"
@@ -62,6 +70,10 @@
       "selected_by": [
         {
           "name": "gnu-tools-for-stm32",
+          "version": "14.3.1+st.2"
+        },
+        {
+          "name": "gnu-tools-for-stm32",
           "version": ">=13.3.1+st.1 <14.3.1+st.99999"
         }
       ]
@@ -73,6 +85,10 @@
       "selected_by": [
         {
           "name": "gnu-tools-for-stm32",
+          "version": "14.3.1+st.2"
+        },
+        {
+          "name": "gnu-tools-for-stm32",
           "version": ">=13.3.1+st.1 <14.3.1+st.99999"
         }
       ]
@@ -82,6 +98,10 @@
       "version": "1.0.1+st.2",
       "platform": "all",
       "selected_by": [
+        {
+          "name": "gnu-tools-for-stm32-14_3_1-description",
+          "version": "1.0.1+st.2"
+        },
         {
           "name": "gnu-tools-for-stm32-14_3_1-description",
           "version": ">=0.0.1"
@@ -172,6 +192,10 @@
       "selected_by": [
         {
           "name": "st-arm-clang",
+          "version": "21.1.1+st.7"
+        },
+        {
+          "name": "st-arm-clang",
           "version": ">=21.1.1+st.1 <21.1.1+st.99999"
         }
       ]
@@ -181,6 +205,10 @@
       "version": "21.1.1+st.7",
       "platform": "x86_64-darwin",
       "selected_by": [
+        {
+          "name": "st-arm-clang",
+          "version": "21.1.1+st.7"
+        },
         {
           "name": "st-arm-clang",
           "version": ">=21.1.1+st.1 <21.1.1+st.99999"
@@ -194,6 +222,10 @@
       "selected_by": [
         {
           "name": "st-arm-clang",
+          "version": "21.1.1+st.7"
+        },
+        {
+          "name": "st-arm-clang",
           "version": ">=21.1.1+st.1 <21.1.1+st.99999"
         }
       ]
@@ -205,6 +237,10 @@
       "selected_by": [
         {
           "name": "st-arm-clang",
+          "version": "21.1.1+st.7"
+        },
+        {
+          "name": "st-arm-clang",
           "version": ">=21.1.1+st.1 <21.1.1+st.99999"
         }
       ]
@@ -214,6 +250,10 @@
       "version": "1.0.1+st.1",
       "platform": "all",
       "selected_by": [
+        {
+          "name": "st-arm-clang-21_1_1-description",
+          "version": "1.0.1+st.1"
+        },
         {
           "name": "st-arm-clang-21_1_1-description",
           "version": ">=0.0.1"
@@ -236,6 +276,10 @@
       "version": "1.0.0+st.1",
       "platform": "all",
       "selected_by": [
+        {
+          "name": "st-arm-clang-hybrid-21_1_1-description",
+          "version": "1.0.0+st.1"
+        },
         {
           "name": "st-arm-clang-hybrid-21_1_1-description",
           "version": ">=0.0.1"
