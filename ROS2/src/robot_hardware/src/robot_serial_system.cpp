@@ -7,6 +7,7 @@
 // 协议分工：DMC0 使用 R 查询/设置四腿；DMC1 使用 I 查询编码器、S 查询或设置轮速、
 // D 设置已标定方向的 PWM、T 执行四轮定距；SE2 使用 f 读取六路舵机 ADC 与八路超声波、
 // U 下发六路舵机 PWM。ROS 关节命令是目标值，实际串口输出由每轮反馈和标定计算。
+// 每次串口写入同时发布 /hardware/serial_tx，供 MCAP 记录最终板端指令。
 #include "robot_hardware/robot_serial_system.hpp"
 
 #include <cerrno>
@@ -20,6 +21,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <functional>
 #include <iomanip>
 #include <limits>
 #include <sstream>
@@ -95,10 +97,17 @@ double shortest_angle_deg(double value)
 class SerialPort
 {
 public:
+  using TraceCallback = std::function<void(
+      const std::string &, const std::string &, const std::string &,
+      std::size_t, const std::string &, std::int64_t)>;
+
   SerialPort(std::string path, int timeout_ms, int inter_command_delay_ms)
   : path_(std::move(path)), timeout_ms_(timeout_ms), delay_ms_(inter_command_delay_ms) {}
 
   ~SerialPort() {close_port();}
+
+  void set_trace(TraceCallback trace) {trace_ = std::move(trace);}
+  void set_board(std::string board) {board_ = std::move(board);}
 
   // discover_controllers 识别候选设备时调用；配置 115200 8N1、DTR/RTS 和读超时。
   bool open_port()
@@ -160,15 +169,28 @@ public:
     }
     // 与已验收 hw_ctrl/uart_command() 一致，每条命令前丢弃上一次事务的残帧。
     tcflush(fd_, TCIFLUSH);
+    const auto sent_at_ns = std::chrono::duration_cast<std::chrono::nanoseconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
     const char * cursor = command.data();
     std::size_t remaining = command.size();
+    std::size_t bytes_written = 0;
+    const auto report = [&](const std::string & result) {
+        if (trace_) trace_(board_, path_, command, bytes_written, result, sent_at_ns);
+      };
     while (remaining > 0) {
       const ssize_t written = ::write(fd_, cursor, remaining);
-      if (written <= 0) return false;
+      if (written <= 0) {
+        report(bytes_written ? "partial_write" : "write_failed");
+        return false;
+      }
       cursor += written;
+      bytes_written += static_cast<std::size_t>(written);
       remaining -= static_cast<std::size_t>(written);
     }
-    tcdrain(fd_);
+    if (tcdrain(fd_) != 0) {
+      report("drain_failed");
+      return false;
+    }
     response.clear();
     std::string line;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms_);
@@ -177,6 +199,7 @@ public:
       const ssize_t count = ::read(fd_, &byte, 1);
       if (count < 0) {
         if (errno == EAGAIN) continue;
+        report("read_failed");
         return false;
       }
       if (count == 0) continue;
@@ -187,6 +210,7 @@ public:
         {
           response = std::move(line);
           last_transaction_ = std::chrono::steady_clock::now();
+          report(response.front() == '!' ? "board_error" : "response_ok");
           return response.front() != '!';
         }
         line.clear();
@@ -195,6 +219,7 @@ public:
       }
     }
     last_transaction_ = std::chrono::steady_clock::now();
+    report("response_timeout");
     return false;
   }
 
@@ -202,6 +227,8 @@ public:
 
 private:
   std::string path_;
+  std::string board_{"UNIDENTIFIED"};
+  TraceCallback trace_;
   int timeout_ms_{500};
   int delay_ms_{3};
   int fd_{-1};
@@ -348,6 +375,8 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
   auto node = get_node();
   state_pub_ = node->create_publisher<robot_interfaces::msg::ChassisState>(
     "/hardware/chassis_state", rclcpp::SystemDefaultsQoS());
+  serial_tx_pub_ = node->create_publisher<robot_interfaces::msg::SerialCommand>(
+    "/hardware/serial_tx", rclcpp::QoS(rclcpp::KeepLast(1000)).reliable());
   diagnostics_pub_ = node->create_publisher<diagnostic_msgs::msg::DiagnosticArray>(
     "/diagnostics", rclcpp::SystemDefaultsQoS());
   for (std::size_t index = 0; index < sonar_pubs_.size(); ++index) {
@@ -632,6 +661,21 @@ bool RobotSerialSystem::discover_controllers()
       }
       auto port = std::make_unique<SerialPort>(path, serial_timeout_ms_, inter_command_delay_ms_);
       if (!port->open_port()) continue;
+      port->set_trace([publisher = serial_tx_pub_](
+          const std::string & board, const std::string & device,
+          const std::string & command, std::size_t bytes_written,
+          const std::string & result, std::int64_t sent_at_ns)
+        {
+          robot_interfaces::msg::SerialCommand trace;
+          trace.header.stamp.sec = static_cast<std::int32_t>(sent_at_ns / 1000000000LL);
+          trace.header.stamp.nanosec = static_cast<std::uint32_t>(sent_at_ns % 1000000000LL);
+          trace.board = board;
+          trace.device = device;
+          trace.command = command;
+          trace.bytes_written = static_cast<std::uint32_t>(bytes_written);
+          trace.result = result;
+          publisher->publish(trace);
+        });
       std::string response;
       if (!port->transact("$info\n", response)) continue;
       std::stringstream parser(response);
@@ -645,13 +689,16 @@ bool RobotSerialSystem::discover_controllers()
         parser >> count >> first_id;
         if (count != 4 || first_id < 0) continue;
         if (first_id / 4 == 0 && !dmc0_) {
+          port->set_board("DMC0");
           dmc0_ = std::move(port);
           RCLCPP_INFO(rclcpp::get_logger("RobotSerialSystem"), "识别 DMC0: %s", path.c_str());
         } else if (first_id / 4 == 1 && !dmc1_) {
+          port->set_board("DMC1");
           dmc1_ = std::move(port);
           RCLCPP_INFO(rclcpp::get_logger("RobotSerialSystem"), "识别 DMC1: %s", path.c_str());
         }
       } else if (model == "SE2" && !se2_) {
+        port->set_board("SE2");
         se2_ = std::move(port);
         RCLCPP_INFO(rclcpp::get_logger("RobotSerialSystem"), "识别 SE2: %s", path.c_str());
       }

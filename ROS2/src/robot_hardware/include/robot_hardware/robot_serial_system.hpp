@@ -15,6 +15,7 @@
 #include "rclcpp/subscription.hpp"
 #include "rclcpp/service.hpp"
 #include "robot_interfaces/msg/chassis_state.hpp"
+#include "robot_interfaces/msg/serial_command.hpp"
 #include "robot_interfaces/srv/execute_encoder_motion.hpp"
 #include "sensor_msgs/msg/range.hpp"
 #include "std_msgs/msg/bool.hpp"
@@ -152,6 +153,7 @@ private:
   std::chrono::steady_clock::time_point last_write_{};
 
   rclcpp::Publisher<robot_interfaces::msg::ChassisState>::SharedPtr state_pub_;
+  rclcpp::Publisher<robot_interfaces::msg::SerialCommand>::SharedPtr serial_tx_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub_;
   std::array<rclcpp::Publisher<sensor_msgs::msg::Range>::SharedPtr, 8> sonar_pubs_;
   rclcpp::Subscription<std_msgs::msg::Empty>::SharedPtr heartbeat_sub_;

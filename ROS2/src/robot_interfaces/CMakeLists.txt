@@ -15,6 +15,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/TerrainState.msg"
   "msg/MissionState.msg"
   "msg/ChassisState.msg"
+  "msg/SerialCommand.msg"
   "msg/BodyBalanceStatus.msg"
   "msg/WheelOdometryStatus.msg"
   "srv/DetectObjects.srv"

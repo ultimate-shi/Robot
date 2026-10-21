@@ -19,6 +19,9 @@ colcon build --symlink-install
 source install/setup.bash
 ```
 
+实机硬件插件在 `/hardware/serial_tx` 发布三块控制板每次实际串口写入及事务结果；
+默认 MCAP 日志采集后可在 9100 端口的 `/log/` 页面按该话题查询。
+
 STM32 工程可分别用 STM32CubeMX/CubeIDE 或自带的 CMake 配置打开。每个工程的 `build/`
 输出不纳入版本控制。
 SE2（`Sevo_Echo_F103_V2`）固件启动时六路舵机 PWM 均输出 1500 µs；某路收到非中位命令后，

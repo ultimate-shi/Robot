@@ -98,6 +98,7 @@ MCAP 录制不会自动生成未发布的服务事件。参数集中在
 - `/mission/state`：类型化任务状态；旧 `/mission/status` JSON 暂时兼容。
 - `/perception/terrain_state`：感知到控制的类型化地形约束。
 - `/hardware/chassis_state`：三块控制板、看门狗、输出锁定和电流状态。
+- `/hardware/serial_tx`：`SerialCommand` 记录 DMC0/DMC1/SE2 每次实际写入的原始指令、字节数与事务结果；默认进入 MCAP，可在 `/log/` 按话题查询。
 - `/wheel/odometry_status`：逐轮残差、权重、疑似故障和动态协方差状态。
 - `/execute_wheel_motion`：先转向后执行四轮定距的 `ExecuteWheelMotion` Action。
 - 手工串口终端：`python3 scripts/serial/line_serial_terminal.py /dev/ttyACM0` 在本地编辑完整命令，按回车后整行发送并显示响应；使用前须停止其他串口进程。

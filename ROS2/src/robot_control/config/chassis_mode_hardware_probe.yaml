@@ -1,0 +1,8 @@
+# 文件作用：配置架空三模式实机探针的时长、停测门槛及安全层输入一致性。
+# 使用方法：test/chassis_mode_hardware_probe.py 默认读取；现场变更通过 --config-file 指定。
+chassis_mode_hardware_probe:
+  duration_s: 10.0  # 每段速度命令持续秒数
+  current_limit_ma: 3200.0  # 任一轮达到此电流立即停测，单位 mA
+  head_drift_limit_deg: 3.0  # 转向期间头部任一轴相对起点的最大允许变化
+  safe_command_absolute_tolerance: 0.005  # 安全层输出与输入差值的最小允许量
+  safe_command_relative_tolerance: 0.10  # 安全层输出与输入差值的相对允许比例

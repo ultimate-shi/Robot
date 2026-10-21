@@ -8,8 +8,12 @@ python3 /workspace/src/robot_control/test/chassis_mode_hardware_probe.py --outpu
 
 import argparse
 import json
+import math
+from pathlib import Path
 import statistics
 import time
+
+import yaml
 
 import rclpy
 from geometry_msgs.msg import Twist
@@ -25,6 +29,7 @@ STEER = [f'{place}_steer_joint' for place in
          ('front_left', 'front_right', 'rear_left', 'rear_right')]
 WHEEL = [f'{place}_wheel_joint' for place in
          ('front_left', 'front_right', 'rear_left', 'rear_right')]
+HEAD = ['head_yaw_joint', 'head_pitch_joint']
 CASES = [
     ('four_ws', 'forward', .08, 0., 0.),
     ('four_ws', 'reverse', -.08, 0., 0.),
@@ -46,7 +51,7 @@ CASES = [
 
 
 class Probe(Node):
-    def __init__(self, current_limit):
+    def __init__(self, current_limit, head_drift_limit_deg):
         super().__init__('chassis_mode_hardware_probe')
         self.publisher = self.create_publisher(Twist, '/cmd_vel_nav_smoothed', 10)
         self.parameter_client = AsyncParameterClient(self, '/chassis_controller')
@@ -58,6 +63,9 @@ class Probe(Node):
                                  self.on_steer_command, 10)
         self.create_subscription(Twist, '/cmd_vel_safe', self.on_safe, 10)
         self.current_limit = current_limit
+        self.head_drift_limit = math.radians(head_drift_limit_deg)
+        self.head = None
+        self.head_baseline = None
         self.hardware = None
         self.joint = None
         self.wheel_command = None
@@ -68,6 +76,12 @@ class Probe(Node):
 
     def on_joint(self, message):
         values = dict(zip(message.name, zip(message.position, message.velocity)))
+        if all(name in values for name in HEAD):
+            self.head = [values[name][0] for name in HEAD]
+            if self.head_baseline is not None and any(
+                    abs(actual - start) > self.head_drift_limit
+                    for actual, start in zip(self.head, self.head_baseline)):
+                self.abort_reason = '头部反馈在底盘测试期间偏移超过门槛'
         if all(name in values for name in STEER + WHEEL):
             self.joint = ([values[name][0] for name in STEER],
                           [values[name][1] for name in WHEEL])
@@ -75,6 +89,7 @@ class Probe(Node):
                 self.samples.append({
                     'time': time.monotonic(),
                     'steer': self.joint[0], 'wheel': self.joint[1],
+                    'head': self.head,
                     'steer_target': self.steer_command,
                     'wheel_target': self.wheel_command,
                     'safe': self.safe,
@@ -127,7 +142,8 @@ class Probe(Node):
         raise RuntimeError(f'无法切换到 {mode} 模式: {future.result() if future.done() else "超时"}')
 
 
-def summarize(samples, start, end):
+def summarize(samples, start, end, command, absolute_tolerance,
+              relative_tolerance):
     steady = [item for item in samples if start + 2. <= item['time'] <= end]
     if not steady:
         return {'pass': False, 'reason': '没有稳态反馈'}
@@ -138,6 +154,10 @@ def summarize(samples, start, end):
     steer = [median('steer', i) for i in range(4)]
     safe = [median('safe', i) if all(item['safe'] is not None for item in steady)
             else None for i in range(3)]
+    safe_command_match = all(
+        value is not None and abs(value - requested) <= max(
+            absolute_tolerance, relative_tolerance * abs(requested))
+        for value, requested in zip(safe, command))
     matched = [abs(actual[i] - target[i]) <= max(.35, .5 * abs(target[i]))
                for i in range(4)]
     steering_matched = [abs(steer[i] - steer_target[i]) <= .12 for i in range(4)]
@@ -154,7 +174,9 @@ def summarize(samples, start, end):
     peak_current = max((max(item['current_ma']) for item in steady
                         if item['current_ma'] is not None), default=None)
     return {
-        'pass': all(matched + steering_matched) and active_seconds >= 5.,
+        'pass': all(matched + steering_matched) and active_seconds >= 5.
+                and safe_command_match,
+        'safe_command_match': safe_command_match,
         'samples': len(steady), 'active_seconds': round(active_seconds, 2),
         'command_active_fraction': round(command_active_fraction, 3),
         'maximum_steer_error_rad': round(maximum_steer_error, 3),
@@ -167,24 +189,33 @@ def summarize(samples, start, end):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--config-file', default=str(
+        Path(__file__).resolve().parents[1] / 'config' /
+        'chassis_mode_hardware_probe.yaml'))
     parser.add_argument('--output', default='/tmp/chassis_probe.json')
-    parser.add_argument('--duration', type=float, default=8.)
-    parser.add_argument('--current-limit-ma', type=float, default=3200.,
+    parser.add_argument('--duration', type=float,
+                        help='覆盖配置文件的单段持续时间，单位秒')
+    parser.add_argument('--current-limit-ma', type=float,
                         help='任一车轮电流达到此值即终止，单位 mA')
     parser.add_argument('--cases', default='', help='逗号分隔的案例名称；默认全部')
     parser.add_argument('--include-samples', action='store_true',
                         help='在报告中保留每帧目标、反馈和电流，便于排查瞬时停轮')
     args = parser.parse_args()
+    with open(args.config_file, encoding='utf-8') as stream:
+        config = yaml.safe_load(stream)['chassis_mode_hardware_probe']
+    duration = args.duration if args.duration is not None else config['duration_s']
+    current_limit = (args.current_limit_ma if args.current_limit_ma is not None
+                     else config['current_limit_ma'])
     selected = set(args.cases.split(',')) if args.cases else None
     rclpy.init()
-    node = Probe(args.current_limit_ma)
+    node = Probe(current_limit, config['head_drift_limit_deg'])
     report = []
     try:
         discovery_deadline = time.monotonic() + 10.
         while (node.hardware is None or node.joint is None) and time.monotonic() < discovery_deadline:
             node.tick(.2)
-        if node.hardware is None or node.joint is None:
-            raise RuntimeError('缺少硬件或四轮关节反馈')
+        if node.hardware is None or node.joint is None or node.head is None:
+            raise RuntimeError('缺少硬件、四轮或头部关节反馈')
         previous_case = None
         for mode, name, vx, vy, wz in CASES:
             if selected is not None and name not in selected and f'{mode}:{name}' not in selected:
@@ -197,10 +228,14 @@ def main():
             if previous_case is None or previous_case[0] != mode:
                 node.set_mode(mode)
             node.samples.clear()
+            node.head_baseline = list(node.head)
             start = time.monotonic()
-            node.tick(args.duration, (vx, vy, wz))
+            node.tick(duration, (vx, vy, wz))
             end = time.monotonic()
-            result = summarize(node.samples, start, end)
+            result = summarize(
+                node.samples, start, end, (vx, vy, wz),
+                config['safe_command_absolute_tolerance'],
+                config['safe_command_relative_tolerance'])
             result.update(mode=mode, name=name, command=[vx, vy, wz])
             if args.include_samples:
                 result['trace'] = list(node.samples)
@@ -208,6 +243,7 @@ def main():
             print(json.dumps({key: value for key, value in result.items()
                               if key != 'trace'}, ensure_ascii=False), flush=True)
             previous_case = (mode, name)
+            node.head_baseline = None
     except Exception as error:
         report.append({'pass': False, 'reason': str(error)})
         print(f'中止: {error}', flush=True)
