@@ -1,6 +1,8 @@
 /*
- * 用途：定义 DMC 电机接线、持久化参数和运行时控制接口。
- * 使用方法：板级接线极性写入 motor_io_t，速度环从该结构读取反馈极性。
+ * motor.h
+ *
+ *  Created on: Jan 24, 2026
+ *      Author: 12817
  */
 
 #ifndef INC_MOTOR_GPIO_H_
@@ -35,7 +37,6 @@ typedef struct motor_io_s {
 	uint16_t pwm_pin_b;
 	uint16_t adc_ch;
 	uint16_t acs712_ch;
-	int8_t speed_feedback_sign; // 0 按旧规则 -encoder_dir；非零为该通道实测的原始速度反馈符号
 } motor_io_t;
 
 typedef struct {

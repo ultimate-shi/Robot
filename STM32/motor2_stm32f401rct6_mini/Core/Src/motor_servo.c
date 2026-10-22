@@ -1,6 +1,8 @@
 /*
- * 用途：实现 DMC 电机位置/速度闭环和板级接线映射。
- * 使用方法：按 motor_io_t 的实测反馈极性计算速度误差；修改接线后须架空复测。
+ * motor.c
+ *
+ *  Created on: Jan 24, 2026
+ *      Author: Luke 1281772125@qq.com
  */
 
 #include <motor_servo.h>
@@ -57,10 +59,10 @@ extern TIM_HandleTypeDef htim5;
 
 
 static motor_io_t _motor_ios[MOTOR_MAX_CHANNELS] = {
-		{ &htim1, GPIOC, Motor1_PWM0_Pin, Motor1_PWM1_Pin, 0, 4, 0 }, // DMC1 轴 4
-		{ &htim2, GPIOC, Motor2_PWM0_Pin, Motor2_PWM1_Pin, 1, 5, 0 }, // DMC1 轴 5
-		{ &htim3, GPIOC, Motor3_PWM0_Pin, Motor3_PWM1_Pin, 2, 6, 0 }, // DMC1 轴 6
-		{ &htim4, GPIOC, Motor4_PWM0_Pin, Motor4_PWM1_Pin, 3, 7, 1 }, // 轴 7 实测 S 正向时原始反馈为正
+		{ &htim1, GPIOC, Motor1_PWM0_Pin, Motor1_PWM1_Pin, 0, 4 },		//LEG_RIGHT_FRONT
+		{ &htim2, GPIOC, Motor2_PWM0_Pin, Motor2_PWM1_Pin, 1, 5 },		//LEG_RIGHT_REAR
+		{ &htim3, GPIOC, Motor3_PWM0_Pin, Motor3_PWM1_Pin, 2, 6 },		//LEG_LEFT_FRONT
+		{ &htim4, GPIOC, Motor4_PWM0_Pin, Motor4_PWM1_Pin, 3, 7 },		//LEG_LEFT_REAR
 };
 
 /*大腿控制器缺省配置：
@@ -751,16 +753,12 @@ static void motor_pid_inc_speed(motor_t *motor, int report)
 	pid_ctl_t *pid = &motor->pid;
 	int rate = 0;
 	int dir = motor->config->encoder_dir;
-	// 轴 7 的原始速度反馈与旧规则相反；若继续相加，速度越高误差越大。
-	int feedback_sign = motor->io->speed_feedback_sign ?
-		motor->io->speed_feedback_sign : -dir;
 
     //计算速度差
-    float err_eps = (motor->target_eps_f - motor->eps_f*feedback_sign)/MOTOR_PID_SPEED_SCALE;
+    float err_eps = (motor->target_eps_f + motor->eps_f*dir)/MOTOR_PID_SPEED_SCALE; // 计算转速误差
     if(report && _debug) {
-		sprintf(pid_log, "T%d-S%d*%d E%hd ",
-			(int)motor->target_eps_f, (int)motor->eps_f, feedback_sign,
-			(int16_t)(err_eps*MOTOR_PID_SPEED_SCALE));
+		sprintf(pid_log, "T%d-S%d*%d E%hd ", 
+			(int)motor->target_eps_f, (int)motor->eps_f, dir, (int16_t)err_eps*MOTOR_PID_SPEED_SCALE);
 		append_motor_log(pid_log);
 	}
 
