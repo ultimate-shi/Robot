@@ -9,3 +9,5 @@ wheel_motion_server:
     feedback_timeout: 0.25
     steering_limit: 1.57  # Action 转向目标的最大绝对角度，单位 rad
     require_encoder_service: true  # 实机 T 服务缺失时拒绝动作，禁止改用轮速回退
+    require_console_arm: false  # 单独运行保持原行为；整车入口显式设为 true
+    console_arm_timeout: 0.5  # 软件停止状态心跳超时后中止定距动作，单位 s

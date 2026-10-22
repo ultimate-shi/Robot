@@ -175,3 +175,40 @@ def test_web_gateway_does_not_filter_client_networks(tmp_path, monkeypatch):
             'X-Forwarded-For': '10.0.0.12'})
         with urlopen(remote, timeout=2) as response:
             assert response.status == 200
+
+
+def test_console_isolated_socket_does_not_change_existing_gateway(tmp_path,
+                                                                   monkeypatch):
+    """控制台离线时原网关仍可用；上线后只转发 /robot/。"""
+    monkeypatch.setenv('XDG_RUNTIME_DIR', str(tmp_path))
+    log_config = tmp_path / 'logging.yaml'
+    log_config.write_text(yaml.safe_dump({'logging': {
+        'root': str(tmp_path / 'logs')}}))
+    console_socket = tmp_path / 'console.sock'
+    web_config = tmp_path / 'web.yaml'
+    web_config.write_text(yaml.safe_dump({'web': {
+        'host': '127.0.0.1', 'port': 9100,
+        'inference_socket_name': 'inference.sock',
+        'console_socket': str(console_socket),
+        'log_config': str(log_config), 'request_timeout_seconds': 2,
+        'chat_timeout_seconds': 2, 'health_timeout_seconds': 1}}))
+    with web_server(web_config) as base:
+        assert get_json(base + '/health')[0] == 200
+        try:
+            get_json(base + '/robot/api/status')
+        except HTTPError as exc:
+            assert exc.code == 503
+        else:
+            raise AssertionError('控制台离线时应返回 503')
+        upstream = UnixHTTPServer(str(console_socket), InferenceHandler)
+        thread = threading.Thread(target=upstream.serve_forever)
+        thread.start()
+        try:
+            status, payload = get_json(base + '/robot/api/status')
+            assert status == 200
+            assert payload['state'] == 'ok'
+            assert get_json(base + '/health')[0] == 200
+        finally:
+            upstream.shutdown()
+            upstream.server_close()
+            thread.join(timeout=5)

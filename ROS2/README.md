@@ -1,4 +1,4 @@
-<!-- 使用方法：先进入仓库的 ROS2/ 目录，再从本文件选择模式构建和启动。 -->
+<!-- 作用：说明 ROS 2 工作区现状与运行方法；使用方法：先进入 ROS2/，再从本文件选择模式构建和启动。 -->
 # Robot ROS 2 Workspace
 
 本目录是机器人小车的 ROS 2 Jazzy 工作区，用于维护实机与虚拟机器人的统一模型、双目视觉、
@@ -23,7 +23,7 @@ Robot/ROS2/
 │   ├── robot_navigation/           # RTAB-Map、Nav2、停靠点、跟随和探索预演
 │   ├── robot_control/              # 四轮转向、里程计、速度门控和最终安全层
 │   ├── robot_logging/              # MCAP 采集、索引和只读日志网页
-│   ├── robot_web/                  # 宿主机 9100 统一网页和 HTTP API 入口
+│   ├── robot_web/                  # 9100 网页入口、ROS 控制台与手动/导航速度仲裁
 │   ├── robot_description/          # URDF、ros2_control 描述和 mesh
 │   └── robot_stereo_components/    # 高带宽双目处理 C++ 节点
 ├── progress.md                     # 按日期记录开发过程、卡点和踩坑
@@ -34,11 +34,44 @@ Robot/ROS2/
 
 工作区按领域拆分，但仍使用同一个 `src/`、`build/` 和 `install/`。所有 Package 统一
 通过根目录 `colcon build --symlink-install` 构建。旧 `robot` 兼容包已经退役，启动和单独
-运行节点时应直接使用对应的领域 Package。
+运行节点时应直接使用对应的领域 Package。全部 11 个功能包的职责与入口见
+[功能包文档索引](docs/packages/README.md)。
 
-依赖方向固定为：`robot_brain` 保留独立决策核心，ROS 任务入口待重新接入；`robot_navigation` 通过类型化消息消费感知结果；`robot_control` 不依赖 Qwen、相机
+依赖方向固定为：`robot_brain` 保留独立决策核心，控制台通过白名单任务适配器调用；`robot_navigation` 通过类型化消息消费感知结果；`robot_control` 不依赖 Qwen、相机
 或导航实现。Qwen 只能建议 `goto_object`、`follow_person`、`explore`，不能发布 Topic、
-生成坐标或取得控制权。
+生成坐标或直接驱动底盘。
+
+## 机器人网页控制台
+
+构建后重启宿主机 `robot-web.service` 以启用 `/robot/` 路由；整车
+`robot_main/robot.launch.py` 会通过 `robot_web/web_console.launch.py` 启动容器内的控制台 ROS 节点。
+宿主机网页网关经工作区忽略目录 `.runtime/robot-console.sock` 与该节点通信，
+不开放第二个网页端口。控制台路径为 `/robot/`、`/robot/status`、`/robot/console`；
+原 `/log/` 保留独立的历史日志查询与 MCAP 下载。
+
+网页手动控制不依赖连接心跳，也不设网页速度上限；多个页面同时操作时，
+以最后到达的速度命令为准。任何页面均可按全局停止；显式停止后须点击
+“解除软件停止”才可再次运动。手动控制可按住页面方向按钮，或开启键盘后使用
+`W/A/S/D`、方向键和空格停车；松键、失焦及运动命令超时会停车。
+页面断开后旧速度不会重放，重新打开可继续手动操作。
+网页的停止是 ROS 软件锁存停车，
+不替代实机物理急停。手动命令超时见
+`src/robot_web/config/web_console.yaml`。
+
+整车链路为网页人工速度 → 控制台 `/cmd_vel_safe` → 底盘，
+Nav2 `/cmd_vel_nav` → 控制台 `/cmd_vel_console` → 避障 `/cmd_vel_nav_safe`
+→ 控制台 `/cmd_vel_safe` → 底盘。手动速度绕过超声波避障，
+底盘运动学、轮速保护和硬件故障保护仍生效。
+首页地图目标和可靠深度物体均先规划、再确认执行；探索和跟随使用地图与目标检测，
+目标丢失时锁定停止。图像、地图、TF 或安全数据过期时页面显示异常并拒绝相应操作。
+虚拟模式默认不接收实机相机或 YOLO；需要视觉仿真时必须在控制台配置中把
+`vision_source` 设为 `virtual` 并映射到真正的虚拟相机和检测话题。
+本机 Qwen 通过已有 `/v1/chat` 提供任务提案，外部 OpenAI 兼容服务可在
+`web_console.yaml` 填写 `external_model_url`、`external_model_name`，令牌通过
+`ROBOT_EXTERNAL_MODEL_TOKEN` 环境变量传入容器；未配置时页面显示“未配置”。
+
+新功能应按仿真、架空、空旷低速、障碍与断网顺序验收。直接启动单包控制台只会
+发布 `/cmd_vel_console`，不会自行启动底盘与避障链；使用整车入口才有完整安全链。
 
 ## MCAP 日志查询
 
@@ -351,12 +384,27 @@ ROS 负向依次为 1.878、1.947、1.930、1.912rad/s；
 方向可由硬件接口反查和有限反馈修正。架空 `/cmd_vel_safe` 测试在 +0.06m/s 稳定段达到四轮
 约 +1.09rad/s，−0.06m/s 时 RR 约比目标低 7.7%。之后改为转向反馈连续确认、误差比例降速和明显偏离停车，安全层也会在复合速度任一分量受阻时整条停车；架空 16 段三模式复测均超过 5 秒有效轮动，峰值轮电流 2664mA（测试停止门槛 3100mA）。装车负载、实际位移与导航闭环尚未验收，暂不用于整车导航。详细步骤、数据和限制见
 [四轮方向标定、PWM 曲线与 ROS 速度验收](docs/wheel_calibration_and_speed_test.md)。
+2026-10-22 独占串口短测 `S7 500 350` 时，右后原始反馈在 0.22 秒已达正向
+448 计数/秒，电流达到 2881 mA 后立即停车，停车后四轮归零。板端速度环按
+`-encoder_dir` 推断反馈符号，轴 7 在这次短测中的反馈与该假设相反，存在正反馈风险。
+按后续要求，STM32 固件保持原样；`wheel_calibration_s7_diagnostic.yaml` 也禁用 S7。
+ROS 轮位的 `encoder_sign`、`speed_command_sign` 和 D 模式方向可独立配置，
+但改变命令方向不能证明 S7 能跟随目标速度。须架空验证正反向目标、反馈、电流和停车，
+闭环验收通过后才可启用该配置的 `speed_mode_enabled`。
+默认配置遇到“速度模式未通过实测”时，整组轮速改为零并在网页首页提示，不再因此锁定整车；
+若零速停车写入失败，或控制板读写、定距动作停车失败，仍锁定输出。
+此前 S7 对约 +0.727rad/s 的目标实测接近 1.9～2.0rad/s，闭环验收前不得用于
+接地驾驶或导航。启动时可指定工作区源文件
+`/workspace/src/robot_hardware/config/wheel_calibration_s7_diagnostic.yaml`；
+当前运行的整车进程需停止并重新启动才能加载新配置。
 串口候选、发现重试、事务/命令超时、轮径、轴距、轮距和腿长以
 `robot_hardware/config/hardware_bringup.yaml` 为统一启动默认值，并由 `robot_main` 同时传给
 硬件插件、运动学、轮速里程计和平衡节点；现场可用同名 launch 参数覆盖。
 旧 `robot_navigation/robot.launch.py` 与 `stereo_robot.launch.py` 仅作为兼容转发入口。
 
-实机模式任一控制板通信失败时立即停止并锁定输出。排除故障后调用：
+实机模式任一控制板通信失败时立即停止并锁定输出；锁定当下会发布故障状态，
+避免控制器停用后网页只拿到旧的正常反馈。首页标题下方显示故障原因、
+硬件锁定或底盘反馈中断；排除故障后调用：
 
 ```bash
 ros2 service call /hardware/recover std_srvs/srv/Trigger '{}'
@@ -546,8 +594,8 @@ GY95T 开始发布滤波数据前还会静止估计约 2 秒
 
 ### 本地推理与任务代码
 
-`robot_brain` 当前保留 Qwen 文字决策、动作白名单、场景与任务状态等 Python 核心代码，
-不提供网页服务或 ROS 启动入口。任务规划器与 Nav2 的正式执行衔接仍需在整体软件阶段完成。
+`robot_brain` 保留 Qwen 文字决策、动作白名单、场景与任务状态等 Python 核心代码；
+网页入口与控制台节点均由 `robot_web` 提供，白名单任务经网页确认后接入 Nav2。
 
 独立推理网关仍供语义感知使用；先准备纯文本 Qwen 模型，再启动网关：
 
@@ -558,7 +606,7 @@ GY95T 开始发布滤波数据前还会静止估计约 2 秒
 
 推理进程通过本机 Socket 接入常驻的 9100 网页入口，使用同一把 NPU 锁串行调度。
 启动推理前先运行上述网页入口安装脚本；`systemctl --user status robot-web.service`
-可检查入口状态。后续机器人操作页面使用 `/robot/`，本次尚未创建。
+可检查入口状态。机器人操作页面使用 `/robot/`。
 当前入口没有登录验证；若接入不受信任的网络，应增加身份验证。ROS Topic、Service、Action
 和当前 8765 端口的 Foxglove Bridge 不会自动通过 9100 提供。
 需要外部语言模型时可设置 `ROBOT_LLM_ENDPOINT` 和 `ROBOT_LLM_FALLBACK_ENDPOINT`。

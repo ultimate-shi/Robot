@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""使用方法：调用 /execute_wheel_motion Action，执行先转向再四轮定距."""
+"""作用：执行安全的先转向再四轮定距 Action；使用方法：调用 /execute_wheel_motion。"""
 
 import math
 import threading
@@ -37,6 +37,8 @@ class WheelMotionServer(Node):
         self.declare_parameter('feedback_timeout', 0.25)
         self.declare_parameter('steering_limit', 1.57)
         self.declare_parameter('require_encoder_service', True)
+        self.declare_parameter('require_console_arm', False)
+        self.declare_parameter('console_arm_timeout', 0.5)
         self.radius = float(self.get_parameter('wheel_radius').value)
         self.virtual_speed = float(self.get_parameter('virtual_speed').value)
         self.distance_tolerance = float(
@@ -50,6 +52,12 @@ class WheelMotionServer(Node):
         self.steering_limit = float(self.get_parameter('steering_limit').value)
         self.require_encoder_service = bool(
             self.get_parameter('require_encoder_service').value)
+        self.require_console_arm = bool(
+            self.get_parameter('require_console_arm').value)
+        self.console_arm_timeout = float(
+            self.get_parameter('console_arm_timeout').value)
+        self.console_stopped = True
+        self.console_stamp = None
         self.steering = None
         self.wheel_position = None
         self.feedback_monotonic = None
@@ -66,6 +74,8 @@ class WheelMotionServer(Node):
             Bool, '/wheel_motion/active', 10)
         self.create_subscription(
             JointState, '/joint_states', self._joint_callback, 20)
+        self.create_subscription(
+            Bool, '/web_console/stop_latched', self._console_callback, 10)
         self.encoder_client = self.create_client(
             ExecuteEncoderMotion, '/hardware/execute_encoder_motion')
         self.stop_encoder_client = self.create_client(
@@ -87,9 +97,19 @@ class WheelMotionServer(Node):
         self.wheel_position = [message.position[index[name]] for name in WHEEL_JOINTS]
         self.feedback_monotonic = time.monotonic()
 
+    def _console_callback(self, message):
+        self.console_stopped = bool(message.data)
+        self.console_stamp = time.monotonic()
+
+    def _console_ready(self):
+        return (not self.require_console_arm or
+                (self.console_stamp is not None and
+                 time.monotonic() - self.console_stamp <= self.console_arm_timeout and
+                 not self.console_stopped))
+
     def _goal_callback(self, request):
         values = list(request.steering_angle_rad) + list(request.distance_m)
-        if (self.goal_active or
+        if (not self._console_ready() or self.goal_active or
                 (self.pending_t_future is not None and
                  not self.pending_t_future.done()) or
                 (self.pending_stop_future is not None and
@@ -161,6 +181,8 @@ class WheelMotionServer(Node):
         self.active_pub.publish(Bool(data=True))
         steering_deadline = time.monotonic() + steering_timeout
         while rclpy.ok():
+            if not self._console_ready():
+                return self._finish(goal_handle, False, '网页软件停止锁或心跳超时')
             if goal_handle.is_cancel_requested:
                 return self._finish(goal_handle, False, '动作已取消', canceled=True)
             self.active_pub.publish(Bool(data=True))
@@ -203,6 +225,8 @@ class WheelMotionServer(Node):
                 return self._finish(goal_handle, False, message)
         motion_deadline = time.monotonic() + motion_timeout
         while rclpy.ok():
+            if not self._console_ready():
+                return self._finish(goal_handle, False, '网页软件停止锁或心跳超时')
             if goal_handle.is_cancel_requested:
                 return self._finish(goal_handle, False, '动作已取消', canceled=True)
             if not self._fresh_feedback() or self.wheel_position is None:

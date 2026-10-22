@@ -22,6 +22,7 @@
 - 订阅 `/hardware/command_heartbeat` 和 `/wheel_motion/active`；T 定距期间任一心跳超时会发 DMC1 停车命令。
 - 服务 `/hardware/recover`、内部 `/hardware/execute_encoder_motion` 和 `/hardware/stop_encoder_motion`。
 - 导出腿、转向、车轮和头部的 ros2_control 命令/状态接口。
+- 未验证的 S 轮速模式会拒绝整组非零轮速并发送停车命令，同时通过 `/hardware/chassis_state.fault` 和 `/diagnostics` 提示；停车写入失败、通信及协议错误仍会锁定输出。锁定时立即发布故障状态，供网页在后续反馈中断时显示最后原因。
 
 ## 验证
 
@@ -35,3 +36,7 @@ git diff --check
 ```
 
 当前 `hardware_bringup.launch.py` 会包含 `robot_control/controllers.launch.py`，但 `package.xml` 尚未声明 `robot_control` 运行依赖；后续依赖整理时应补充并复测。
+
+右后轮的 `encoder_sign`、`speed_command_sign` 和 D 模式驱动方向在轮位 YAML 中配置。
+S7 正负指令均曾超速，当前默认与诊断配置均禁用该模式；修改方向字段后仍须架空
+核对轮胎实际方向、目标速度、原始反馈、电流和停车，不能仅凭符号变化判定闭环通过。

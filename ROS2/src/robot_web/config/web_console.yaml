@@ -1,0 +1,31 @@
+# 作用：配置网页控制台、手动直达底盘和导航过滤话题；使用方法：由 web_console.launch.py 加载。
+web_console:
+  ros__parameters:
+    socket_path: /workspace/.runtime/robot-console.sock
+    mode: virtual
+    vision_source: real  # 虚拟模式默认不读取固定在环境中的实机相机或 YOLO
+    static_map: false
+    nav_input_topic: /cmd_vel_nav
+    safe_input_topic: /cmd_vel_console
+    filtered_nav_topic: /cmd_vel_nav_safe
+    chassis_cmd_topic: /cmd_vel_safe
+    manual_command_timeout: 0.35
+    nav_command_timeout: 0.5
+    update_rate: 20.0
+    map_topic: /map
+    odom_topic: /odom
+    detections_topic: /perception/semantic_detections
+    left_image_topic: /stereo/left/image_rect
+    right_image_topic: /stereo/right/image_rect
+    depth_image_topic: /stereo/depth/image_visual
+    mission_status_topic: /mission/status
+    safety_status_topic: /obstacle_avoidance/status
+    snapshot_service: /mapping/save_snapshot
+    imu_topic: /sensors/imu/data
+    ultrasonic_topics: [/ultrasonic/front_left, /ultrasonic/front_center, /ultrasonic/front_right, /ultrasonic/rear_left, /ultrasonic/rear_center, /ultrasonic/rear_right, /ultrasonic/left, /ultrasonic/right]
+    local_model_url: http://127.0.0.1:9100
+    external_model_url: ''
+    external_model_name: ''
+    external_model_token_env: ROBOT_EXTERNAL_MODEL_TOKEN
+    follow_lost_timeout: 2.0
+    follow_replan_distance: 0.4

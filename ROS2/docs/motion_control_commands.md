@@ -212,6 +212,11 @@ ros2 topic echo /wheel/odometry_status --once
 /cmd_vel_nav_raw -> 平滑 -> 门控 -> 超声波安全层 -> 运动学 -> ros2_control
 ```
 
+使用统一 `robot_main` 整车入口时，门控与超声波安全层之间还经过
+`/cmd_vel_console` 网页控制台仲裁。启动时软件停止锁默认锁定；需在
+`/robot/` 首页取得控制权并显式解除后，Nav2 或人工速度才会被转发。
+单独启动旧 `safety.launch.py` 的测试链路不包含该仲裁节点。
+
 | 字段 | 正值 | 负值 | 单位 |
 |---|---|---|---|
 | `linear.x` | 前进 | 后退 | m/s |

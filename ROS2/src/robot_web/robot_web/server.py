@@ -7,7 +7,7 @@ from pathlib import Path
 import socket
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import JSONResponse, RedirectResponse, Response
 import uvicorn
 
 from robot_logging.web import create_app as create_log_app
@@ -90,6 +90,31 @@ def create_app(config_file=None):
     async def chat(request: Request):
         return await forward('/v1/chat', request,
                              config['chat_timeout_seconds'])
+
+    @app.get('/robot')
+    async def robot_redirect():
+        return RedirectResponse('/robot/')
+
+    @app.api_route('/robot/{path:path}', methods=['GET', 'POST'])
+    async def robot_console(path: str, request: Request):
+        """通过本机 Socket 转发控制台，不开放第二个网页端口。"""
+        if '..' in path.split('/'):
+            return JSONResponse(status_code=404, content={'detail': '路径无效'})
+        target = '/' + path
+        if request.url.query:
+            target += '?' + request.url.query
+        try:
+            status, body, content_type = await asyncio.to_thread(
+                call_inference, config['console_socket'], request.method,
+                target, await request.body(),
+                220 if path == 'api/model/parse' else 20,
+                request.headers.get('content-type', 'application/json'))
+        except (OSError, TimeoutError, HTTPException):
+            return JSONResponse(status_code=503,
+                                content={'detail': '机器人控制台未启动'})
+        return Response(content=body, status_code=status,
+                        headers={'content-type': content_type,
+                                 'cache-control': 'no-store'})
 
     return app
 

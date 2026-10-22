@@ -30,4 +30,8 @@ def load_config(path=None):
     config['request_timeout_seconds'] = float(config['request_timeout_seconds'])
     config['chat_timeout_seconds'] = float(config['chat_timeout_seconds'])
     config['health_timeout_seconds'] = float(config['health_timeout_seconds'])
+    console_socket = Path(config.get('console_socket',
+                                     '../../../.runtime/robot-console.sock'))
+    config['console_socket'] = (console_socket if console_socket.is_absolute()
+                                else config_path.parent / console_socket).resolve()
     return config

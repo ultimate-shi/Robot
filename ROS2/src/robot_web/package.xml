@@ -1,11 +1,20 @@
 <?xml version="1.0"?>
-<!-- 作用：声明机器人网页入口包；使用方法：colcon build --packages-select robot_web。 -->
+<!-- 作用：声明机器人网页入口与 ROS 控制台依赖；使用方法：通过 colcon 构建 robot_web 包。 -->
 <package format="3">
   <name>robot_web</name><version>0.1.0</version>
-  <description>机器人 9100 统一网页和 HTTP API 入口</description>
+  <description>机器人 9100 统一网页、HTTP API 和 ROS 控制台</description>
   <maintainer email="shijiahao@todo.todo">shijiahao</maintainer>
   <license>TODO: License declaration</license>
   <buildtool_depend>ament_python</buildtool_depend>
+  <depend>ament_index_python</depend><depend>launch</depend><depend>launch_ros</depend>
   <exec_depend>robot_logging</exec_depend>
+  <exec_depend>rclpy</exec_depend><exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend><exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>std_msgs</exec_depend><exec_depend>std_srvs</exec_depend>
+  <exec_depend>rcl_interfaces</exec_depend><exec_depend>action_msgs</exec_depend>
+  <exec_depend>nav2_msgs</exec_depend><exec_depend>robot_interfaces</exec_depend>
+  <exec_depend>robot_brain</exec_depend><exec_depend>robot_navigation</exec_depend>
+  <exec_depend>tf2_ros</exec_depend><exec_depend>cv_bridge</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <export><build_type>ament_python</build_type></export>
 </package>

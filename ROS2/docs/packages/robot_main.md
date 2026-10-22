@@ -12,6 +12,8 @@ ros2 launch robot_main robot.launch.py mode:=virtual map_yaml_file:=/path/to/map
 ```
 
 修改组合关系时需要同步复核相关功能包的参数和接口。
+整车会启动 `robot_web` 的控制台 ROS 节点；网页位于 `/robot/`、`/robot/status` 和
+`/robot/console`，历史日志查询位于独立的 `/log/`。
 
 ## 模式组成
 

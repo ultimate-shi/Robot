@@ -1017,7 +1017,7 @@ bool RobotSerialSystem::read_servos_and_sonar(double)
 
 // write 每周期调用；T 定距动作运行时不覆盖板端目标，否则按四轮目标角速度逐轴下发。
 // 有对应方向的实测 PWM 曲线且速度达到其首点时发 D4..D7；其余允许的情况发 S4..S7。
-// 非零命令若既无可用 D 曲线又未验证 S 模式，会在发送任何轮轴命令前整体拒绝。
+// 非零命令若既无可用 D 曲线又未验证 S 模式，整组轮速改为零并提示；停车写入失败仍锁定。
 bool RobotSerialSystem::write_wheels()
 {
   std::lock_guard<std::mutex> lock(encoder_motion_mutex_);
@@ -1036,9 +1036,14 @@ bool RobotSerialSystem::write_wheels()
       std::abs(target) >= wheel.negative_speed.front() &&
       std::signbit(target) == (wheel.negative_drive_sign < 0);
     if (target != 0.0 && !use_pwm && !use_negative_pwm && !wheel.speed_mode_enabled) {
-      RCLCPP_ERROR(rclcpp::get_logger("RobotSerialSystem"),
-        "DMC1 轴 %d 的 S 速度模式未通过实测，拒绝非零关节命令", wheel.axis);
-      return false;
+      const std::string warning = "DMC1 轴 " + std::to_string(wheel.axis) +
+        " 的 S 速度模式未通过实测；本次轮速已拒绝并停车";
+      if (fault_ != warning) {
+        RCLCPP_WARN(rclcpp::get_logger("RobotSerialSystem"), "%s", warning.c_str());
+      }
+      fault_ = warning;
+      for (const auto & name : kWheelJoints) command_velocity_[joint(name)] = 0.0;
+      break;
     }
   }
   for (std::size_t index = 0; index < 4; ++index) {
@@ -1175,6 +1180,8 @@ void RobotSerialSystem::latch_fault(const std::string & reason)
   outputs_enabled_ = false;
   manual_recovery_required_ = true;
   (void)stop_outputs();
+  // write 故障后 controller_manager 可能立刻停用 read；立即发布锁定原因供网页保留。
+  if (state_pub_) publish_telemetry(get_node()->now());
   RCLCPP_ERROR(rclcpp::get_logger("RobotSerialSystem"), "%s；已锁定，需调用 /hardware/recover", reason.c_str());
 }
 
@@ -1215,9 +1222,10 @@ void RobotSerialSystem::publish_telemetry(const rclcpp::Time & stamp)
   diagnostic_msgs::msg::DiagnosticStatus item;
   item.name = "robot_hardware/serial_boards";
   item.hardware_id = "DMC0+DMC1+SE2";
-  item.level = outputs_enabled_ ? diagnostic_msgs::msg::DiagnosticStatus::OK :
-    diagnostic_msgs::msg::DiagnosticStatus::ERROR;
-  item.message = outputs_enabled_ ? "三块控制板正常" : fault_;
+  item.level = !outputs_enabled_ ? diagnostic_msgs::msg::DiagnosticStatus::ERROR :
+    (fault_.empty() ? diagnostic_msgs::msg::DiagnosticStatus::OK :
+    diagnostic_msgs::msg::DiagnosticStatus::WARN);
+  item.message = fault_.empty() ? "三块控制板正常" : fault_;
   diagnostics.status.push_back(item);
   diagnostics_pub_->publish(diagnostics);
 }

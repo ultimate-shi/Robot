@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<!-- 使用方法：ros2 launch robot_main robot.launch.py mode:=real|virtual 启动整车。 -->
+<!-- 作用：声明统一整车编排及网页仲裁依赖；使用方法：ros2 launch robot_main robot.launch.py。 -->
 <package format="3">
   <name>robot_main</name><version>0.1.0</version>
   <description>机器人实机与数字孪生的唯一整车编排入口</description>
@@ -11,5 +11,6 @@
   <exec_depend>robot_hardware</exec_depend><exec_depend>robot_navigation</exec_depend>
   <exec_depend>robot_perception</exec_depend>
   <exec_depend>robot_logging</exec_depend>
+  <exec_depend>robot_web</exec_depend>
   <export><build_type>ament_python</build_type></export>
 </package>

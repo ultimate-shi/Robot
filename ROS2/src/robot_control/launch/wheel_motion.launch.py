@@ -24,11 +24,16 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'require_encoder_service', default_value='true',
             description='是否必须有实机编码器 T 服务；虚拟模式设为 false'),
+        DeclareLaunchArgument(
+            'require_console_arm', default_value='false',
+            description='是否要求网页软件停止锁解除且状态心跳新鲜'),
         Node(
             package='robot_control', executable='wheel_motion_server_node',
             name='wheel_motion_server', parameters=[LaunchConfiguration('config_file'), {
                 'require_encoder_service': ParameterValue(
-                    LaunchConfiguration('require_encoder_service'), value_type=bool)}],
+                    LaunchConfiguration('require_encoder_service'), value_type=bool),
+                'require_console_arm': ParameterValue(
+                    LaunchConfiguration('require_console_arm'), value_type=bool)}],
             arguments=['--ros-args', '--log-level',
                        LaunchConfiguration('log_level')], output='screen'),
     ])

@@ -64,6 +64,12 @@ python3 scripts/serial/wheel_pwm_curve.py --motor "$MOTOR" \
 
 硬件接口会拒绝重复轴号、无效符号和非单调曲线。对于禁用 S 模式的轮位，低于相应曲线首个速度的非零目标会停车并报告故障；高于末点时 PWM 钳在最大实测点，可能达不到目标。更换电机、编码器、减速比或接线后，重新核对对应轮位的这些字段和两条曲线。
 
+`wheel_calibration_s7_diagnostic.yaml` 当前也禁用 S7。2026-10-22 独占串口短测发现
+`S7 500 350` 的原始反馈为正，板端速度环按负向反馈计算，存在正反馈超速风险。
+STM32 固件按后续要求保持原样；ROS 方向字段可在轮位标定中设置，但不能代替
+四轮稳固架空、现场可立即断电条件下的 S7 正反向跟速、电流、停车及方向验收。
+验收前不打开诊断配置的 `speed_mode_enabled`。D7 PWM 曲线维持已测值；接地驾驶和导航仍不使用 S7。
+
 ```bash
 source /opt/ros/jazzy/setup.bash
 colcon build --symlink-install --packages-select robot_hardware

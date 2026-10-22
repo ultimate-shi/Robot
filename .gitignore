@@ -15,6 +15,7 @@
 /ROS2/maps/
 /ROS2/model/
 /ROS2/qwen_logs/
+/ROS2/.runtime/
 
 # Python 字节码缓存。
 __pycache__/

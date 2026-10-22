@@ -7,3 +7,4 @@ web:
   request_timeout_seconds: 60
   chat_timeout_seconds: 200
   health_timeout_seconds: 3
+  console_socket: ../../../.runtime/robot-console.sock

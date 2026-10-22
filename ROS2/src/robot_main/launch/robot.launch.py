@@ -1,4 +1,4 @@
-"""使用方法：ros2 launch robot_main robot.launch.py mode:=real|virtual 启动整车."""
+"""作用：编排实机或仿真整车与网页手动/导航速度仲裁；使用方法：ros2 launch robot_main robot.launch.py mode:=real|virtual。"""
 
 import os
 
@@ -102,6 +102,12 @@ def generate_launch_description():
             'chassis_control_config_file',
             default_value=os.path.join(control_share, 'config', 'chassis_control.yaml'),
             description='底盘运动学与轮速超时保护参数 YAML'),
+        DeclareLaunchArgument(
+            'web_console_config_file',
+            default_value=os.path.join(
+                get_package_share_directory('robot_web'),
+                'config', 'web_console.yaml'),
+            description='网页控制台的速度仲裁、租约与 ROS 数据源参数 YAML'),
         DeclareLaunchArgument(
             'servo_calibration_file',
             default_value=os.path.join(
@@ -243,7 +249,7 @@ def generate_launch_description():
             'log_level', default_value=str(defaults['log_level']),
             description='整车各 ROS 节点日志级别'),
         DeclareLaunchArgument(
-            'start_logging', default_value='true',
+            'start_logging', default_value='false',
             description='是否随整车启动 MCAP 日常采集与异常录制管理器'),
         DeclareLaunchArgument(
             'logging_config_file', default_value='',
@@ -338,6 +344,7 @@ def generate_launch_description():
             delayed(control_delay + 1.6, include(
                 'robot_control', 'wheel_motion.launch.py', {
                     'require_encoder_service': 'true' if mode == 'real' else 'false',
+                    'require_console_arm': 'true',
                     'log_level': log_level})),
             delayed(control_delay + 2.4, include(
                 'robot_control', 'wheel_odometry.launch.py', {
@@ -347,8 +354,14 @@ def generate_launch_description():
                     **geometry_arguments})),
             delayed(control_delay + 3.2, include(
                 'robot_control', 'safety.launch.py', {
-                    'input_topic': '/cmd_vel_nav',
-                    'output_topic': '/cmd_vel_safe',
+                    'input_topic': '/cmd_vel_console',
+                    'output_topic': '/cmd_vel_nav_safe',
+                    'log_level': log_level})),
+            delayed(control_delay + 3.0, include(
+                'robot_web', 'web_console.launch.py', {
+                    'config_file': LaunchConfiguration('web_console_config_file'),
+                    'mode': mode,
+                    'static_map': 'true' if map_yaml else 'false',
                     'log_level': log_level})),
             include('robot_navigation', 'state_estimation.launch.py', {
                 'two_d_mode_override': 'true' if mode == 'virtual' else 'false',
