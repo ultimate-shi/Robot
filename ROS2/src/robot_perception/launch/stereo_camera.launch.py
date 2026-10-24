@@ -27,6 +27,8 @@ def generate_launch_description():
     calibration_dir = os.path.join(
         pkg_share, 'config', 'cameras',
         'usb_camera_01_00_00_640x480')
+    combined_camera_info_url = 'file://' + os.path.join(
+        calibration_dir, 'combined_uncalibrated.yaml')
     calibration_mode = LaunchConfiguration('calibration_mode')
     camera_config = LaunchConfiguration('camera_config')
     video_device = LaunchConfiguration('video_device')
@@ -124,7 +126,8 @@ def generate_launch_description():
             package='usb_cam',
             executable='usb_cam_node_exe',
             name='usb_cam',
-            parameters=[config, {'video_device': device}],
+            parameters=[config, {'video_device': device,
+                                 'camera_info_url': combined_camera_info_url}],
             remappings=[
                 ('image_raw', '/stereo/image_raw'),
                 ('camera_info', '/stereo/combined/camera_info'),

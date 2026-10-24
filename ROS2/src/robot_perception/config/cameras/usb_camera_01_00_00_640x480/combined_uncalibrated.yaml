@@ -1,0 +1,22 @@
+# 作用：为拼接取流设备提供明确的未标定 CameraInfo，避免 usb_cam 查找不存在的默认文件。
+# 使用方法：stereo_camera.launch.py 加载；实际几何信息由左右目各自的标定文件发布。
+image_width: 1280
+image_height: 480
+camera_name: stereo_uvc_combined
+camera_matrix:
+  rows: 3
+  cols: 3
+  data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+distortion_model: plumb_bob
+distortion_coefficients:
+  rows: 1
+  cols: 5
+  data: [0.0, 0.0, 0.0, 0.0, 0.0]
+rectification_matrix:
+  rows: 3
+  cols: 3
+  data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+projection_matrix:
+  rows: 3
+  cols: 4
+  data: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]

@@ -11,13 +11,13 @@
 
 先从 `wheel_calibration.yaml` 查目标轮位的 `axis`、`encoder_sign`、`cpr`，并核对控制板 `$info`、`I<轴号>`、`J<轴号>`、`P<轴号>`。目前轮位和轴的对应关系是 FL→4、FR→5、RL→6、RR→7；更换接线后以实测和更新后的配置为准。`I` 返回的是控制板编码器设置，**不能从 `I` 的方向字段直接推出 ROS `encoder_sign`**。
 
-用小幅、短时的正负 PWM 先做方向检查。记录 `S` 状态中的原始 `tps` 和编码器增量，二者符号应一致；用候选 `encoder_sign` 换算：
+用小幅、短时的正负 PWM 先做方向检查。记录 `D` 状态中的编码器增量，并按相邻采样时间计算速度；用候选 `encoder_sign` 换算：
 
 ```text
-ROS 关节速度 rad/s = 原始 tps × encoder_sign × 2π / 实测 CPR
+ROS 关节速度 rad/s = 编码器增量 × encoder_sign × 2π / (实测 CPR × 采样间隔秒)
 ```
 
-再按 URDF 和车体运动学检查轮胎接地点的实际前进方向：轮胎驱动车身前进时应为 ROS 正速度。仅靠同一编码器的 `tps` 与计数，无法独立识别编码器是否装反。确定物理方向后，才固定 `encoder_sign`。正 PWM 对应的 ROS 方向写入 `drive_sign`（正向为 `+1`、反向为 `-1`）；负 PWM 对应相反方向，写入 `negative_drive_sign`。S 模式另有 `speed_command_sign`，只有实际验证 S 目标与反馈后才能设置并启用。
+再按 URDF 和车体运动学检查轮胎接地点的实际前进方向：轮胎驱动车身前进时应为 ROS 正速度。仅靠同一编码器的 `tps` 与计数，无法独立识别编码器是否装反。确定物理方向后，才固定 `encoder_sign`。正 PWM 对应的 ROS 方向写入 `drive_sign`（正向为 `+1`、反向为 `-1`）；负 PWM 对应相反方向，当前由同一条曲线取负占空比控制。
 
 按该轴已知的机械、电机和驱动能力确定 `--current-stop-ma`。采样工具要求显式传入该值，允许范围为 500～3200 mA；当前统一测试门槛为 3200 mA。先小 PWM、短时确认，再逐步增加；达到阈值、读数矛盾、出现异常声响或振动时停车排查。自动停车不能代替人工急停。
 
@@ -42,7 +42,7 @@ python3 scripts/serial/wheel_pwm_curve.py --motor "$MOTOR" \
   --hold-ms 3000 --renew-ms 400 \
   --output "calibration_reports/wheel/${REPORT_PREFIX}_positive_steady.json"
 
-# 负 PWM：按同样顺序独立采集，勿将正向曲线直接反号套用。
+# 负 PWM：需要进一步提高反向精度时独立采集；当前运行配置按要求共用正向幅值。
 python3 scripts/serial/wheel_pwm_curve.py --motor "$MOTOR" \
   --encoder-sign "$ENCODER_SIGN" --current-stop-ma "$CURRENT_STOP_MA" \
   --values=-10,-20,-30,-40,-50,-60,-70,-80,-90,-100 --duration-ms 1000 \
@@ -56,26 +56,13 @@ python3 scripts/serial/wheel_pwm_curve.py --motor "$MOTOR" \
 
 测试点和阈值应根据现场情况逐步增加，不必一次运行完整的 10～100% 列表。`--values` 接受逗号分隔的非零整数，范围为 −100～100；可从少量低幅点开始，下一次只测未覆盖的点。板端单条命令最长由 `J<轴号>` 决定，脚本单条最多 1000 ms；3 秒稳态通过周期续发实现。每点间停车、到阈值停车、错误时停车。JSON 报告保留全部原始样本和错误，属于本机临时标定数据，不提交仓库。
 
-对每个有效点检查：无 `error`、`mean_tps` 与 `encoder_delta_ticks` 同号、电流未达到阈值、后半段速度较稳定。按 PWM 绝对值递增整理两条曲线；同一方向的速度绝对值应严格递增。若不单调、幅值异常或方向反复变化，先检查机构、驱动和编码器，不应直接写入配置。
+对每个有效点检查：无 `error`、`mean_tps` 与 `encoder_delta_ticks` 同号、电流未达到阈值、后半段速度较稳定。按 PWM 绝对值递增整理曲线；同一方向的速度绝对值应严格递增。若不单调、幅值异常或方向反复变化，先检查机构、驱动和编码器，不应直接写入配置。
 
 ## 3. 更新硬件配置并构建
 
-在目标轮位下写入 `axis`、`encoder_sign`、`cpr`、`drive_sign` 和正 PWM 的 `pwm`/`speed_rad_s`。若已实测负 PWM，设置 `negative_pwm_enabled: true`，写入 `negative_drive_sign`、`negative_pwm`/`negative_speed_rad_s`。数组中 PWM 使用正的**绝对值**，速度也使用正的**绝对值**；方向单独由符号字段表达。`feedback_gain` 和 `max_pwm_correction` 只在 ROS 实测后按该轮位调整。`speed_mode_enabled` 只对已通过 S 模式实测的轴启用；未实测的低速或方向不能靠改标志假设可用。
+在目标轮位下写入 `axis`、`encoder_sign`、`cpr`、`drive_sign` 和正 PWM 的 `pwm`/`speed_rad_s`。数组中 PWM 和速度都使用正的绝对值；反向取相同 PWM 的负数。`feedback_gain` 和 `max_pwm_correction` 按 ROS 实测结果调整。硬件接口会拒绝重复轴号、无效符号和非单调曲线。低于曲线首点时从零点插值，高于末点时钳在末点；两端及反向的实际速度需重新架空确认。
 
-硬件接口会拒绝重复轴号、无效符号和非单调曲线。对于禁用 S 模式的轮位，低于相应曲线首个速度的非零目标会停车并报告故障；高于末点时 PWM 钳在最大实测点，可能达不到目标。更换电机、编码器、减速比或接线后，重新核对对应轮位的这些字段和两条曲线。
-
-`wheel_calibration_s7_diagnostic.yaml` 当前也禁用 S7。2026-10-22 独占串口短测发现
-`S7 500 350` 的原始反馈为正，板端速度环按负向反馈计算，存在正反馈超速风险。
-STM32 固件按后续要求保持原样；ROS 方向字段可在轮位标定中设置，但不能代替
-四轮稳固架空、现场可立即断电条件下的 S7 正反向跟速、电流、停车及方向验收。
-验收前不打开诊断配置的 `speed_mode_enabled`。D7 PWM 曲线维持已测值；接地驾驶和导航仍不使用 S7。
-
-```bash
-source /opt/ros/jazzy/setup.bash
-colcon build --symlink-install --packages-select robot_hardware
-source install/setup.bash
-python3 -m pytest -q src/robot_hardware/test
-```
+旧 S7 诊断轮位文件已删除；标定只维护 `wheel_calibration.yaml`，运行时只发送 D 命令。此前 S7 短测超速记录仅用于故障追溯。全轮 D 模式已完成 ±0.06/0.08/0.1 m/s 六段架空短测，四轮稳态误差 −11.8%～+1.7%，无 S 串口命令；接地负载与长期跟速尚未验收。
 
 ## 4. 经 `/cmd_vel_safe` 验收速度和转向
 

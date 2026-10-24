@@ -26,6 +26,8 @@ def generate_launch_description():
                     LaunchConfiguration('port'), value_type=int),
                 'address': LaunchConfiguration('address'),
                 'asset_uri_allowlist': ['package://robot_description/.*'],
+                'capabilities': ['clientPublish', 'connectionGraph',
+                                 'services', 'assets'],
                 'allow_file_transfer': True,
                 'send_buffer_limit': 10000000,
                 'max_packet_messages': 100,

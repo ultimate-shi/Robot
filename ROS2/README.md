@@ -45,16 +45,21 @@ Robot/ROS2/
 
 构建后重启宿主机 `robot-web.service` 以启用 `/robot/` 路由；整车
 `robot_main/robot.launch.py` 会通过 `robot_web/web_console.launch.py` 启动容器内的控制台 ROS 节点。
+控制台在整车启动的第一阶段上线，状态页单独列出每个关节控制器、DMC0/DMC1/SE2、相机、IMU 和八路超声波。加载已有地图时，若未收到 `/map`，控制台会向地图服务重试请求，并显示当前等待原因。
+相机在线状态按原始 ROS 图像到达时间判断；仅首页有画面请求时编码所选相机的 JPEG，减少启动和状态页查看时的 CPU 负载。
+实机默认先启动底盘控制，再于第 6 秒启动相机链；Nav2 子节点继承 `node_start_interval` 错峰启动，以减少启动阶段的计算峰值。
 宿主机网页网关经工作区忽略目录 `.runtime/robot-console.sock` 与该节点通信，
 不开放第二个网页端口。控制台路径为 `/robot/`、`/robot/status`、`/robot/console`；
 原 `/log/` 保留独立的历史日志查询与 MCAP 下载。
+导航模式的“当前模式控制区”通过 `/robot/api/navigation-status` 每 0.5 秒读取 Nav2 反馈，显示剩余距离、剩余朝向、预计时间、恢复次数和最终结果；安全告警与导航进度分别显示。地图点击目标默认保持选点时的机器人朝向；Nav2 使用同时检查位移和转角的进度检查器，避免目标附近原地转向被误判为无进展。
 
 网页手动控制不依赖连接心跳，也不设网页速度上限；多个页面同时操作时，
 以最后到达的速度命令为准。任何页面均可按全局停止；显式停止后须点击
 “解除软件停止”才可再次运动。手动控制可按住页面方向按钮，或开启键盘后使用
 `W/A/S/D`、方向键和空格停车；松键、失焦及运动命令超时会停车。
+直行默认线速度为 0.06 m/s，低/中/高预设分别为 0.06/0.08/0.1 m/s；右后轮使用已标定 D7 曲线，低速档按架空双向跟速结果选定。
 页面断开后旧速度不会重放，重新打开可继续手动操作。
-网页的停止是 ROS 软件锁存停车，
+当前代码启动时软件停止锁初值为未锁定；需停车锁定时在网页上显式按“停止”。网页的停止是 ROS 软件锁存停车，
 不替代实机物理急停。手动命令超时见
 `src/robot_web/config/web_console.yaml`。
 
@@ -70,8 +75,8 @@ Nav2 `/cmd_vel_nav` → 控制台 `/cmd_vel_console` → 避障 `/cmd_vel_nav_sa
 `web_console.yaml` 填写 `external_model_url`、`external_model_name`，令牌通过
 `ROBOT_EXTERNAL_MODEL_TOKEN` 环境变量传入容器；未配置时页面显示“未配置”。
 
-新功能应按仿真、架空、空旷低速、障碍与断网顺序验收。直接启动单包控制台只会
-发布 `/cmd_vel_console`，不会自行启动底盘与避障链；使用整车入口才有完整安全链。
+新功能应按仿真、架空、空旷低速、障碍与断网顺序验收。直接启动单包控制台也会
+发布 `/cmd_vel_safe`，但不会自行启动底盘与避障链；使用整车入口才有完整安全链。
 
 ## MCAP 日志查询
 
@@ -265,7 +270,7 @@ ros2 service call /mapping/save_snapshot std_srvs/srv/Trigger '{}'
 - `/mission/status`：任务状态。
 - `/mission/cancel`：取消当前任务的 `std_srvs/srv/Trigger` 服务。
 
-后续的人体跟随、物体目标和自主探索，应先在任务层生成导航目标，再交给 Nav2，不直接控制底盘。
+当前网页控制台提供跟随、物体目标和探索入口；这些任务生成或预演导航目标后交给 Nav2，不直接控制底盘。跟随任务的速度参数校验仍需修复，详见[控制台功能包说明](docs/packages/robot_web.md)。
 
 ### safety：安全层
 
@@ -273,17 +278,19 @@ ros2 service call /mapping/save_snapshot std_srvs/srv/Trigger '{}'
 - `obstacle_avoidance.py`：底盘前最后一级安全过滤；无有效量程、量程超时或距离过近时
   限速或停车。
 
-导航预演的速度链：
+整车导航预演的速度链：
 
 ```text
 Nav2
   -> /cmd_vel_nav
-  -> 双目 Collision Monitor
-  -> /cmd_vel_stereo_safe
-  -> 超声波最终安全层
+  -> robot_web /cmd_vel_console
+  -> 超声波安全层 /cmd_vel_nav_safe
+  -> robot_web
   -> /cmd_vel_safe
-  -> 虚拟底盘
+  -> 底盘运动学与 ros2_control
 ```
+
+网页手动速度由控制台直接发布到 `/cmd_vel_safe`；双目障碍点云供 Nav2 代价地图使用，`/stereo/scan` 可用于观察双目障碍距离，当前整车 launch 没有启动独立的双目 Collision Monitor。
 
 ### control：控制层
 
@@ -357,46 +364,38 @@ ros2 launch robot_main robot.launch.py mode:=real
 ros2 launch robot_main robot.launch.py mode:=real map_yaml_file:=/workspace/maps/example/map.yaml
 ```
 
+交互式运行时按一次 `Ctrl+C`，等待 launch 依次结束节点并返回命令提示符；繁忙时部分节点可能先收到 SIGINT，再由 launch 升级到 SIGTERM/SIGKILL。不要在退出完成前再次按键或直接关闭终端。控制器启动过程中退出不会再触发第二次整车 Shutdown。若终端异常中断且仍有 ROS 进程残留，可用 `docker restart robot-jazzy` 清理专用容器，再重新启动整车。
+
 `mode` 的安全默认值是 `virtual`；实机启动时不可省略 `mode:=real`。启动日志会打印最终选择的
 模式和 ros2_control 插件，实机还应存在 `/hardware/chassis_state` 话题。`map_yaml_file` 默认
 留空：实机启动在线 RTAB-Map 建图和 Nav2；只有显式传入 YAML 才加载已有地图。虚拟模式没有
-实时双目建图源，因此必须显式指定地图。
+实时双目建图源，因此必须显式指定地图。容器中启动时须使用容器路径，例如
+`/workspace/maps/map_20261023_204925/map.yaml`；宿主机的 `/home/radxa/Robot/ROS2/maps/...`
+在容器中不存在。整车启动会先检查地图 YAML 及其图像文件，路径错误时直接报错。
+双目拼接取流的 CameraInfo 明确标为未标定，左右目仍使用各自的真实标定文件；Foxglove 保留话题、图、服务及资源功能，关闭在节点启动阶段易超时的参数查询功能。
 
 虚拟模式加载 `mock_components/GenericSystem`；实机模式加载
 `robot_hardware/RobotSerialSystem`，自动在 `/dev/ttyACM0..8` 中识别 DMC0、DMC1 和 SE2。
-四轮 ROS 关节命令由硬件插件按 `robot_hardware/config/wheel_calibration.yaml` 映射到 DMC1 轴；
-插件负责编码器方向、CPR 与单轮 D 模式 PWM 曲线反查。底盘控制节点和 ros2_control 控制器
-只传标准关节速度。正 PWM 曲线来自 `calibration_reports/wheel/*_d_manual.json` 的架空测试：
-D4/D6/D7 对应 ROS 负方向，D5 对应正方向；右后 D7 负 PWM 的 ROS 正方向也已实测至 100%，
-并单独存于该轮位的负 PWM 曲线。其他轮位未测方向仍由 DMC1 S 速度模式控制。高于实测速度范围时
-D 模式钳在最大实测点，右后低于首个实测速度的非零目标会被拒绝，不能保证所有速度都可跟踪。
+四轮 ROS 关节命令由硬件插件按 `robot_hardware/config/wheel_calibration.yaml` 映射到 DMC1 轴；插件根据编码器方向、CPR 和逐轮 PWM 曲线输出 D4～D7，反向占空比取正向的负数，零速发送各轴 D0。轮速反馈使用 D 状态查询的编码器差分，不再发送 S 命令。D4/D6 正占空比对应 ROS 负方向，D5/D7 正占空比对应 ROS 正方向。曲线首点以下从零点插值，末点以上钳在末点；六段架空直行双向速度已验收，首点以下及接地负载的精度仍需验证。T 定距动作保持独立。
+2026-10-22 全轮 D 模式重新架空验证 ±0.06/0.08/0.1 m/s 六段，四轮稳态误差 −11.8%～+1.7%，全部 542 条 DMC1 串口事务均为 D 查询或 D4～D7，停车后轮速归零。
 2026-10-13 架空逐轮 D100% 三秒复测：ROS 正向稳态速度幅值为 FL 1.917、FR 1.880、RL 2.006、RR 1.984rad/s，
 ROS 负向依次为 1.878、1.947、1.930、1.912rad/s；
 `chassis_control.yaml` 将统一关节速度命令上限设为 1.8rad/s。RR 在先前 2800mA 测试门槛下触发停车，
 按现场指定的 3200mA 门槛复测完成。轮电机采样示例与四腿过流相关默认门槛现统一为 3200mA；
-此上限来自架空测试；未标定的反向 D 曲线尚未写入硬件配置，装车负载下的持续跟速仍需验证。
-更换某轮电机或调整接线后，先架空逐轴确认轮位和 ROS 正方向，再更新该轮位的 `axis`、
-`encoder_sign`、`speed_command_sign`、`drive_sign`、`cpr` 与重测的正反向 PWM/轮速点；
-启动时插件会拒绝重复轴号、非单调曲线和与控制板 I 参数不一致的 CPR。
-不得将正 PWM 的 D 曲线直接套用到反向或 S 模式，也不得把右后轮当前反馈符号未经复测改回旧假设。
+此上限来自架空测试；当前反向共用正向曲线幅值，六段架空双向短测已通过，装车负载下的持续跟速仍需验证。
+更换某轮电机或调整接线后，先架空逐轴确认轮位和 ROS 正方向，再更新对应 `axis`、`encoder_sign`、`drive_sign`、`cpr` 与 PWM/轮速曲线；启动时插件会拒绝重复轴号、非单调曲线和与控制板 I 参数不一致的 CPR。当前按用户要求反向复用正向曲线幅值，须通过新的双向实测检验精度。
 2026-10-10 架空 ROS 实测发现：右后轮的 S7 对 +0.727rad/s 目标，两种命令符号均接近
-1.9～2.0rad/s，无法闭环跟速；`speed_mode_enabled: false` 保持 S7 关闭。右后已测两个 PWM
+1.9～2.0rad/s，无法闭环跟速；当前插件已不发送 S 命令。右后当时已测两个 PWM
 方向可由硬件接口反查和有限反馈修正。架空 `/cmd_vel_safe` 测试在 +0.06m/s 稳定段达到四轮
 约 +1.09rad/s，−0.06m/s 时 RR 约比目标低 7.7%。之后改为转向反馈连续确认、误差比例降速和明显偏离停车，安全层也会在复合速度任一分量受阻时整条停车；架空 16 段三模式复测均超过 5 秒有效轮动，峰值轮电流 2664mA（测试停止门槛 3100mA）。装车负载、实际位移与导航闭环尚未验收，暂不用于整车导航。详细步骤、数据和限制见
 [四轮方向标定、PWM 曲线与 ROS 速度验收](docs/wheel_calibration_and_speed_test.md)。
 2026-10-22 独占串口短测 `S7 500 350` 时，右后原始反馈在 0.22 秒已达正向
 448 计数/秒，电流达到 2881 mA 后立即停车，停车后四轮归零。板端速度环按
 `-encoder_dir` 推断反馈符号，轴 7 在这次短测中的反馈与该假设相反，存在正反馈风险。
-按后续要求，STM32 固件保持原样；`wheel_calibration_s7_diagnostic.yaml` 也禁用 S7。
-ROS 轮位的 `encoder_sign`、`speed_command_sign` 和 D 模式方向可独立配置，
-但改变命令方向不能证明 S7 能跟随目标速度。须架空验证正反向目标、反馈、电流和停车，
-闭环验收通过后才可启用该配置的 `speed_mode_enabled`。
-默认配置遇到“速度模式未通过实测”时，整组轮速改为零并在网页首页提示，不再因此锁定整车；
-若零速停车写入失败，或控制板读写、定距动作停车失败，仍锁定输出。
+STM32 固件保持原样；ROS 插件已移除 S 轮速下发和 S 状态查询。旧 S7 超速记录保留供故障追溯。
 此前 S7 对约 +0.727rad/s 的目标实测接近 1.9～2.0rad/s，闭环验收前不得用于
-接地驾驶或导航。启动时可指定工作区源文件
-`/workspace/src/robot_hardware/config/wheel_calibration_s7_diagnostic.yaml`；
-当前运行的整车进程需停止并重新启动才能加载新配置。
+接地驾驶或导航。旧 S7 诊断轮位文件与默认 D 模式轮位文件内容相同，已删除；
+启动时使用 `robot_hardware/config/wheel_calibration.yaml`，运行中的整车进程需重新启动才能加载新配置。
 串口候选、发现重试、事务/命令超时、轮径、轴距、轮距和腿长以
 `robot_hardware/config/hardware_bringup.yaml` 为统一启动默认值，并由 `robot_main` 同时传给
 硬件插件、运动学、轮速里程计和平衡节点；现场可用同名 launch 参数覆盖。
@@ -415,12 +414,15 @@ ros2 service call /hardware/recover std_srvs/srv/Trigger '{}'
 仍使用容器内同名 `/dev/ttyACM*` 路径，无需再次重建容器。若旧 `vctrl.service` 正在运行，
 脚本会警告它与 ROS 2 争用控制板；实机启动前必须执行
 `sudo systemctl stop vctrl.service`，禁止两个硬件驱动同时连接串口。控制链为
-`Nav2 -> /cmd_vel_nav -> 超声波安全层 -> /cmd_vel_safe -> 三模式运动学 -> ros2_control`。
+`Nav2 -> /cmd_vel_nav -> robot_web /cmd_vel_console -> 超声波安全层 -> /cmd_vel_nav_safe -> robot_web /cmd_vel_safe -> 三模式运动学 -> ros2_control`。
+实机 SE2 的 `U` 指令由硬件插件独立按 40 ms 刷新，避免慢速 DMC1/DMC0 串口周期触发固件 100 ms 回中；超过 400 ms 没有新的舵机计算结果时仅刷新中性值。相关周期配置在 `robot_hardware/config/hardware_bringup.yaml`，不改变固件。
+四路转向到位后刷新中性 PWM，不再反复追逐 ADC 反馈波动；默认误差 ≤2.5° 停止，误差 >4° 或目标变化时重新调整，确保在轮速放行门槛约 4.58° 之前恢复调整。阈值在 `robot_hardware/config/servo_calibration.yaml` 配置。
 轮速命令经过独立 500 ms 看门狗，转向反馈未进入允许误差时轮速保持零，到位后按误差比例调速；定距 Action 的 T 指令有独立停车服务和动作租约。8 路超声波统一为前3、后3、左1、右1。SE2 的 Range
 话题使用传感器 Best Effort QoS，避障和 `/scan` 合成节点使用相同 QoS 接收。最终安全层默认
 失效关闭：当前运动方向没有新鲜测距就输出零速；遇障默认停车，不自动倒车。SE2 原始测距
-默认只接受 30~2500mm，低于 30mm 的探头振铃/无回波异常值发布为 `NaN`，不会伪装成
-1~2cm 的真实障碍；上下限由 `hardware_bringup.yaml` 配置。
+默认只接受 30~2500mm；0、低于 30mm 的探头振铃，以及超出上限的无效值均不发布
+`Range`，不会伪装成近距或最大距离。单帧丢失时下游仅使用未超时的上一帧；连续丢失
+超过 0.40 秒时安全层按失效关闭停车。上下限由 `hardware_bringup.yaml` 配置。
 
 ### 兼容虚拟机器人入口
 
@@ -510,7 +512,7 @@ GY95T 驱动读取厂家协议的 `0x08-0x2A` 寄存器，发布
 
 `/visual_odom` 只表示双目视觉估计，`/odom` 才是 EKF 融合结果并负责
 `odom -> base_link` TF。二者都不会发布速度命令或直接驱动底盘；真实小车只有在底盘控制链
-收到 `/cmd_vel` 后才会运动。
+收到整车仲裁后的 `/cmd_vel_safe` 后才会运动。
 
 Foxglove 常用话题：
 
@@ -570,8 +572,9 @@ IMU 推断地图中的绝对位置。
 视觉里程计和 EKF；传感器与控制链默认在第 3 秒开始，语义
 感知在第 8 秒、Nav2 在第 14 秒开始。顶层功能入口以及双目相机和 Nav2 内部节点仍以默认
 0.8 秒间隔错峰创建，避免 RK3588 在同一时刻初始化大量高负载节点。ros2_control 的
-controller spawner 不再按定时器并发启动，
-而是严格等待前一个退出后再启动下一个，避免多个 spawner 争抢进程锁。可用
+控制器启动器不再按定时器并发启动，而是逐个读取实际生命周期状态，限时调用服务并重试；
+任一控制器最终无法激活会明确停止整车启动，避免只启用转向而没有轮速驱动。
+`controllers.launch.py` 可通过 `controller_service_timeout` 和 `controller_max_attempts` 调整单次服务超时和重试次数。可用
 `node_start_interval` 及四个阶段参数按现场负载调整；`navigation_start_delay` 应晚于双目
 里程计和在线地图首次输出。Foxglove 默认保持 WARN，排查监听状态时传入
 `foxglove_log_level:=info`，并确认终端出现 `Server listening on port 8765`。

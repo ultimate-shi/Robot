@@ -21,7 +21,8 @@ def generate_launch_description():
     hardware_arguments = [
         'device_candidates', 'serial_timeout_ms', 'inter_command_delay_ms',
         'discovery_retry_count', 'discovery_retry_delay_ms', 'encoder_query_delay_ms',
-        'command_timeout_ms', 'wheel_diameter', 'sonar_lpf_alpha',
+        'command_timeout_ms', 'servo_keepalive_period_ms',
+        'servo_command_timeout_ms', 'wheel_diameter', 'sonar_lpf_alpha',
         'sonar_min_valid_mm', 'sonar_max_valid_mm']
     description = {'robot_description': ParameterValue(
         Command([
@@ -63,6 +64,12 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'command_timeout_ms', default_value='500',
             description='ROS 轮速命令心跳超时，单位毫秒'),
+        DeclareLaunchArgument(
+            'servo_keepalive_period_ms', default_value='40',
+            description='SE2 舵机 U 指令独立刷新周期，单位毫秒'),
+        DeclareLaunchArgument(
+            'servo_command_timeout_ms', default_value='400',
+            description='舵机 PWM 缓存超时后改发中性值，单位毫秒'),
         DeclareLaunchArgument(
             'wheel_diameter', default_value='0.110',
             description='实机车轮直径，单位米'),

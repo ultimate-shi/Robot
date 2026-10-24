@@ -13,6 +13,7 @@
   let frameUrl = '';
   let lastMapFetch = 0;
   let pollBusy = false;
+  let navPollBusy = false;
   let lastLog = 0;
   let logPaused = false;
   let logLines = [];
@@ -120,7 +121,7 @@
     $(id).addEventListener('input', () => { $(output).textContent = $(id).value + suffix; });
   }
   document.querySelectorAll('[data-speed]').forEach(button => button.addEventListener('click', () => {
-    const profile = {low:[0.02,0.04],normal:[0.04,0.08],high:[0.1,0.15]}[button.dataset.speed];
+    const profile = {low:[0.04,0.15],normal:[0.07,0.3],high:[0.1,0.45]}[button.dataset.speed];
     $('linearSpeed').value = profile[0]; $('angularSpeed').value = profile[1];
     $('linearSpeed').dispatchEvent(new Event('input'));
     $('angularSpeed').dispatchEvent(new Event('input'));
@@ -185,13 +186,17 @@
     const cy = map.height - (event.clientY - bounds.top) / bounds.height * map.height;
     const yaw = 2 * Math.atan2(map.origin.z, map.origin.w);
     selectedGoal = {x: map.origin.x + map.resolution * (Math.cos(yaw)*cx - Math.sin(yaw)*cy),
-      y: map.origin.y + map.resolution * (Math.sin(yaw)*cx + Math.cos(yaw)*cy), yaw:0};
+      y: map.origin.y + map.resolution * (Math.sin(yaw)*cx + Math.cos(yaw)*cy),
+      yaw:state?.pose?.fresh ? state.pose.yaw : null};
     $('mapGoal').textContent = `目标：(${selectedGoal.x.toFixed(2)}, ${selectedGoal.y.toFixed(2)}) m`;
     preview = null; renderMap();
   });
   $('centerMap').addEventListener('click', () => $('mapCanvas').scrollIntoView({block:'center'}));
   $('planMap').addEventListener('click', () => guarded(async () => {
     if (!selectedGoal) throw new Error('请先在地图上选目标');
+    if (!Number.isFinite(selectedGoal.yaw))
+      throw new Error('机器人当前朝向不可用，请等待定位恢复后重新选择目标');
+    preview = null;
     preview = await api('plan', selectedGoal);
     $('mapGoal').textContent = `规划完成：${preview.path.length} 个路径点，等待确认。`;
   }));
@@ -222,6 +227,7 @@
     if (range <= 0.75) throw new Error('目标距离过近，无法生成安全停靠点');
     selectedGoal = {x:detection.map_position[0]-dx/range*0.75,
       y:detection.map_position[1]-dy/range*0.75,yaw:Math.atan2(dy,dx)};
+    preview = null;
     preview = await api('plan', selectedGoal); renderMap();
     $('mapGoal').textContent = `物体目标已规划：${preview.path.length} 个路径点，请确认前往。`;
   }));
@@ -286,22 +292,53 @@
     hardwareAlert.textContent = hardwareMessage;
     hardwareAlert.hidden = !hardwareMessage;
     showMode(data.control.mode);
+    renderNavigation(data);
     setRows($('robotStatus'), [
       ['模式',data.control.mode],['控制台接口',data.control.connected?'在线':'不可用'],
       ['软件停止',data.control.stopped?'已锁定':'已解除'],
-      ['地图',data.map_ready?'可用':'不可用'],
+      ['地图',data.map_ready?'可用':data.map_source || '等待地图'],
       ['位姿',data.pose?.fresh?`${data.pose.x.toFixed(2)}, ${data.pose.y.toFixed(2)} m`:'不可用'],
       ['速度',data.odom?.fresh?`${data.odom.linear.toFixed(2)} m/s`:'不可用'],
       ['任务',data.task || '空闲']]);
-    const ultrasonic = Object.values(data.ultrasonic || {});
+    const controllerNames = [
+      ['joint_state_broadcaster','关节状态广播器'],
+      ['steering_controller','转向控制器'],
+      ['wheel_controller','轮子控制器'],
+      ['head_controller','头部控制器'],
+      ['lap_fr_position_controller','右前腿控制器'],
+      ['lap_fl_position_controller','左前腿控制器'],
+      ['lap_rr_position_controller','右后腿控制器'],
+      ['lap_rl_position_controller','左后腿控制器']];
+    const controllers = data.controllers || {};
+    const controllerState = name => !controllers.available ? '管理器未连接' :
+      ({active:'运行中',inactive:'未激活',unconfigured:'未配置'}[controllers.states?.[name]] ||
+      controllers.states?.[name] || '未加载');
+    const boardState = name => !data.hardware?.fresh ? '无新反馈' :
+      data.hardware[name] ? '已连接' : '断开';
+    setRows($('controllerStatus'), [
+      ...controllerNames.map(([name,label]) => [label,controllerState(name)]),
+      ['DMC0 控制板',boardState('dmc0_connected')],
+      ['DMC1 控制板',boardState('dmc1_connected')],
+      ['SE2 控制板',boardState('se2_connected')],
+      ['硬件输出',data.hardware?.fresh ?
+        data.hardware.outputs_enabled?'已使能':'未使能' : '无新反馈']]);
+    const sonarNames = [
+      ['front_left','前左超声波'],['front_center','前中超声波'],
+      ['front_right','前右超声波'],['rear_left','后左超声波'],
+      ['rear_center','后中超声波'],['rear_right','后右超声波'],
+      ['left','左侧超声波'],['right','右侧超声波']];
+    const sonarState = name => {
+      const item = data.ultrasonic?.[name];
+      return !item?.received ? '无新数据' : item.fresh ?
+        `${item.range_m.toFixed(2)} m` : '读数无效';
+    };
     setRows($('sensorStatus'), [
       ['左目',!data.vision_enabled?'当前模式未接入':data.images.left?.fresh?'正常':'断流'],
       ['右目',!data.vision_enabled?'当前模式未接入':data.images.right?.fresh?'正常':'断流'],
       ['深度',!data.vision_enabled?'当前模式未接入':data.images.depth?.fresh?'正常':'断流'],
       ['YOLO',!data.vision_enabled?'当前模式未接入':data.detection_fresh?'正常':'数据过期'],
       ['IMU',data.imu_fresh?'正常':'数据过期'],
-      ['超声波',`${ultrasonic.filter(item => item.fresh).length}/8 路有新数据`],
-      ['底盘',data.hardware?.fresh?(data.hardware.connected?'已连接':'通信异常'):'无反馈'],
+      ...sonarNames.map(([name,label]) => [label,sonarState(name)]),
       ['避障',data.safety?.fresh?'有新数据':'数据过期']]);
     setRows($('systemStatus'), [['节点在线',Math.round(data.uptime_seconds)+' 秒'],
       ['浏览器网络',$('connection').textContent],
@@ -334,6 +371,84 @@
     renderMap();
     drawDetections();
   };
+  function renderNavigation(data) {
+    const nav = data.navigation || {phase:'idle', message:'控制台尚未提供导航反馈'};
+    const titles = {idle:'尚未开始导航',planning:'正在规划路径',ready:'路径已规划',
+      starting:'正在启动导航',navigating:'正在前往目标',succeeded:'已到达目标',
+      canceled:'导航已取消',failed:'导航失败'};
+    const active = nav.phase === 'starting' || nav.phase === 'navigating';
+    let title = titles[nav.phase] || '导航状态未知';
+    const rows = [];
+    if (nav.goal && Number.isFinite(nav.goal.x) && Number.isFinite(nav.goal.y))
+      rows.push(['目标位置',`${nav.goal.x.toFixed(2)}, ${nav.goal.y.toFixed(2)} m`]);
+    if (nav.distance_remaining_m != null)
+      rows.push(['剩余距离',`${nav.distance_remaining_m.toFixed(2)} m`]);
+    if (nav.heading_error_deg != null)
+      rows.push(['剩余朝向',`${nav.heading_error_deg.toFixed(1)}°`]);
+    if (nav.eta_seconds != null)
+      rows.push(['预计还需',`${Math.ceil(nav.eta_seconds)} 秒`]);
+    if (nav.elapsed_seconds != null)
+      rows.push(['已导航',`${Math.floor(nav.elapsed_seconds)} 秒`]);
+    if (nav.recoveries) rows.push(['恢复尝试',`${nav.recoveries} 次`]);
+    if (nav.started_at) rows.push(['开始时间',new Date(nav.started_at*1000).toLocaleTimeString('zh-CN',{hour12:false})]);
+    if (nav.finished_at) rows.push(['结束时间',new Date(nav.finished_at*1000).toLocaleTimeString('zh-CN',{hour12:false})]);
+    if (nav.error_code) rows.push(['Nav2 错误码',String(nav.error_code)]);
+    if (active && nav.feedback_age_seconds != null && nav.feedback_age_seconds > 3)
+      rows.push(['反馈',`${nav.feedback_age_seconds.toFixed(1)} 秒未收到新反馈`]);
+    else if (nav.phase === 'starting' && nav.start_age_seconds > 3)
+      rows.push(['反馈',`目标已提交 ${nav.start_age_seconds.toFixed(1)} 秒，仍未收到 Nav2 导航反馈`]);
+    if (active && data.task_paused) title = '导航已暂停';
+    if (active && nav.distance_remaining_m != null && nav.distance_remaining_m <= 0.1 &&
+        nav.heading_error_deg != null && nav.heading_error_deg > 14.3)
+      title = '已接近目标，等待朝向调整';
+    if (active && nav.appears_stalled) {
+      title = '导航仍在执行，进度停滞';
+      rows.push(['进度提醒',`约 ${Math.floor(nav.no_progress_seconds)} 秒内位置和朝向均未接近目标；可能正在等待转向、避障或重新规划`]);
+    }
+    if (active && data.safety?.fresh) {
+      try {
+        const safety = JSON.parse(data.safety.message);
+        const labels = {
+          FRONT_WALL:'前方有障碍',REAR_WALL:'后方有障碍',
+          LEFT_WALL:'左侧有障碍',RIGHT_WALL:'右侧有障碍',
+          LEFT_SIDE_WALL:'左侧通道有障碍',RIGHT_SIDE_WALL:'右侧通道有障碍',
+          FRONT_APPROACH:'正在接近前方障碍',
+          LEFT_SIDE_APPROACH:'正在接近左侧障碍',
+          RIGHT_SIDE_APPROACH:'正在接近右侧障碍',
+          FRONT_RANGE_STALE:'前方测距过期',REAR_RANGE_STALE:'后方测距过期',
+          LEFT_RANGE_STALE:'左侧测距过期',RIGHT_RANGE_STALE:'右侧测距过期',
+          LEFT_TURN_RANGE_STALE:'左侧测距过期',
+          RIGHT_TURN_RANGE_STALE:'右侧测距过期',
+          STEP_BLOCKED:'前方有台阶',DROPOFF_BLOCKED:'前方有落差',
+          SLOPE_BLOCKED:'坡度过大',SLIPPING:'检测到打滑',
+          ESCAPE_REVERSE:'正在执行脱困倒车',
+          ESCAPE_REVERSE_START:'开始脱困倒车',
+          ESCAPE_REAR_RANGE_STALE:'脱困时后方测距过期',
+          REAR_NOT_CLEAR:'脱困时后方空间不足',
+          MOTION_COMPONENT_BLOCKED_STOP:'安全层要求停车'};
+        const warnings = (safety.warnings || []).filter(item =>
+          !item.startsWith('MOTION_COMPONENT_BLOCKED_STOP')).map(item => {
+          const [code, value] = item.split(':');
+          const side = code.startsWith('RIGHT_') ? 'right' :
+            code.startsWith('LEFT_') ? 'left' : null;
+          if (code.endsWith('RANGE_STALE') && side &&
+              data.ultrasonic?.[side]?.received &&
+              !data.ultrasonic[side].fresh) {
+            return `${side === 'right' ? '右侧' : '左侧'}测距无效`;
+          }
+          return (labels[code] || code) + (value ? `（${value}）` : '');
+        });
+        if (warnings.length) {
+          rows.push(['安全限制',warnings.join('；')]);
+          if (!nav.appears_stalled) title = '导航检测到安全限制';
+        }
+      } catch (_) { /* 状态仍显示 Nav2 原始反馈。 */ }
+    }
+    $('navigationPhase').textContent = title;
+    $('navigationMessage').textContent = nav.message || '';
+    $('navigationPhase').parentElement.dataset.phase = nav.phase;
+    setRows($('navigationDetails'), rows);
+  }
   function drawDetections() {
     const canvas = $('detectionsCanvas'), image = $('camera');
     const bounds = image.getBoundingClientRect(), parent = image.parentElement.getBoundingClientRect();
@@ -396,13 +511,31 @@
           notice(error.message,true);
         }
       } else if (!map) {
+        $('mapEmpty').textContent = state?.map_source || '等待地图';
         $('mapEmpty').hidden = false;
       }
     } finally {
       pollBusy = false;
     }
   }
+  async function pollNavigation() {
+    if (navPollBusy) return;
+    navPollBusy = true;
+    try {
+      const response = await fetch('/robot/api/navigation-status', {cache:'no-store'});
+      if (!response.ok) throw new Error('导航状态接口暂不可用');
+      renderNavigation({...state, navigation: await response.json()});
+    } catch (_) {
+      if (!state?.navigation) {
+        $('navigationPhase').textContent = '导航状态暂不可用';
+        $('navigationMessage').textContent = '请检查控制台是否已更新并重新启动。';
+      }
+    } finally {
+      navPollBusy = false;
+    }
+  }
   async function refreshFrame() {
+    if ($('home').hidden) return;
     if (frameBusy) return;
     frameBusy = true;
     const image = $('camera');
@@ -444,6 +577,8 @@
   });
   $('clearLogs').addEventListener('click', () => { logLines=[]; $('terminal').textContent=''; });
   poll();
+  pollNavigation();
   pollLogs(); refreshFrame();
-  setInterval(poll, 1000); setInterval(pollLogs, 700); setInterval(refreshFrame, 200);
+  setInterval(poll, 1000); setInterval(pollNavigation, 500);
+  setInterval(pollLogs, 700); setInterval(refreshFrame, 200);
 })();

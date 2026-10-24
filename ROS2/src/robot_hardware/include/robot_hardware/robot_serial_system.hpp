@@ -1,11 +1,15 @@
+// 作用：声明实机 ros2_control 硬件插件及其串口、舵机和车轮状态。
 // 使用方法：仅由 robot_serial_system.cpp 和 pluginlib 使用，业务节点不直接包含本头文件。
 #pragma once
 
 #include <array>
+#include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <unordered_map>
 #include <vector>
 
@@ -38,6 +42,8 @@ struct ServoConfig
   double kd{0.0};
   int pwm_deadzone{0};
   double brake_deadzone{0.0};
+  double resume_deadzone{0.0};
+  bool settled{false};
   double target{0.0};
   double current{0.0};
   double integral{0.0};
@@ -55,16 +61,9 @@ struct WheelConfig
   int axis{0};
   int encoder_sign{1};
   int drive_sign{1};
-  int speed_command_sign{1};
-  bool speed_mode_enabled{true};
   int cpr{0};
-  bool pwm_enabled{false};
   std::vector<double> pwm;
   std::vector<double> speed;
-  bool negative_pwm_enabled{false};
-  int negative_drive_sign{-1};
-  std::vector<double> negative_pwm;
-  std::vector<double> negative_speed;
   double feedback_gain{0.0};
   double max_pwm_correction{0.0};
 };
@@ -72,6 +71,7 @@ struct WheelConfig
 class RobotSerialSystem : public hardware_interface::SystemInterface
 {
 public:
+  ~RobotSerialSystem() override;
   hardware_interface::CallbackReturn on_init(
     const hardware_interface::HardwareComponentInterfaceParams & params) override;
   hardware_interface::CallbackReturn on_configure(
@@ -98,6 +98,9 @@ private:
   bool write_wheels();
   bool write_legs();
   bool write_servos(double dt);
+  void start_servo_keepalive();
+  void stop_servo_keepalive();
+  void servo_keepalive_loop();
   bool stop_outputs();
   bool stop_encoder_motion();
   void latch_fault(const std::string & reason);
@@ -127,6 +130,7 @@ private:
   bool wheel_motion_lease_seen_{false};
   bool wheel_motion_rearm_ready_{false};
   std::chrono::steady_clock::time_point last_wheel_motion_lease_{};
+  std::chrono::steady_clock::time_point last_wheel_feedback_{};
   std::mutex encoder_motion_mutex_;
   std::array<double, 4> wheel_current_{{0.0, 0.0, 0.0, 0.0}};
   std::array<double, 4> leg_current_{{0.0, 0.0, 0.0, 0.0}};
@@ -142,6 +146,8 @@ private:
   int discovery_retry_delay_ms_{700};
   int encoder_query_delay_ms_{20};
   int command_timeout_ms_{500};
+  int servo_keepalive_period_ms_{40};
+  int servo_command_timeout_ms_{400};
   double wheel_diameter_{0.110};
   double sonar_alpha_{0.2};
   int sonar_min_valid_mm_{30};
@@ -151,6 +157,13 @@ private:
   std::string fault_;
   std::chrono::steady_clock::time_point last_heartbeat_{};
   std::chrono::steady_clock::time_point last_write_{};
+  std::mutex servo_command_mutex_;
+  std::condition_variable servo_command_cv_;
+  std::thread servo_keepalive_thread_;
+  bool servo_keepalive_running_{false};
+  std::array<int, 6> servo_command_pwm_{{1500, 1500, 1500, 1500, 1500, 1500}};
+  std::chrono::steady_clock::time_point last_servo_command_{};
+  std::atomic<bool> servo_keepalive_failed_{false};
 
   rclcpp::Publisher<robot_interfaces::msg::ChassisState>::SharedPtr state_pub_;
   rclcpp::Publisher<robot_interfaces::msg::SerialCommand>::SharedPtr serial_tx_pub_;

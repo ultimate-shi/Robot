@@ -5,7 +5,7 @@ obstacle_avoidance:
     front_warn_distance: 0.20
     side_stop_distance: 0.10
     side_warn_distance: 0.15
-    range_timeout: 0.35
+    range_timeout: 0.40  # 6Hz 测距单帧丢失时最长实测间隔约 0.36s；连续丢失仍停车
     require_valid_ranges: true  # 安全层失效关闭：对应方向没有新鲜超声波数据时禁止运动
     escape_reverse_enabled: false  # 碰到障碍物默认只停车，不在未确认周围环境时自动倒车
     escape_trigger_time: 1.0

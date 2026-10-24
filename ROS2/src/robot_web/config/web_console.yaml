@@ -11,6 +11,7 @@ web_console:
     chassis_cmd_topic: /cmd_vel_safe
     manual_command_timeout: 0.35
     nav_command_timeout: 0.5
+    navigation_stall_notice_seconds: 10.0  # 连续此时长距离未缩短 0.05m 时显示进度停滞提醒，单位秒
     update_rate: 20.0
     map_topic: /map
     odom_topic: /odom

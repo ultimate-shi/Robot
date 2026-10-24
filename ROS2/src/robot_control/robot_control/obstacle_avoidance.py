@@ -19,7 +19,7 @@
 - 不根据 crab/four_ws/ackermann 模式切换；只看 cmd_vel 中是否有 x/y/z 速度分量。
 - linear.x 负责前后，linear.y 负责左右，angular.z 负责朝墙方向转向限制。
 - cmd_vel_timeout 防止停止发布 /cmd_vel 后继续沿用最后一条非零速度。
-- range_timeout 防止超声波数据延迟或中断时继续沿用旧距离。
+- range_timeout 限制最近一次有效超声波数据的使用时长；单帧无效回波不刷新有效时间。
 - 前方持续被挡且后方安全时，短暂低速后退，避免小车一直顶在障碍前。
 
 为什么不能删除：
@@ -44,6 +44,14 @@ from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Range
 from std_msgs.msg import String
 from robot_interfaces.msg import TerrainState
+
+
+def update_ultrasonic_cache(data, stamps, topic, msg, received_at):
+    """使用方法：Range 回调调用；无效帧不覆盖或续期最近的有效测距。"""
+    if (math.isfinite(msg.range)
+            and msg.min_range <= msg.range <= msg.max_range):
+        data[topic] = msg.range
+        stamps[topic] = received_at
 
 
 SENSOR_LABELS = {
@@ -245,15 +253,11 @@ class ObstacleAvoidanceNode(Node):
             self.nav_goal_last_active_time[action_name] = now
 
     def ultrasonic_callback(self, msg: Range, topic: str):
-        """缓存超声波距离和接收时间，避免主循环使用过期测距。"""
-        if (math.isfinite(msg.range)
-                and msg.range >= msg.min_range
-                and msg.range <= msg.max_range):
-            self.ultrasonic_data[topic] = msg.range
-            self.ultrasonic_stamp[topic] = self.get_clock().now()
-        else:
-            self.ultrasonic_data[topic] = float('inf')
-            self.ultrasonic_stamp[topic] = None
+        """仅缓存有效测距；偶发无效回波沿用未超时的上一帧。"""
+        update_ultrasonic_cache(
+            self.ultrasonic_data, self.ultrasonic_stamp, topic, msg,
+            self.get_clock().now())
+        # 无效帧不能续期；超过 range_timeout 后 _valid_readings 仍会失效关闭。
 
     def timer_callback(self):
         """Main avoidance logic - filter cmd_vel_raw and publish safe cmd_vel."""

@@ -1,4 +1,5 @@
 <?xml version="1.0"?>
+<!-- 作用：声明 robot_hardware 的运行与测试依赖。 -->
 <!-- 使用方法：由 robot_main 实机模式加载，直接驱动 DMC0、DMC1 和 SE2。 -->
 <package format="3">
   <name>robot_hardware</name><version>0.1.0</version>
@@ -11,6 +12,7 @@
   <depend>robot_interfaces</depend><depend>sensor_msgs</depend>
   <depend>std_msgs</depend><depend>std_srvs</depend><depend>yaml_cpp_vendor</depend>
   <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>ament_cmake_gtest</test_depend>
   <exec_depend>python3-yaml</exec_depend>
   <exec_depend>controller_manager</exec_depend><exec_depend>robot_description</exec_depend>
   <export><build_type>ament_cmake</build_type></export>

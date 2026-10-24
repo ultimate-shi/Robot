@@ -26,5 +26,6 @@ setup(
         'wheel_command_guard_node = robot_control.wheel_command_guard:main',
         'body_balance_node = robot_control.body_balance:main',
         'wheel_motion_server_node = robot_control.wheel_motion_server:main',
+        'controller_bootstrap = robot_control.controller_bootstrap:main',
     ]},
 )

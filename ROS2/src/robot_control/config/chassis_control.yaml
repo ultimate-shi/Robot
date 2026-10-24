@@ -15,7 +15,7 @@ chassis_controller:
     steering_stop_tolerance: 0.15  # 任一转向误差超过此值立即停车，单位 rad
     steering_ready_samples: 2  # 首次放行需要连续到位的真实关节反馈帧数
     steering_min_speed_scale: 0.75  # 接近停车角度前的最低轮速比例，避免小误差反复停走
-    steering_feedback_timeout: 0.3  # /joint_states 转向反馈最大允许年龄，单位 s
+    steering_feedback_timeout: 0.4  # 容忍 6Hz 反馈偶发漏一帧；与 SE2 缓存 400ms 超时协同停车
 
 wheel_command_guard:
   ros__parameters:

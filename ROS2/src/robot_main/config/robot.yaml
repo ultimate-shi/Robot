@@ -3,8 +3,10 @@ defaults:
   virtual_ply: /workspace/maps/studyroom/studyroom.ply
   log_level: warn
   node_start_interval: 0.8
-  sensor_start_delay: 3.0
+  sensor_start_delay: 6.0
   control_start_delay: 3.0
+  controller_service_timeout: 8.0
+  controller_max_attempts: 12
   navigation_start_delay: 14.0
   perception_start_delay: 8.0
   foxglove_port: 8765

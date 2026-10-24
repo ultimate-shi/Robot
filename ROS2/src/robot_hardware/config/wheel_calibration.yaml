@@ -1,55 +1,40 @@
-# 使用方法：由 RobotSerialSystem 读取；更换电机时只改对应轮位的轴、方向、CPR 与实测 D 曲线。
-# 正/负 PWM 曲线仅用于已实测方向且不低于首个实测速度；无曲线的方向由已验证的 S 模式控制。
+# 作用：定义四轮到 DMC1 轴号、方向、编码器和 D 命令 PWM 曲线的映射。
+# 使用方法：由 RobotSerialSystem 读取；更换电机时更新对应轮位的轴、方向、CPR 与实测曲线。
+# 反向 D 占空比取正向的负数；零目标发送 D0，曲线首点以下按零点插值。
 wheels:
   fl:
     axis: 4
     encoder_sign: 1
-    speed_command_sign: 1
-    speed_mode_enabled: true
     feedback_gain: 8.0  # PWM百分点/(rad/s)，闭环比例修正
     max_pwm_correction: 10.0  # 比例修正最大幅度，百分点
     drive_sign: -1
     cpr: 11600
-    pwm_enabled: true
     pwm: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
     speed_rad_s: [0.75631, 1.35067, 1.57665, 1.68373, 1.76422, 1.82575, 1.85928, 1.88019, 1.91106, 1.9259]
   fr:
     axis: 5
     encoder_sign: -1
-    speed_command_sign: 1
-    speed_mode_enabled: true
     feedback_gain: 8.0  # PWM百分点/(rad/s)，闭环比例修正
     max_pwm_correction: 10.0  # 比例修正最大幅度，百分点
     drive_sign: 1
     cpr: 11600
-    pwm_enabled: true
     pwm: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
     speed_rad_s: [0.79141, 1.37331, 1.58916, 1.6976, 1.78161, 1.79407, 1.81151, 1.82359, 1.83994, 1.86307]
   rl:
     axis: 6
     encoder_sign: 1
-    speed_command_sign: 1
-    speed_mode_enabled: true
     feedback_gain: 8.0  # PWM百分点/(rad/s)，闭环比例修正
     max_pwm_correction: 10.0  # 比例修正最大幅度，百分点
     drive_sign: -1
     cpr: 11600
-    pwm_enabled: true
     pwm: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
     speed_rad_s: [0.76612, 1.38376, 1.61191, 1.73102, 1.80062, 1.84671, 1.87504, 1.90803, 1.9142, 1.9401]
   rr:
     axis: 7
-    encoder_sign: -1
-    speed_command_sign: -1
-    speed_mode_enabled: false  # ROS 实测 +0.727rad/s 时 S7 两种符号均接近满速，待修复后复测
+    encoder_sign: 1  # 现场确认 D7 正向为车体前进；原始正 tps 对应 ROS 正轮速
     feedback_gain: 8.0  # PWM百分点/(rad/s)，闭环比例修正
     max_pwm_correction: 10.0  # 比例修正最大幅度，百分点
-    drive_sign: -1
+    drive_sign: 1
     cpr: 11600
-    pwm_enabled: true
     pwm: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
-    speed_rad_s: [0.85484, 1.4558, 1.69716, 1.76065, 1.83534, 1.88799, 1.93024, 1.93121, 1.96111, 1.99849]
-    negative_pwm_enabled: true  # D7 -10%～-100%，单条 1000ms、每 400ms 续发，总计 3000ms
-    negative_drive_sign: 1  # S 状态 tps 和编码器增量为负，encoder_sign=-1 后为 ROS 正向
-    negative_pwm: [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
-    negative_speed_rad_s: [0.80250, 1.39350, 1.64490, 1.76053, 1.83367, 1.87868, 1.90950, 1.94602, 1.96231, 1.99530]
+    speed_rad_s: [0.87369, 1.42845, 1.67707, 1.79293, 1.83242, 1.84742, 1.86085, 1.87158, 1.88918, 1.91415]  # rr_d_manual.json 的 D7 正 PWM 实测绝对速度；对应 ROS 前进

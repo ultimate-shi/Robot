@@ -1,4 +1,5 @@
-# 使用方法：由 colcon 构建 RobotSerialSystem ros2_control 硬件插件。
+# 作用：构建 RobotSerialSystem 硬件插件及串口协议、舵机到位测试。
+# 使用方法：由 colcon 构建和测试 robot_hardware 包。
 cmake_minimum_required(VERSION 3.16)
 project(robot_hardware)
 
@@ -33,7 +34,10 @@ install(DIRECTORY config launch DESTINATION share/${PROJECT_NAME})
 install(FILES robot_hardware_plugins.xml DESTINATION share/${PROJECT_NAME})
 
 if(BUILD_TESTING)
+  find_package(ament_cmake_gtest REQUIRED)
   find_package(ament_cmake_pytest REQUIRED)
+  ament_add_gtest(test_servo_settling test/test_servo_settling.cpp)
+  target_include_directories(test_servo_settling PRIVATE include)
   ament_add_pytest_test(test_protocol test/test_protocol.py)
 endif()
 

@@ -33,6 +33,7 @@ def generate_launch_description():
             'device_candidates', 'serial_timeout_ms',
             'inter_command_delay_ms', 'discovery_retry_count',
             'discovery_retry_delay_ms', 'encoder_query_delay_ms', 'command_timeout_ms',
+            'servo_keepalive_period_ms', 'servo_command_timeout_ms',
             'wheel_diameter', 'sonar_lpf_alpha',
             'sonar_min_valid_mm', 'sonar_max_valid_mm')}
     return LaunchDescription([
@@ -73,6 +74,14 @@ def generate_launch_description():
             'command_timeout_ms',
             default_value=str(defaults['ros_command_timeout_ms']),
             description='ROS 轮速命令心跳超时，单位毫秒'),
+        DeclareLaunchArgument(
+            'servo_keepalive_period_ms',
+            default_value=str(defaults['servo_keepalive_period_ms']),
+            description='SE2 舵机 U 指令独立刷新周期，单位毫秒'),
+        DeclareLaunchArgument(
+            'servo_command_timeout_ms',
+            default_value=str(defaults['servo_command_timeout_ms']),
+            description='舵机 PWM 缓存超时后改发中性值，单位毫秒'),
         DeclareLaunchArgument(
             'wheel_diameter', default_value=str(defaults['wheel_diameter']),
             description='硬件协议换算使用的车轮直径，单位米'),

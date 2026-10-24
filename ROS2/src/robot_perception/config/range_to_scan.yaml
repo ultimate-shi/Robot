@@ -5,7 +5,7 @@ range_to_scan:
     joint_state_topic: /joint_states
     publish_period: 0.03
     angle_increment_deg: 2.5
-    range_timeout: 0.35
+    range_timeout: 0.40  # 与最终安全层一致，跳过单帧无效回波后仍保留未超时扫描
     range_min: 0.02
     range_max: 4.0
     cmd_vel_topic: /cmd_vel_nav_smoothed

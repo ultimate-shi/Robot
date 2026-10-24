@@ -1,7 +1,7 @@
 # 使用方法：由 state_estimation.launch.py 加载；实机以视觉三维位姿、IMU 姿态/角速度和轮侧平面速度估计 /odom。
 ekf_filter_node:
   ros__parameters:
-    frequency: 30.0  # EKF 输出频率，单位 Hz
+    frequency: 10.0  # 实机启动高负载时仍有约 80 ms 耗时；10 Hz 高于 Nav2 5 Hz 控制周期
     sensor_timeout: 0.2  # 输入超过该时间未更新时只执行预测，单位 s
     two_d_mode: false  # 保留底盘升降、俯仰、侧倾与三轴角速度；缺测维度由 EKF 预测且不视为可信测量
     publish_tf: true  # EKF 是 odom 到 base_link 的唯一 TF 发布者
@@ -12,7 +12,7 @@ ekf_filter_node:
     base_link_frame: base_link  # 机器人底盘坐标系
     world_frame: odom  # 本 EKF 只负责连续局部状态，不直接融合 map 跳变
     transform_time_offset: 0.0  # 不人为前移 TF 时间戳
-    transform_timeout: 0.1  # 等待传感器外参 TF 的最长时间，单位 s
+    transform_timeout: 0.02  # 单次 TF 等待最多 20 ms，避免占满 EKF 的 10 Hz 更新周期
 
     odom0: /visual_odom  # RTAB stereo_odometry 的三维视觉位姿输出
     odom0_config: [true, true, true,

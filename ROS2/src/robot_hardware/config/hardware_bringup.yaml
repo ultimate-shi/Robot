@@ -10,6 +10,8 @@ hardware:
   # 与已验收 hw_ctrl/load_wheel_config() 一致，I4..I7 查询之间给 MCU 留出处理时间。
   encoder_query_delay_ms: 20
   ros_command_timeout_ms: 500
+  servo_keepalive_period_ms: 40  # 独立 SE2 U 刷新周期，须短于固件 100ms 回中期限
+  servo_command_timeout_ms: 400  # 上游舵机 PWM 超过此年龄只刷新中性值，单位 ms；早于轮驱动 500ms 看门狗
   # 固件验收目标；当前串口协议没有运行时写入该值的指令。
   required_mcu_watchdog_ms: 300
   wheel_diameter: 0.110

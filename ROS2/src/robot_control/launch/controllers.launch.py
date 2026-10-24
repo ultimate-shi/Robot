@@ -1,19 +1,32 @@
-"""使用方法：ros2 launch robot_control controllers.launch.py 启动 ros2_control 和全部关节控制器."""
+"""作用：编排 ros2_control 和关节控制器并处理安全退出；使用方法：ros2 launch robot_control controllers.launch.py。"""
 
 import os
+import signal
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
+    EmitEvent,
     OpaqueFunction,
     RegisterEventHandler,
     TimerAction,
 )
 from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.substitutions import Command, LaunchConfiguration
 from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
+
+
+def bootstrap_exit_actions(event, context, name, next_spawner):
+    """使用方法：控制器生成器退出时调用；关闭中不再启动下一个节点或重复关闭 launch。"""
+    if context.is_shutdown or event.returncode in (-signal.SIGINT, -signal.SIGTERM):
+        return []
+    if event.returncode != 0:
+        return [EmitEvent(event=Shutdown(
+            reason=f'{name} 控制器未能激活，整车启动已停止'))]
+    return [next_spawner] if next_spawner is not None else []
 
 
 def generate_launch_description():
@@ -32,7 +45,8 @@ def generate_launch_description():
     hardware_arguments = [
         'device_candidates', 'serial_timeout_ms', 'inter_command_delay_ms',
         'discovery_retry_count', 'discovery_retry_delay_ms', 'encoder_query_delay_ms',
-        'command_timeout_ms', 'wheel_diameter', 'sonar_lpf_alpha',
+        'command_timeout_ms', 'servo_keepalive_period_ms',
+        'servo_command_timeout_ms', 'wheel_diameter', 'sonar_lpf_alpha',
         'sonar_min_valid_mm', 'sonar_max_valid_mm']
     robot_description = {'robot_description': ParameterValue(
         Command([
@@ -83,6 +97,12 @@ def generate_launch_description():
             'command_timeout_ms', default_value='500',
             description='ROS 轮速命令心跳超时，单位毫秒'),
         DeclareLaunchArgument(
+            'servo_keepalive_period_ms', default_value='40',
+            description='SE2 舵机 U 指令独立刷新周期，单位毫秒'),
+        DeclareLaunchArgument(
+            'servo_command_timeout_ms', default_value='400',
+            description='舵机 PWM 缓存超时后改发中性值，单位毫秒'),
+        DeclareLaunchArgument(
             'wheel_diameter', default_value='0.110',
             description='硬件协议换算使用的车轮直径，单位米'),
         DeclareLaunchArgument(
@@ -104,6 +124,12 @@ def generate_launch_description():
             'spawn_start_delay', default_value='2.0',
             description='第一个控制器生成器的启动延迟，单位为秒'),
         DeclareLaunchArgument(
+            'controller_service_timeout', default_value='8.0',
+            description='单次控制器管理服务响应超时，单位为秒'),
+        DeclareLaunchArgument(
+            'controller_max_attempts', default_value='12',
+            description='每个控制器的最大状态检查和重试次数'),
+        DeclareLaunchArgument(
             'log_level', default_value='warn',
             description='ros2_control 和控制器生成器的 ROS 日志级别'),
         Node(
@@ -124,23 +150,32 @@ def generate_launch_description():
         resolved_log_level = log_level.perform(context)
         spawn_start_delay = float(LaunchConfiguration(
             'spawn_start_delay').perform(context))
+        service_timeout = LaunchConfiguration(
+            'controller_service_timeout').perform(context)
+        max_attempts = LaunchConfiguration(
+            'controller_max_attempts').perform(context)
         spawners = [
             Node(
-                package='controller_manager', executable='spawner',
+                package='robot_control', executable='controller_bootstrap',
                 arguments=[
                     name, '--param-file', controller_config,
+                    '--service-timeout', service_timeout,
+                    '--max-attempts', max_attempts,
                     '--ros-args', '--log-level', resolved_log_level,
                 ],
                 output='screen')
             for name in controller_names
         ]
-        deferred_actions = [
-            RegisterEventHandler(OnProcessExit(
-                target_action=current,
-                on_exit=[following],
-            ))
-            for current, following in zip(spawners, spawners[1:])
-        ]
+        deferred_actions = []
+        for index, current in enumerate(spawners):
+            following = spawners[index + 1] if index + 1 < len(spawners) else None
+
+            def after_exit(event, context, name=controller_names[index],
+                           next_spawner=following):
+                return bootstrap_exit_actions(event, context, name, next_spawner)
+
+            deferred_actions.append(RegisterEventHandler(OnProcessExit(
+                target_action=current, on_exit=after_exit)))
         deferred_actions.append(TimerAction(
             period=spawn_start_delay,
             actions=[spawners[0]],

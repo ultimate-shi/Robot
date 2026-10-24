@@ -11,6 +11,8 @@ from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 import yaml
 
+from robot_main.map_validation import validate_map_yaml
+
 
 def source(package, filename):
     return PythonLaunchDescriptionSource(os.path.join(
@@ -99,6 +101,14 @@ def generate_launch_description():
             default_value=os.path.join(control_share, 'config', 'controllers.yaml'),
             description='统一 ros2_control 控制器参数 YAML 路径'),
         DeclareLaunchArgument(
+            'controller_service_timeout',
+            default_value=str(defaults['controller_service_timeout']),
+            description='单次控制器管理服务响应超时，单位为秒'),
+        DeclareLaunchArgument(
+            'controller_max_attempts',
+            default_value=str(defaults['controller_max_attempts']),
+            description='每个关节控制器启动时的最大状态检查和重试次数'),
+        DeclareLaunchArgument(
             'chassis_control_config_file',
             default_value=os.path.join(control_share, 'config', 'chassis_control.yaml'),
             description='底盘运动学与轮速超时保护参数 YAML'),
@@ -146,6 +156,14 @@ def generate_launch_description():
             'command_timeout_ms',
             default_value=str(hardware_defaults['ros_command_timeout_ms']),
             description='实机 ROS 轮速命令心跳超时，单位毫秒'),
+        DeclareLaunchArgument(
+            'servo_keepalive_period_ms',
+            default_value=str(hardware_defaults['servo_keepalive_period_ms']),
+            description='实机 SE2 舵机 U 指令独立刷新周期，单位毫秒'),
+        DeclareLaunchArgument(
+            'servo_command_timeout_ms',
+            default_value=str(hardware_defaults['servo_command_timeout_ms']),
+            description='实机舵机 PWM 缓存超时后改发中性值，单位毫秒'),
         DeclareLaunchArgument(
             'wheel_diameter',
             default_value=str(hardware_defaults['wheel_diameter']),
@@ -260,7 +278,9 @@ def generate_launch_description():
         mode = LaunchConfiguration('mode').perform(context).strip().lower()
         if mode not in ('real', 'virtual'):
             raise RuntimeError("mode 只允许 'real' 或 'virtual'")
-        map_yaml = LaunchConfiguration('map_yaml_file').perform(context)
+        map_yaml = LaunchConfiguration('map_yaml_file').perform(context).strip()
+        if map_yaml:
+            map_yaml = validate_map_yaml(map_yaml)
         if mode == 'virtual' and not map_yaml:
             raise RuntimeError(
                 'virtual 模式没有实时双目建图源，请显式传入 map_yaml_file；'
@@ -293,6 +313,7 @@ def generate_launch_description():
                 'device_candidates', 'serial_timeout_ms',
                 'inter_command_delay_ms', 'discovery_retry_count',
                 'discovery_retry_delay_ms', 'encoder_query_delay_ms', 'command_timeout_ms',
+                'servo_keepalive_period_ms', 'servo_command_timeout_ms',
                 'wheel_diameter', 'sonar_lpf_alpha',
                 'sonar_min_valid_mm', 'sonar_max_valid_mm')}
         geometry_arguments = {
@@ -307,6 +328,11 @@ def generate_launch_description():
         common = [
             LogInfo(msg=(
                 f'robot_main 已选择 mode={mode}，ros2_control 插件={plugin}')),
+            include('robot_web', 'web_console.launch.py', {
+                'config_file': LaunchConfiguration('web_console_config_file'),
+                'mode': mode,
+                'static_map': 'true' if map_yaml else 'false',
+                'log_level': log_level}),
             include('robot_description', 'description.launch.py', {
                 'hardware_plugin': plugin,
                 'servo_calibration_file': LaunchConfiguration(
@@ -328,6 +354,10 @@ def generate_launch_description():
                     'controller_manager_config_file'),
                 'controller_config_file': LaunchConfiguration(
                     'controller_config_file'),
+                'controller_service_timeout': LaunchConfiguration(
+                    'controller_service_timeout'),
+                'controller_max_attempts': LaunchConfiguration(
+                    'controller_max_attempts'),
                 'log_level': log_level,
                 **hardware_arguments})),
             delayed(control_delay + 0.8, include(
@@ -357,12 +387,6 @@ def generate_launch_description():
                     'input_topic': '/cmd_vel_console',
                     'output_topic': '/cmd_vel_nav_safe',
                     'log_level': log_level})),
-            delayed(control_delay + 3.0, include(
-                'robot_web', 'web_console.launch.py', {
-                    'config_file': LaunchConfiguration('web_console_config_file'),
-                    'mode': mode,
-                    'static_map': 'true' if map_yaml else 'false',
-                    'log_level': log_level})),
             include('robot_navigation', 'state_estimation.launch.py', {
                 'two_d_mode_override': 'true' if mode == 'virtual' else 'false',
                 'log_level': log_level}),
@@ -377,6 +401,8 @@ def generate_launch_description():
                 'initial_yaw_source': LaunchConfiguration('initial_yaw_source'),
                 'magnetic_east_yaw_in_map': LaunchConfiguration(
                     'magnetic_east_yaw_in_map'),
+                'node_start_interval': LaunchConfiguration(
+                    'node_start_interval'),
                 'log_level': log_level})),
         ]
         if LaunchConfiguration('start_logging').perform(context).lower() == 'true':

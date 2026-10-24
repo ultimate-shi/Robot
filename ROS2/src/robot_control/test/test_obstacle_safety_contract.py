@@ -4,7 +4,9 @@ from pathlib import Path
 
 import yaml
 from geometry_msgs.msg import Twist
-from robot_control.obstacle_avoidance import stop_if_motion_component_blocked
+from sensor_msgs.msg import Range
+from robot_control.obstacle_avoidance import (
+    stop_if_motion_component_blocked, update_ultrasonic_cache)
 
 
 PACKAGE = Path(__file__).parents[1]
@@ -18,6 +20,28 @@ def test_ultrasonic_safety_is_fail_closed():
 
     assert parameters['require_valid_ranges'] is True
     assert parameters['escape_reverse_enabled'] is False
+
+
+def test_invalid_echo_keeps_only_bounded_last_valid_range():
+    """单帧无效回波不触发瞬时断流，连续无效不能延长安全超时。"""
+    topic = '/ultrasonic/right'
+    data, stamps = {topic: float('inf')}, {topic: None}
+    sample = Range(min_range=0.03, max_range=2.5, range=0.8)
+    update_ultrasonic_cache(data, stamps, topic, sample, 0.0)
+    for value, received_at in ((float('nan'), 0.17), (0.0, 0.34),
+                               (float('inf'), 0.51)):
+        sample.range = value
+        update_ultrasonic_cache(data, stamps, topic, sample, received_at)
+        assert data[topic] == 0.8
+        assert stamps[topic] == 0.0
+    timeout = yaml.safe_load(
+        (PACKAGE / 'config' / 'obstacle_avoidance.yaml').read_text(
+            encoding='utf-8'))['obstacle_avoidance']['ros__parameters']['range_timeout']
+    assert 0.34 - stamps[topic] <= timeout
+    assert 0.51 - stamps[topic] > timeout
+    sample.range = 0.1
+    update_ultrasonic_cache(data, stamps, topic, sample, 0.52)
+    assert (data[topic], stamps[topic]) == (0.1, 0.52)
 
 
 def test_range_subscriptions_use_sensor_qos():

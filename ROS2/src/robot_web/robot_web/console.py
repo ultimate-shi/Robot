@@ -16,7 +16,9 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
 from geometry_msgs.msg import PoseStamped, Twist
 from action_msgs.srv import CancelGoal
+from controller_manager_msgs.srv import ListControllers
 from nav_msgs.msg import OccupancyGrid, Odometry, Path as RosPath
+from nav_msgs.srv import GetMap
 from nav2_msgs.action import ComputePathToPose, NavigateToPose
 from pydantic import BaseModel
 import rclpy
@@ -40,6 +42,7 @@ from ament_index_python.packages import get_package_share_directory
 from tf2_ros import Buffer, TransformListener
 
 from robot_web.control import ControlState
+from robot_web.navigation_status import NavigationStatus
 
 
 class ModeBody(BaseModel):
@@ -89,6 +92,7 @@ class RobotConsole(Node):
             'chassis_cmd_topic': '/cmd_vel_safe',
             'manual_command_timeout': 0.35,
             'nav_command_timeout': 0.5, 'update_rate': 20.0,
+            'navigation_stall_notice_seconds': 10.0,
             'map_topic': '/map', 'odom_topic': '/odom',
             'detections_topic': '/perception/semantic_detections',
             'left_image_topic': '/stereo/left/image_rect',
@@ -123,6 +127,9 @@ class RobotConsole(Node):
         self.filtered_nav = Twist()
         self.filtered_nav_stamp = 0.0
         self.map = None
+        self.map_request = None
+        self.controllers = None
+        self.controller_request = None
         self.odom = None
         self.detections = None
         self.hardware = None
@@ -132,12 +139,16 @@ class RobotConsole(Node):
         self.ultrasonic = {}
         self.llm_health = None
         self.images = {}
+        self.image_seen = {}
+        self.frame_requested = {}
         self.logs = []
         self.log_sequence = 0
         self.bridge = CvBridge()
         self.pending_goal = None
         self.active_goal = None
         self.preview = None
+        self.navigation_status = NavigationStatus(
+            stalled_after=float(self.settings['navigation_stall_notice_seconds']))
         self.task = ''
         self.task_paused = False
         self.target_id = ''
@@ -197,6 +208,9 @@ class RobotConsole(Node):
                                       '/navigate_to_pose')
         self.snapshot_client = self.create_client(
             Trigger, str(self.settings['snapshot_service']))
+        self.map_client = self.create_client(GetMap, '/map_server/map')
+        self.controller_client = self.create_client(
+            ListControllers, '/controller_manager/list_controllers')
         self.mission_stop_client = self.create_client(Trigger, '/mission/stop')
         self.nav_cancel_client = self.create_client(
             CancelGoal, '/navigate_to_pose/_action/cancel_goal')
@@ -208,6 +222,7 @@ class RobotConsole(Node):
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.create_timer(1 / float(self.settings['update_rate']), self.control_loop)
         self.create_timer(0.5, self.task_loop)
+        self.create_timer(2.0, self.refresh_diagnostics)
         self.create_timer(5.0, lambda: threading.Thread(
             target=self.refresh_model_health, daemon=True).start())
 
@@ -247,6 +262,37 @@ class RobotConsole(Node):
     def on_map(self, msg):
         self.save('map', msg)
 
+    def refresh_diagnostics(self):
+        """使用方法：后台轮询静态地图和控制器状态，网页启动早于硬件时持续重试。"""
+        if (self.settings['static_map'] and self.map is None and
+                self.map_request is None and self.map_client.service_is_ready()):
+            self.map_request = self.map_client.call_async(GetMap.Request())
+            self.map_request.add_done_callback(self.on_map_response)
+        if (self.controller_request is None and
+                self.controller_client.service_is_ready()):
+            self.controller_request = self.controller_client.call_async(
+                ListControllers.Request())
+            self.controller_request.add_done_callback(self.on_controller_response)
+
+    def on_map_response(self, future):
+        try:
+            response = future.result()
+            if response.map.info.width and response.map.info.height:
+                self.on_map(response.map)
+        except Exception as exc:
+            self.get_logger().warning(f'地图服务读取失败，稍后重试：{exc}')
+        finally:
+            self.map_request = None
+
+    def on_controller_response(self, future):
+        try:
+            states = {item.name: item.state for item in future.result().controller}
+            self.save('controllers', states)
+        except Exception as exc:
+            self.get_logger().warning(f'控制器状态读取失败，稍后重试：{exc}')
+        finally:
+            self.controller_request = None
+
     def on_log(self, msg):
         with self.data_lock:
             self.log_sequence += 1
@@ -259,6 +305,9 @@ class RobotConsole(Node):
 
     def on_image(self, camera, msg):
         with self.data_lock:
+            self.image_seen[camera] = time.monotonic()
+            if time.monotonic() - self.frame_requested.get(camera, 0.0) > 2.0:
+                return
             previous = self.images.get(camera)
             if previous and time.monotonic() - previous[1] < 0.1:
                 return
@@ -309,6 +358,7 @@ class RobotConsole(Node):
         self.task_paused = False
         self.target_id = ''
         self.preview = None
+        self.navigation_status.cancel()
         self.output.publish(Twist())
         self.chassis_output.publish(Twist())
         with self.data_lock:
@@ -351,54 +401,100 @@ class RobotConsole(Node):
         return future.result()
 
     def plan(self, x, y, yaw):
-        if not self.planner.wait_for_server(timeout_sec=1):
-            raise RuntimeError('Nav2 规划服务不可用')
-        pose = self._pose(x, y, yaw)
-        goal = ComputePathToPose.Goal()
-        goal.goal = pose
-        handle = self._wait(self.planner.send_goal_async(goal))
-        if not handle.accepted:
-            raise RuntimeError('Nav2 拒绝规划目标')
-        result = self._wait(handle.get_result_async(), 15).result
-        if not result.path.poses:
-            raise RuntimeError('Nav2 未找到路径')
-        path = [{'x': item.pose.position.x, 'y': item.pose.position.y}
-                for item in result.path.poses]
-        self.preview = {'id': uuid.uuid4().hex, 'x': x, 'y': y,
-                        'yaw': yaw, 'path': path,
-                        'created': time.monotonic()}
-        return {key: value for key, value in self.preview.items()
-                if key != 'created'}
+        target = {'x': x, 'y': y, 'yaw': yaw}
+        self.preview = None
+        self.navigation_status.planning(target)
+        try:
+            if not self.planner.wait_for_server(timeout_sec=1):
+                raise RuntimeError('Nav2 规划服务不可用')
+            pose = self._pose(x, y, yaw)
+            goal = ComputePathToPose.Goal()
+            goal.goal = pose
+            handle = self._wait(self.planner.send_goal_async(goal))
+            if not handle.accepted:
+                raise RuntimeError('Nav2 拒绝规划目标')
+            result = self._wait(handle.get_result_async(), 15).result
+            if result.error_code:
+                reasons = {
+                    202: '定位或坐标变换不可用', 203: '机器人位置不在地图内',
+                    204: '目标不在地图内', 205: '机器人当前位置被障碍占据',
+                    206: '目标位置被障碍占据', 207: '规划超时',
+                    208: '目标没有可通行路径'}
+                reason = reasons.get(result.error_code, '路径规划失败')
+                detail = f'：{result.error_msg}' if result.error_msg else ''
+                raise RuntimeError(f'{reason}{detail}')
+            if not result.path.poses:
+                raise RuntimeError('Nav2 未找到路径，目标可能不可达')
+            path = [{'x': item.pose.position.x, 'y': item.pose.position.y}
+                    for item in result.path.poses]
+            self.preview = {'id': uuid.uuid4().hex, 'x': x, 'y': y,
+                            'yaw': yaw, 'path': path,
+                            'created': time.monotonic()}
+            self.navigation_status.planned(target, len(path))
+            return {key: value for key, value in self.preview.items()
+                    if key != 'created'}
+        except Exception as exc:
+            self.navigation_status.fail(f'路径规划失败：{exc}')
+            raise
 
     def navigate(self, preview_id):
         preview = self.preview
         if (not preview or preview['id'] != preview_id or
                 time.monotonic() - preview['created'] > 60):
+            self.navigation_status.fail('预演路径不存在或已过期，请重新规划')
             raise ValueError('预演路径不存在或已过期')
         if not self.navigator.wait_for_server(timeout_sec=1):
+            self.navigation_status.fail('Nav2 导航服务不可用')
             raise RuntimeError('Nav2 导航服务不可用')
         if self.active_goal:
             self.active_goal.cancel_goal_async()
             self.active_goal = None
         goal = NavigateToPose.Goal()
         goal.pose = self._pose(preview['x'], preview['y'], preview['yaw'])
-        handle = self._wait(self.navigator.send_goal_async(goal))
-        if not handle.accepted:
-            raise RuntimeError('Nav2 拒绝导航目标')
+        token = uuid.uuid4().hex
+        self.navigation_status.start(token, {
+            'x': preview['x'], 'y': preview['y'], 'yaw': preview['yaw']})
+        try:
+            handle = self._wait(self.navigator.send_goal_async(
+                goal, feedback_callback=lambda message, token=token:
+                self.on_goal_feedback(token, message.feedback)))
+            if not handle.accepted:
+                raise RuntimeError('Nav2 拒绝导航目标')
+        except Exception as exc:
+            self.navigation_status.finish(token, -1, error_msg=str(exc))
+            raise
         self.active_goal = handle
+        self.navigation_status.accepted(token)
         handle.get_result_async().add_done_callback(
-            lambda future, handle=handle: self.on_goal_result(future, handle))
+            lambda future, handle=handle, token=token:
+            self.on_goal_result(future, handle, token))
         self.preview = None
         return {'accepted': True}
 
-    def on_goal_result(self, future, handle):
+    def on_goal_feedback(self, token, feedback):
+        """使用方法：Nav2 每次反馈都更新距离、耗时和恢复次数；旧目标反馈自动丢弃。"""
+        elapsed = feedback.navigation_time
+        eta = feedback.estimated_time_remaining
+        orientation = feedback.current_pose.pose.orientation
+        current_yaw = 2 * math.atan2(orientation.z, orientation.w)
+        self.navigation_status.feedback(
+            token, feedback.distance_remaining,
+            elapsed.sec + elapsed.nanosec / 1e9,
+            eta.sec + eta.nanosec / 1e9,
+            feedback.number_of_recoveries, current_yaw)
+
+    def on_goal_result(self, future, handle, token):
         try:
-            status = future.result().status
-        except Exception:
-            status = -1
+            response = future.result()
+            status = response.status
+            error_code = response.result.error_code
+            error_msg = response.result.error_msg
+        except Exception as exc:
+            status, error_code, error_msg = -1, 0, f'导航结果读取失败：{exc}'
         if self.active_goal is not handle:
             return
         self.active_goal = None
+        self.navigation_status.finish(token, status, error_code, error_msg)
         if self.control.stopped or self.task_paused:
             return
         if self.task == 'explore' and status == 4:
@@ -511,6 +607,7 @@ class RobotConsole(Node):
                       'uptime_seconds': round(now - self.start_time),
                       'task': self.task, 'images': {}, 'map_ready': False,
                       'task_paused': self.task_paused,
+                      'navigation': self.navigation_status.snapshot(),
                       'external_model_configured': bool(
                           self.settings['external_model_url']),
                       'detections': []}
@@ -520,13 +617,21 @@ class RobotConsole(Node):
             result['ros_nodes'] = [namespace.rstrip('/') + '/' + name
                                    for name, namespace in
                                    self.get_node_names_and_namespaces()]
-            for name, image in self.images.items():
-                result['images'][name] = {'fresh': now - image[1] < 2}
+            for name, stamp in self.image_seen.items():
+                result['images'][name] = {'fresh': now - stamp < 2}
             if self.map:
                 map_age = now - self.map[1]
                 result['map_ready'] = (self.settings['static_map'] or
                                        map_age < 10)
                 result['map_age_seconds'] = round(map_age, 1)
+            result['map_source'] = ('已接收地图' if self.map else
+                '等待地图服务' if self.settings['static_map'] and
+                not self.map_client.service_is_ready() else
+                '地图服务已就绪，等待地图数据' if self.settings['static_map'] else
+                '等待在线建图')
+            result['controllers'] = {
+                'available': bool(self.controllers and now - self.controllers[1] < 5),
+                'states': self.controllers[0] if self.controllers else {}}
             if self.odom:
                 odom, stamp = self.odom
                 result['odom'] = {'fresh': now - stamp < 1 and
@@ -539,19 +644,25 @@ class RobotConsole(Node):
                 transform = self.tf_buffer.lookup_transform(
                     'map', 'base_link', Time())
                 pose = transform.transform.translation
+                orientation = transform.transform.rotation
                 stamp_ns = (transform.header.stamp.sec * 1_000_000_000 +
                             transform.header.stamp.nanosec)
                 age = (self.get_clock().now().nanoseconds - stamp_ns) / 1e9
                 result['pose'] = {'fresh': 0 <= age <= 2 and
                                   math.isfinite(pose.x) and math.isfinite(pose.y),
                                   'x': self.json_number(pose.x),
-                                  'y': self.json_number(pose.y)}
+                                  'y': self.json_number(pose.y),
+                                  'yaw': self.json_number(
+                                      2 * math.atan2(orientation.z, orientation.w))}
             except Exception:
                 result['pose'] = {'fresh': False}
             if self.hardware:
                 hardware, stamp = self.hardware
                 result['hardware'] = {
                     'fresh': now - stamp < 2,
+                    'dmc0_connected': hardware.dmc0_connected,
+                    'dmc1_connected': hardware.dmc1_connected,
+                    'se2_connected': hardware.se2_connected,
                     'connected': all((hardware.dmc0_connected,
                                       hardware.dmc1_connected,
                                       hardware.se2_connected)),
@@ -562,6 +673,7 @@ class RobotConsole(Node):
             result['imu_fresh'] = bool(self.imu and now - self.imu[1] < 2)
             result['ultrasonic'] = {
                 topic.rsplit('/', 1)[-1]: {
+                    'received': now - sample[1] < 1,
                     'fresh': now - sample[1] < 1 and math.isfinite(sample[0]),
                     'range_m': self.json_number(sample[0])}
                 for topic, sample in self.ultrasonic.items()}
@@ -726,6 +838,11 @@ def create_app(robot, web_dir=None):
     def status():
         return robot.status()
 
+    @app.get('/api/navigation-status')
+    def navigation_status():
+        """使用方法：导航控制区每 0.5 秒读取最新 Nav2 Action 反馈。"""
+        return robot.navigation_status.snapshot()
+
     @app.get('/api/map')
     def map_data():
         try:
@@ -738,6 +855,7 @@ def create_app(robot, web_dir=None):
         if camera not in ('left', 'right', 'depth'):
             raise HTTPException(404, '未知相机')
         with robot.data_lock:
+            robot.frame_requested[camera] = time.monotonic()
             item = robot.images.get(camera)
             if not item or time.monotonic() - item[1] > 2:
                 raise HTTPException(503, '图像断流')

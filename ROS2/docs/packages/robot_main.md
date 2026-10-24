@@ -12,6 +12,9 @@ ros2 launch robot_main robot.launch.py mode:=virtual map_yaml_file:=/path/to/map
 ```
 
 修改组合关系时需要同步复核相关功能包的参数和接口。
+已有地图的 `map_yaml_file` 应使用 ROS 进程当前环境内的路径；容器内使用
+`/workspace/maps/.../map.yaml`。整车在启动硬件和 Nav2 前验证 YAML 与图像文件，
+路径错误时直接退出并报告文件名。
 整车会启动 `robot_web` 的控制台 ROS 节点；网页位于 `/robot/`、`/robot/status` 和
 `/robot/console`，历史日志查询位于独立的 `/log/`。
 

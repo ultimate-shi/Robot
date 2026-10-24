@@ -7,14 +7,14 @@
 
 controller_manager:
   ros__parameters:
-    update_rate: 7         # 四轮逐轴 S 后实测单周期串口读写约 115ms；7Hz 留约 28ms 余量
+    update_rate: 6         # D 查询和四轮逐轴写入常超过 143ms；6Hz 给串口周期留调度余量
     use_sim_time: false    # 是否使用仿真 /clock 时间，false 表示使用系统时间
 
 # 关节状态广播器
 joint_state_broadcaster:
   ros__parameters:
     type: joint_state_broadcaster/JointStateBroadcaster  # 关节状态广播器插件类型
-    publish_rate: 7.0                                    # /joint_states 发布频率，单位 Hz
+    publish_rate: 6.0                                    # /joint_states 发布频率，与硬件控制周期一致，单位 Hz
     use_system_time: true                                # 是否使用系统时间发布关节状态
 
 

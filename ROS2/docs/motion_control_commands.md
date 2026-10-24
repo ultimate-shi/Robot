@@ -1,4 +1,4 @@
-<!-- 使用方法：启动 robot_main 后，直接复制本文命令控制机器人或定位运动链问题。 -->
+<!-- 作用：汇总 ROS 2 底盘运动控制与排障命令；使用方法：核对现场安全条件后按相应章节执行。 -->
 # ROS 2 运动控制指令速查
 
 命令默认在 `robot-jazzy` 容器内执行：
@@ -79,14 +79,15 @@ source /workspace/install/setup.bash
 原始采样在 `calibration_reports/wheel/{fl,fr,rl,rr}_d_manual.json`。
 此轮 D100% 实测速度幅值分别为 1.92590、1.86307、1.94010、1.99849rad/s；
 峰值电流和时间序列以 JSON 为准。以下 2026-09-27/28 段落仅记录当时测试状态。
-当前 ROS 硬件接口按 `robot_hardware/config/wheel_calibration.yaml` 读取这些曲线；
-只在正 PWM 实测对应的 ROS 方向且达到首个实测速度时使用 D 反查，其他方向和低速仍发 S 速度命令。
+当前 ROS 硬件接口按 `robot_hardware/config/wheel_calibration.yaml` 读取各轮正 PWM 曲线，
+所有轮位和方向均发送逐轴 D 命令；反向取同幅值的负占空比，低于首点时从零点插值。
+2026-10-22 已完成全轮 D 模式 ±0.06/0.08/0.1 m/s 六段架空短测，接地负载仍待验收。
 更换轮电机后应重新测相应轮位，并核对 `/joint_states` 的位置和速度正方向。
 
 2026-10-10 `/cmd_vel_safe` 架空测试：直行 0.04m/s 时四轮 ROS 目标均为
 +0.727rad/s；FL/FR/RL 反馈中位数约 +0.731/+0.707/+0.707rad/s，
 RR 在 `speed_command_sign: 1` 时为 -1.922rad/s，改为 -1 后为 +1.978rad/s。
-因此右后 S7 两种符号都不能跟随目标，硬件配置已禁用其非零 S 命令并故障停车。
+因此右后 S7 两种符号都不能跟随目标；这是历史 S 模式测试，当前 ROS 插件不发送 S 命令。
 0.05m/s、0.02rad/s 小角度转弯的四轮目标约
 +0.860/+0.962/+0.860/+0.962rad/s，转向目标约
 +0.066/+0.059/-0.066/-0.059rad；转向反馈摆动使轮速命令反复置零，
@@ -123,7 +124,7 @@ D30%/300ms 测得 2875mA，达到本轮 2800mA 软件停机门槛并立即停车
 `-encoder_direction` 后的 ROS 轮速；板端右轮的 S 正目标会返回负 tps。
 
 四轮原始采集程序已退役；上述实测数据仅保留作硬件诊断记录。
-改为逐轴 `S4..S7` 后，硬件串口单周期约 115ms，控制器管理器调至 7Hz；
+当时改为逐轴 `S4..S7` 后，硬件串口单周期约 115ms，控制器管理器调至 7Hz；
 零速架空启动没有再次出现 10Hz 下持续的周期超时。ROS 轮速复验被“转向关节未回中”
 保护拦截，未发送轮速；只读 `/joint_states` 当时四个转向角约为
 `[-0.119,-0.034,-0.077,-0.179]rad`，超过标定工具 0.06rad 限值的有三轮。
@@ -206,16 +207,20 @@ ros2 topic echo /wheel/odometry_status --once
 
 ## 2. 底盘速度
 
-推荐入口：
+整车导航速度链：
 
 ```text
-/cmd_vel_nav_raw -> 平滑 -> 门控 -> 超声波安全层 -> 运动学 -> ros2_control
+/cmd_vel_nav_raw -> 平滑 -> /cmd_vel_nav -> robot_web /cmd_vel_console
+-> 超声波安全层 -> /cmd_vel_nav_safe -> robot_web /cmd_vel_safe
+-> 运动学 -> ros2_control
 ```
 
-使用统一 `robot_main` 整车入口时，门控与超声波安全层之间还经过
-`/cmd_vel_console` 网页控制台仲裁。启动时软件停止锁默认锁定；需在
-`/robot/` 首页取得控制权并显式解除后，Nav2 或人工速度才会被转发。
-单独启动旧 `safety.launch.py` 的测试链路不包含该仲裁节点。
+当前代码启动时软件停止锁初值为未锁定；
+若软件停止锁已锁定，在 `/robot/` 首页显式解除后，Nav2 或人工速度才会被转发。
+网页已取消独占控制权，任一页面均可操作。
+手动速度由控制台直接发布到 `/cmd_vel_safe`，绕过超声波避障；导航速度经
+`/cmd_vel_console` 和避障过滤后，再由控制台转发到 `/cmd_vel_safe`。
+单独启动 `safety.launch.py` 的测试链路不包含该仲裁节点，话题路径以其 launch 参数为准。
 
 | 字段 | 正值 | 负值 | 单位 |
 |---|---|---|---|
@@ -273,8 +278,7 @@ ros2 topic pub -r 10 -t 30 /cmd_vel_nav_raw geometry_msgs/msg/Twist \
 ros2 param set /chassis_controller motion_mode four_ws
 ```
 
-不要直接发布 `/cmd_vel_nav`、`/cmd_vel_safe` 或最终轮速话题。它们会与现有节点竞争，或者绕过
-安全层。侧向超声波无效时，安全层会禁止斜行。
+使用整车入口测试导航时，不要直接发布 `/cmd_vel_nav`、`/cmd_vel_safe` 或最终轮速话题。它们会与现有节点竞争，或者绕过安全层。控制台须处于导航、探索或跟随模式，才会把导航速度送入避障链；手动模式会持续输出零导航速度。侧向超声波无效时，安全层会禁止斜行。
 
 ## 3. 停车和恢复
 
@@ -407,11 +411,13 @@ ros2 topic pub -r 2 -t 10 /head_controller/commands std_msgs/msg/Float64MultiArr
 ros2 topic echo /cmd_vel_nav_raw
 ros2 topic echo /cmd_vel_nav_smoothed
 ros2 topic echo /cmd_vel_nav
+ros2 topic echo /cmd_vel_console
+ros2 topic echo /cmd_vel_nav_safe
 ros2 topic echo /cmd_vel_safe
 ros2 topic echo /obstacle_avoidance/status
 ```
 
-- 上游有速度、`cmd_vel_safe` 为零：检查超声波和安全层 warnings。
+- 上游有速度、`cmd_vel_safe` 为零：检查控制台模式、软件停止锁、超声波和安全层状态。
 - `cmd_vel_safe` 正确、控制器没命令：检查 `chassis_controller`。
 - 控制器命令正确、实车不动：检查硬件输出、电机和编码器。
 

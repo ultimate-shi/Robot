@@ -1,4 +1,4 @@
-<!-- 使用方法：按本文在 RK3588 上完成双目标定、启动和验收。 -->
+<!-- 作用：说明双目相机的标定、启动与验收；使用方法：按本文在 RK3588 上逐步操作。 -->
 # 双目相机从接线到 Nav2 的完整操作指南
 
 本文适用于当前项目的“单个 UVC 设备输出横向拼接左右图”相机。默认总图为
@@ -166,7 +166,7 @@ Jazzy 环境手工执行：
 
 ```bash
 source /opt/ros/jazzy/setup.bash
-source /home/shijiahao/Downloads/ros2/robot_ws/install/setup.bash
+source /workspace/install/setup.bash
 
 ros2 run camera_calibration cameracalibrator \
   --size 8x6 \
@@ -307,16 +307,16 @@ source install/setup.bash
 ```bash
 ros2 launch robot_perception stereo_camera.launch.py \
   calibration_mode:=false \
-  left_calibration_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot_perception/config/cameras/model_serial_640x480/left.yaml \
-  right_calibration_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot_perception/config/cameras/model_serial_640x480/right.yaml
+  left_calibration_file:=/workspace/src/robot_perception/config/cameras/usb_camera_01_00_00_640x480/left.yaml \
+  right_calibration_file:=/workspace/src/robot_perception/config/cameras/usb_camera_01_00_00_640x480/right.yaml
 ```
 
 完整实机：
 
 ```bash
 ros2 launch robot_navigation stereo_robot.launch.py \
-  left_calibration_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot_perception/config/cameras/model_serial_640x480/left.yaml \
-  right_calibration_file:=/home/shijiahao/Downloads/ros2/robot_ws/src/robot_perception/config/cameras/model_serial_640x480/right.yaml
+  left_calibration_file:=/workspace/src/robot_perception/config/cameras/usb_camera_01_00_00_640x480/left.yaml \
+  right_calibration_file:=/workspace/src/robot_perception/config/cameras/usb_camera_01_00_00_640x480/right.yaml
 ```
 
 只有再次 `colcon build` 后，profile 才会被安装到
@@ -405,9 +405,8 @@ ros2 topic echo /stereo/scan --once
 - local costmap 应标记障碍。
 - 障碍出现后 0.75 秒内应标记，移除后 1.5 秒内应清除。
 - `/stereo/scan` 的角度、距离和 `base_link` frame 应与过滤点云一致。
-- 障碍进入 0.40 m 区域时 `/cmd_vel_safe` 不得超过输入速度的 50%。
-- 障碍进入 0.25 m 区域时 `/cmd_vel_safe` 必须为零。
-- 停止发布 `/stereo/scan` 后 0.75 秒内必须输出零速。
+- 障碍进入路径后，核对 Nav2 局部代价地图、速度规划与 `/cmd_vel_nav_raw` 是否作出响应。
+- 整车最终速度还受网页控制台模式和八路超声波安全层约束；不要把 `/stereo/scan` 的单独断流等同于 `/cmd_vel_safe` 必然停车。
 
 ### 5. 完整稳定性
 
@@ -436,11 +435,7 @@ ros2 run robot_perception stereo_pipeline_benchmark --ros-args \
   -p output_file:=/tmp/stereo_pipeline_result.json
 ```
 
-需要人工监测时再启动 Bridge：
-
-```bash
-ros2 launch robot_navigation stereo_robot.launch.py
-```
+完整实机入口已经启动 Foxglove Bridge；需要人工监测时直接连接当前 Bridge，避免重复启动整车。
 
 Foxglove 只显示左右校正压缩图、深度预览、过滤点云和 `/stereo/scan`，不要持续订阅
 `/stereo/depth/image` 或 `/stereo/points2`。

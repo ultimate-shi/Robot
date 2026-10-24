@@ -13,6 +13,8 @@
   <xacro:arg name="discovery_retry_delay_ms" default="700"/>
   <xacro:arg name="encoder_query_delay_ms" default="20"/>
   <xacro:arg name="command_timeout_ms" default="500"/>
+  <xacro:arg name="servo_keepalive_period_ms" default="40"/>
+  <xacro:arg name="servo_command_timeout_ms" default="400"/>
   <xacro:arg name="wheel_diameter" default="0.110"/>
   <xacro:arg name="sonar_lpf_alpha" default="0.2"/>
   <xacro:arg name="sonar_min_valid_mm" default="30"/>
@@ -298,6 +300,8 @@
                   discovery_retry_delay_ms="$(arg discovery_retry_delay_ms)"
                   encoder_query_delay_ms="$(arg encoder_query_delay_ms)"
                   command_timeout_ms="$(arg command_timeout_ms)"
+                  servo_keepalive_period_ms="$(arg servo_keepalive_period_ms)"
+                  servo_command_timeout_ms="$(arg servo_command_timeout_ms)"
                   wheel_diameter="$(arg wheel_diameter)"
                   sonar_lpf_alpha="$(arg sonar_lpf_alpha)"
                   sonar_min_valid_mm="$(arg sonar_min_valid_mm)"
