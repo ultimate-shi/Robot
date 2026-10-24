@@ -38,6 +38,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'start_velocity_gate', default_value='true',
             description='是否启动 Nav2 速度门控节点'),
+        DeclareLaunchArgument('require_localization', default_value='false',
+                              description='已有地图实机是否必须获得视觉定位许可'),
         DeclareLaunchArgument(
             'start_obstacle_avoidance', default_value='true',
             description='是否启动最终障碍速度过滤节点'),
@@ -46,6 +48,7 @@ def generate_launch_description():
                 share, 'launch', 'nav_velocity_gate.launch.py')),
             launch_arguments={
                 'log_level': log_level,
+                'require_localization': LaunchConfiguration('require_localization'),
             }.items(),
             condition=IfCondition(LaunchConfiguration(
                 'start_velocity_gate'))),

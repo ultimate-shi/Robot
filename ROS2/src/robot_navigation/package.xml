@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<!-- 使用方法：构建后通过 stereo_mapping、stereo_robot 或 nav2 launch 启动导航能力。 -->
+<!-- 作用：声明建图、定位、生命周期恢复和导航依赖；使用方法：构建后通过相应 launch 启动。 -->
 <package format="3">
   <name>robot_navigation</name><version>0.1.0</version>
   <description>机器人建图、Nav2、停靠点、跟随目标和探索路径预演</description>
@@ -9,6 +9,8 @@
   <depend>rclpy</depend><depend>robot_interfaces</depend><depend>geometry_msgs</depend>
   <depend>nav_msgs</depend><depend>nav2_msgs</depend><depend>sensor_msgs</depend>
   <depend>std_msgs</depend><depend>std_srvs</depend><depend>tf2_ros</depend>
+  <depend>lifecycle_msgs</depend>
+  <depend>rtabmap_msgs</depend>
   <exec_depend>nav2_map_server</exec_depend><exec_depend>nav2_planner</exec_depend>
   <exec_depend>nav2_lifecycle_manager</exec_depend><exec_depend>rtabmap_odom</exec_depend>
   <exec_depend>rtabmap_slam</exec_depend><exec_depend>robot_description</exec_depend>

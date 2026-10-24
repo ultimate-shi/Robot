@@ -14,7 +14,7 @@ import cv2
 from cv_bridge import CvBridge
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, Response
-from geometry_msgs.msg import PoseStamped, Twist
+from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from action_msgs.srv import CancelGoal
 from controller_manager_msgs.srv import ListControllers
 from nav_msgs.msg import OccupancyGrid, Odometry, Path as RosPath
@@ -101,6 +101,10 @@ class RobotConsole(Node):
             'mission_status_topic': '/mission/status',
             'safety_status_topic': '/obstacle_avoidance/status',
             'snapshot_service': '/mapping/save_snapshot',
+            'snapshot_timeout': 90.0,
+            'localization_status_timeout': 1.0,
+            'initial_pose_xy_variance': 0.25,
+            'initial_pose_yaw_variance': 0.12,
             'imu_topic': '/sensors/imu/data',
             'ultrasonic_topics': ['/ultrasonic/front_left',
                                   '/ultrasonic/front_center',
@@ -158,6 +162,15 @@ class RobotConsole(Node):
         self.last_follow_plan = 0.0
         self.model_proposals = {}
         self.start_time = time.monotonic()
+        self.localization = None
+        self.localization_pending = False
+        self.saving_map = False
+        self.localization_required = (self.settings['mode'] == 'real' and
+                                      self.settings['static_map'])
+        self.initial_pose_pub = self.create_publisher(
+            PoseWithCovarianceStamped, '/localization/initialpose', 1)
+        self.retry_localization_client = self.create_client(Trigger, '/localization/retry')
+        self.create_subscription(String, '/localization/status', self.on_localization, 1)
         self.output = self.create_publisher(
             Twist, str(self.settings['safe_input_topic']), 10)
         self.chassis_output = self.create_publisher(
@@ -249,6 +262,74 @@ class RobotConsole(Node):
         with self.data_lock:
             self.ultrasonic[topic] = (float(msg.range), time.monotonic())
 
+    def on_localization(self, msg):
+        try:
+            payload = json.loads(msg.data)
+            if not isinstance(payload, dict) or type(payload.get('ready')) is not bool:
+                return
+            if self.localization_pending:
+                if payload['ready']:
+                    return
+                self.localization_pending = False
+            self.save('localization', payload)
+        except (TypeError, ValueError):
+            return
+
+    def localization_status(self):
+        if not self.localization_required:
+            return {'required': False, 'ready': True,
+                    'state': 'mapping' if not self.settings['static_map'] else 'virtual',
+                    'message': '在线建图定位' if not self.settings['static_map'] else '仿真初始位姿'}
+        with self.data_lock:
+            if (self.localization is None or time.monotonic() - self.localization[1] >
+                    float(self.settings['localization_status_timeout'])):
+                return {'required': True, 'ready': False, 'state': 'unavailable',
+                        'message': '定位服务未就绪或已断开，自主导航已禁止；请检查定位节点及相机'}
+            return {**self.localization[0], 'required': True}
+
+    def require_localized(self):
+        if self.saving_map:
+            raise ValueError('地图和数据库正在保存，请等待完成')
+        status = self.localization_status()
+        if not status['ready']:
+            raise ValueError(status['message'])
+
+    def set_initial_pose(self, x, y, yaw):
+        if self.saving_map:
+            raise ValueError('地图和数据库正在保存，请等待完成')
+        if not self.localization_required:
+            raise ValueError('设置初始位姿仅用于实机重载地图定位')
+        pose = self._pose(x, y, yaw)
+        with self.data_lock:
+            if self.map is None:
+                raise ValueError('地图尚未就绪')
+            grid = self.map[0]
+            origin = grid.info.origin
+            angle = 2 * math.atan2(origin.orientation.z, origin.orientation.w)
+            dx, dy = x - origin.position.x, y - origin.position.y
+            gx = math.floor((math.cos(angle)*dx + math.sin(angle)*dy) / grid.info.resolution)
+            gy = math.floor((-math.sin(angle)*dx + math.cos(angle)*dy) / grid.info.resolution)
+            if not (0 <= gx < grid.info.width and 0 <= gy < grid.info.height):
+                raise ValueError('初始位置必须在地图范围内')
+            if grid.data[gy*grid.info.width+gx] >= 65:
+                raise ValueError('初始位置落在障碍物中，请选择机器人实际所在的空闲位置')
+        if self.initial_pose_pub.get_subscription_count() == 0:
+            raise ValueError('定位服务尚未就绪，请稍后再提交')
+        self.cancel_motion()
+        if not self.control.stopped:
+            self.control.set_mode('manual')
+        self.localization_pending = True
+        self.save('localization', {'ready': False, 'state': 'waiting',
+                                  'message': '已提交初始估计，等待视觉匹配确认'})
+        message = PoseWithCovarianceStamped()
+        message.header = pose.header
+        message.pose.pose = pose.pose
+        message.pose.covariance[0] = message.pose.covariance[7] = float(
+            self.settings['initial_pose_xy_variance'])
+        message.pose.covariance[35] = float(self.settings['initial_pose_yaw_variance'])
+        self.initial_pose_pub.publish(message)
+        return {'success': True, 'message': '已设置初始估计；视觉定位成功后才允许自主导航'}
+
     def refresh_model_health(self):
         try:
             with urlopen(str(self.settings['local_model_url']).rstrip('/') +
@@ -324,10 +405,16 @@ class RobotConsole(Node):
 
     def control_loop(self):
         state = self.control.snapshot()
+        if not self.localization_status()['ready'] and state['mode'] != 'manual':
+            self.cancel_motion()
+            self.navigation_status.fail('定位不可用，导航已取消；恢复后请重新规划并确认')
+            if not self.control.stopped:
+                self.control.set_mode('manual')
+            state = self.control.snapshot()
         self.stop_state_pub.publish(Bool(data=state['stopped']))
         chassis_cmd = Twist()
         nav_cmd = Twist()
-        if not state['stopped']:
+        if not state['stopped'] and not self.saving_map:
             if state['mode'] == 'manual':
                 chassis_cmd.linear.x, chassis_cmd.angular.z = self.control.manual_velocity()
             elif (state['mode'] in ('navigation', 'explore', 'follow')
@@ -401,6 +488,7 @@ class RobotConsole(Node):
         return future.result()
 
     def plan(self, x, y, yaw):
+        self.require_localized()
         target = {'x': x, 'y': y, 'yaw': yaw}
         self.preview = None
         self.navigation_status.planning(target)
@@ -414,6 +502,7 @@ class RobotConsole(Node):
             if not handle.accepted:
                 raise RuntimeError('Nav2 拒绝规划目标')
             result = self._wait(handle.get_result_async(), 15).result
+            self.require_localized()
             if result.error_code:
                 reasons = {
                     202: '定位或坐标变换不可用', 203: '机器人位置不在地图内',
@@ -438,6 +527,7 @@ class RobotConsole(Node):
             raise
 
     def navigate(self, preview_id):
+        self.require_localized()
         preview = self.preview
         if (not preview or preview['id'] != preview_id or
                 time.monotonic() - preview['created'] > 60):
@@ -460,6 +550,11 @@ class RobotConsole(Node):
                 self.on_goal_feedback(token, message.feedback)))
             if not handle.accepted:
                 raise RuntimeError('Nav2 拒绝导航目标')
+            try:
+                self.require_localized()
+            except ValueError:
+                handle.cancel_goal_async()
+                raise
         except Exception as exc:
             self.navigation_status.finish(token, -1, error_msg=str(exc))
             raise
@@ -569,6 +664,7 @@ class RobotConsole(Node):
 
     def start_task(self, task, target_id='', follow_distance=1.5,
                    max_speed=0.04):
+        self.require_localized()
         if self.control.stopped:
             raise ValueError('软件停止锁尚未解除')
         if task not in ('explore', 'follow'):
@@ -602,6 +698,7 @@ class RobotConsole(Node):
         with self.data_lock:
             now = time.monotonic()
             result = {'control': self.control.snapshot(),
+                      'localization': self.localization_status(),
                       'mode_source': self.settings['mode'],
                       'vision_enabled': self.vision_enabled,
                       'uptime_seconds': round(now - self.start_time),
@@ -768,6 +865,7 @@ class RobotConsole(Node):
                 'action': decision.action.name if decision.action else None}
 
     def confirm_model(self, identifier):
+        self.require_localized()
         proposal = self.model_proposals.pop(identifier, None)
         if not proposal or time.monotonic() - proposal['created'] > 60:
             raise ValueError('模型任务提案已过期')
@@ -892,6 +990,8 @@ def create_app(robot, web_dir=None):
             raise HTTPException(423, '软件停止锁尚未解除')
         robot.cancel_motion()
         try:
+            if body.mode != 'manual':
+                robot.require_localized()
             robot.control.set_mode(body.mode)
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -900,6 +1000,8 @@ def create_app(robot, web_dir=None):
     @app.post('/api/drive')
     def drive(body: DriveBody):
         try:
+            if robot.saving_map and (body.linear != 0 or body.angular != 0):
+                raise ValueError('地图和数据库正在保存，请等待完成后再遥控')
             robot.control.command(body.linear, body.angular,
                                   body.client_id, body.sequence)
         except ValueError as exc:
@@ -919,8 +1021,9 @@ def create_app(robot, web_dir=None):
     def navigate(preview_id: str):
         if robot.control.stopped:
             raise HTTPException(423, '软件停止锁尚未解除')
-        robot.control.set_mode('navigation')
         try:
+            robot.require_localized()
+            robot.control.set_mode('navigation')
             return robot.navigate(preview_id)
         except (ValueError, RuntimeError, TimeoutError) as exc:
             raise HTTPException(422, str(exc)) from exc
@@ -936,8 +1039,42 @@ def create_app(robot, web_dir=None):
     def save_map():
         if not robot.snapshot_client.service_is_ready():
             raise HTTPException(503, '地图快照服务不可用')
+        with robot.data_lock:
+            if robot.saving_map:
+                raise HTTPException(409, '地图正在保存，请等待完成')
+            robot.saving_map = True
         try:
-            result = robot._wait(robot.snapshot_client.call_async(Trigger.Request()), 15)
+            robot.cancel_motion()
+            if not robot.control.stopped:
+                robot.control.set_mode('manual')
+            result = robot._wait(robot.snapshot_client.call_async(Trigger.Request()),
+                                 float(robot.settings['snapshot_timeout']))
+        except TimeoutError as exc:
+            raise HTTPException(504, str(exc)) from exc
+        finally:
+            robot.saving_map = False
+        return {'success': result.success, 'message': result.message}
+
+    @app.post('/api/localization/initial-pose')
+    def initial_pose(body: GoalBody):
+        try:
+            return robot.set_initial_pose(body.x, body.y, body.yaw)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from exc
+
+    @app.post('/api/localization/retry')
+    def retry_localization():
+        if robot.saving_map:
+            raise HTTPException(409, '地图和数据库正在保存，请等待完成')
+        if not robot.localization_required or not robot.retry_localization_client.service_is_ready():
+            raise HTTPException(503, '重定位服务未就绪，请检查当前地图和定位节点')
+        robot.cancel_motion()
+        if not robot.control.stopped:
+            robot.control.set_mode('manual')
+        robot.save('localization', {'ready': False, 'state': 'waiting', 'message': '正在重新定位'})
+        robot.localization_pending = True
+        try:
+            result = robot._wait(robot.retry_localization_client.call_async(Trigger.Request()))
         except TimeoutError as exc:
             raise HTTPException(504, str(exc)) from exc
         return {'success': result.success, 'message': result.message}
@@ -946,6 +1083,7 @@ def create_app(robot, web_dir=None):
     def task(body: TaskBody):
         try:
             if body.task in ('explore-start', 'follow-start'):
+                robot.require_localized()
                 mode = 'explore' if body.task.startswith('explore') else 'follow'
                 if robot.control.stopped:
                     raise ValueError('软件停止锁尚未解除')
@@ -962,6 +1100,7 @@ def create_app(robot, web_dir=None):
                     robot.active_goal = None
                 return {'task': robot.task, 'paused': True}
             if body.task == 'resume':
+                robot.require_localized()
                 if robot.control.stopped:
                     raise ValueError('软件停止锁尚未解除')
                 if not robot.task or not robot.task_paused:

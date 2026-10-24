@@ -1,21 +1,64 @@
 #!/usr/bin/env python3
-"""使用方法：由 stereo_mapping.launch.py 保存在线 SLAM 二维地图和三维点云快照。"""
+"""作用：成套保存地图、点云及已落盘的 SLAM 数据库；使用方法：调用 /mapping/save_snapshot。"""
 
 import json
 import math
 import os
+import shutil
+import sqlite3
+import tempfile
+import threading
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 import numpy as np
 import rclpy
 from nav_msgs.msg import OccupancyGrid
+from nav_msgs.srv import GetMap
 from rclpy.executors import ExternalShutdownException
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, HistoryPolicy, QoSProfile
 from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import String
-from std_srvs.srv import Trigger
+from std_srvs.srv import Empty, Trigger
+from robot_navigation.mapping.database import copy_database, file_digest
+
+
+def snapshot_identity(directory, owner_uid=-1, owner_gid=-1):
+    """普通进程使用当前用户；容器 root 默认沿保存路径向上查找工作区用户。"""
+    uid, gid = os.getuid(), os.getgid()
+    if uid == 0:
+        candidate = os.path.abspath(directory)
+        while True:
+            if os.path.exists(candidate):
+                info = os.stat(candidate)
+                if info.st_uid != 0:
+                    uid, gid = info.st_uid, info.st_gid
+                    break
+            parent = os.path.dirname(candidate)
+            if parent == candidate:
+                break
+            candidate = parent
+    return (uid if owner_uid < 0 else owner_uid,
+            gid if owner_gid < 0 else owner_gid)
+
+
+def apply_snapshot_permissions(directory, uid, gid):
+    """成套地图归目标用户所有，目录可遍历和写入，文件可读写，避免临时目录保留 0700。"""
+    for root, directories, files in os.walk(directory, topdown=False, followlinks=False):
+        for name in directories + files:
+            path = os.path.join(root, name)
+            if os.path.islink(path):
+                raise ValueError('地图快照目录内不能含符号链接')
+        for name in files:
+            path = os.path.join(root, name)
+            os.chown(path, uid, gid)
+            os.chmod(path, 0o644)
+        os.chown(root, uid, gid)
+        os.chmod(root, 0o755)
 
 
 def snapshot_time(timezone_name, now=None):
@@ -128,6 +171,15 @@ class SnapshotManager(Node):
             'save_directory': '/workspace/maps',
             'snapshot_basename': 'current',
             'snapshot_timezone': 'UTC',
+            'database_path': '/tmp/robot_rtabmap_mapping.db',
+            'database_service_timeout': 60.0,
+            'resume_service_timeout': 5.0,
+            'backup_service': '/rtabmap/backup',
+            'pause_service': '/rtabmap/pause',
+            'resume_service': '/rtabmap/resume',
+            'map_service': '/rtabmap/get_map',
+            'snapshot_owner_uid': -1,
+            'snapshot_owner_gid': -1,
         }
         for name, value in defaults.items():
             self.declare_parameter(name, value)
@@ -138,10 +190,29 @@ class SnapshotManager(Node):
             self.get_parameter('snapshot_basename').value)
         self.snapshot_timezone = str(
             self.get_parameter('snapshot_timezone').value)
+        owner_uid = int(self.get_parameter('snapshot_owner_uid').value)
+        owner_gid = int(self.get_parameter('snapshot_owner_gid').value)
+        if owner_uid < -1 or owner_gid < -1:
+            raise ValueError('快照属主 UID/GID 必须是 -1 或非负整数')
+        self.snapshot_uid, self.snapshot_gid = snapshot_identity(
+            self.save_directory, owner_uid, owner_gid)
         # 启动时立即校验，避免保存请求到来后才暴露无效时区配置。
         snapshot_time(self.snapshot_timezone)
         self.latest_map = None
         self.latest_cloud = None
+        self.database_path = str(self.get_parameter('database_path').value)
+        self.database_timeout = float(self.get_parameter('database_service_timeout').value)
+        self.resume_timeout = float(self.get_parameter('resume_service_timeout').value)
+        self.backup_future = None
+        self.client_group = ReentrantCallbackGroup()
+        self.backup_client = self.create_client(
+            Empty, str(self.get_parameter('backup_service').value), callback_group=self.client_group)
+        self.pause_client = self.create_client(Empty, str(self.get_parameter('pause_service').value),
+                                               callback_group=self.client_group)
+        self.resume_client = self.create_client(Empty, str(self.get_parameter('resume_service').value),
+                                                callback_group=self.client_group)
+        self.map_client = self.create_client(GetMap, str(self.get_parameter('map_service').value),
+                                             callback_group=self.client_group)
 
         map_qos = QoSProfile(
             history=HistoryPolicy.KEEP_LAST,
@@ -177,11 +248,46 @@ class SnapshotManager(Node):
     def _save_snapshot(self, request, response):
         del request
         session = snapshot_time(self.snapshot_timezone).strftime(
-            'map_%Y%m%d_%H%M%S')
+            'map_%Y%m%d_%H%M%S_%f')
         directory = os.path.join(self.save_directory, session)
-        return self._handle_snapshot(directory, 'map', response)
+        return self._handle_snapshot(directory, 'map', response, save_database=True)
 
-    def _handle_snapshot(self, directory, basename, response):
+    def _request(self, client, request, deadline):
+        if not client.service_is_ready():
+            raise ValueError(f'建图服务尚未就绪：{client.srv_name}')
+        future = client.call_async(request)
+        self.backup_future = future
+        done = threading.Event()
+        future.add_done_callback(lambda _: done.set())
+        if not done.wait(max(0.0, deadline - time.monotonic())):
+            raise ValueError('数据库保存服务超时，本次未生成可重载地图，请稍后重试')
+        return future.result()
+
+    def _backup_database(self):
+        """暂停图优化后读取最终栅格并落盘，确保二维地图与数据库使用同一图坐标。"""
+        if self.backup_future is not None and not self.backup_future.done():
+            raise ValueError('上一次数据库保存仍在执行，请稍后重试')
+        for client in (self.pause_client, self.resume_client, self.map_client, self.backup_client):
+            if not client.service_is_ready():
+                raise ValueError(f'建图服务尚未就绪：{client.srv_name}')
+        deadline = time.monotonic() + self.database_timeout
+        try:
+            self._request(self.pause_client, Empty.Request(), deadline)
+            grid = self._request(self.map_client, GetMap.Request(), deadline).map
+            if not grid.info.width or not grid.info.height:
+                raise ValueError('暂停建图后未获取到有效栅格，请稍后重试')
+            self.latest_map = grid
+            backup = self.database_path + '.back'
+            if os.path.exists(backup):
+                os.unlink(backup)
+            self._request(self.backup_client, Empty.Request(), deadline)
+            return backup
+        finally:
+            # 即使保存失败也请求恢复；ROS 超时请求无法撤销，若恢复也失败会明确报告。
+            self._request(self.resume_client, Empty.Request(),
+                          time.monotonic() + self.resume_timeout)
+
+    def _handle_snapshot(self, directory, basename, response, save_database=False):
         if self.latest_map is None or self.latest_cloud is None:
             missing = []
             if self.latest_map is None:
@@ -193,8 +299,33 @@ class SnapshotManager(Node):
             self._publish_status('waiting', response.message, '')
             return response
         try:
-            paths = self._write_snapshot(directory, basename)
-        except (OSError, TypeError, ValueError) as exc:
+            # RTAB-Map backup 会先将内存节点写盘，再生成独立 .back；不能只复制活跃 db。
+            if save_database:
+                backup = self._backup_database()
+                # 整包写入成功后才公开目录，失败不留下看似可用的地图。
+                os.makedirs(os.path.dirname(directory), exist_ok=True)
+                staging = tempfile.mkdtemp(prefix='.mapping-', dir=os.path.dirname(directory))
+                try:
+                    paths = self._write_snapshot(staging, basename)
+                    copy_database(backup, os.path.join(staging, basename + '.db'))
+                    with open(paths['metadata'], encoding='utf-8') as stream:
+                        metadata = json.load(stream)
+                    metadata['database'] = basename + '.db'
+                    metadata['files_sha256'] = {
+                        basename + extension: file_digest(os.path.join(staging, basename + extension))
+                        for extension in ('.db', '.yaml', '.pgm')}
+                    with open(paths['metadata'], 'w', encoding='utf-8') as stream:
+                        json.dump(metadata, stream, ensure_ascii=False, indent=2)
+                    apply_snapshot_permissions(staging, self.snapshot_uid, self.snapshot_gid)
+                    os.rename(staging, directory)
+                    paths = {key: os.path.join(directory, os.path.basename(path))
+                             for key, path in paths.items()}
+                finally:
+                    if os.path.isdir(staging):
+                        shutil.rmtree(staging)
+            else:
+                paths = self._write_snapshot(directory, basename)
+        except (OSError, TypeError, ValueError, RuntimeError, sqlite3.DatabaseError) as exc:
             response.success = False
             response.message = f'创建地图快照失败: {exc}'
             self._publish_status('error', response.message, directory)
@@ -249,11 +380,14 @@ class SnapshotManager(Node):
 def main(args=None):
     rclpy.init(args=args)
     node = SnapshotManager()
+    executor = MultiThreadedExecutor(num_threads=3)
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
+        executor.shutdown()
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

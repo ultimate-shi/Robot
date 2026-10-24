@@ -6,3 +6,5 @@ nav_controller_node:
     require_active_nav_goal: false
     nav_goal_status_timeout: 3.0
     nav_cmd_active_threshold: 0.02
+    require_localization: false  # 统一入口对实机已有地图启用；独立门控默认保持兼容
+    localization_status_timeout: 1.0  # 定位许可心跳超时立即阻断自主速度，单位秒

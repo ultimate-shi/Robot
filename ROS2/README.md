@@ -46,6 +46,7 @@ Robot/ROS2/
 构建后重启宿主机 `robot-web.service` 以启用 `/robot/` 路由；整车
 `robot_main/robot.launch.py` 会通过 `robot_web/web_console.launch.py` 启动容器内的控制台 ROS 节点。
 控制台在整车启动的第一阶段上线，状态页单独列出每个关节控制器、DMC0/DMC1/SE2、相机、IMU 和八路超声波。加载已有地图时，若未收到 `/map`，控制台会向地图服务重试请求，并显示当前等待原因。
+地图导航视图随地图扩大和窗口变化自动显示全图；“居中机器人”保持当前缩放比例并持续以机器人为中心，“显示全图”恢复地图居中。机器人、目标及车头箭头按固定屏幕尺寸显示。地图支持以鼠标位置为中心的滚轮缩放、按住左键拖动平移及点击选点，拖动不会误选目标；手动查看局部时保留世界坐标视野，点击“显示全图”或“居中机器人”恢复自动视图。
 相机在线状态按原始 ROS 图像到达时间判断；仅首页有画面请求时编码所选相机的 JPEG，减少启动和状态页查看时的 CPU 负载。
 实机默认先启动底盘控制，再于第 6 秒启动相机链；Nav2 子节点继承 `node_start_interval` 错峰启动，以减少启动阶段的计算峰值。
 宿主机网页网关经工作区忽略目录 `.runtime/robot-console.sock` 与该节点通信，
@@ -255,7 +256,19 @@ ros2 service call /mapping/save_snapshot std_srvs/srv/Trigger '{}'
 ```
 
 临时快照位于 `/tmp/robot_preview/current.{yaml,pgm,ply,json}`，长期快照默认位于
-`/workspace/maps/map_YYYYMMDD_HHMMSS/`。长期目录名和 `map.json` 的 `created_at`
+`/workspace/maps/map_YYYYMMDD_HHMMSS_ffffff/`，包含 `map.{yaml,pgm,ply,json,db}`。
+保存时暂停 RTAB-Map 更新、读取最终栅格并请求数据库备份，将内存中的图节点与视觉特征先写盘；
+成功后原子公开整个目录，失败不留下半成品。网页保存期间停车并暂停接收运动任务。临时预览不包含定位数据库。
+网页保存按钮在等待期间禁用，独立网关默认等待 120 秒；大数据库可能需要一分钟。网关参数位于
+`robot_web/config/web.yaml` 的 `console_save_timeout_seconds`（应大于控制台的 `snapshot_timeout`）。
+响应超时返回 504 并提示后台可能仍在保存；只有 Socket 不存在或拒绝连接才提示“控制台未启动”，连接中断单独提示。
+修改网关代码或配置后可仅执行 `systemctl --user restart robot-web.service` 加载，无需重启建图或底盘；
+不要因网页超时直接重启整车，新建图入口会清理活跃临时数据库。
+快照目录发布前会设置属主及权限：目录 755、文件 644，目标用户拥有读写权限。普通进程使用当前用户；
+root 容器默认沿保存路径向上查找最近的非 root 目录属主（默认 `/workspace` 对应宿主机用户）。
+可通过 `mapping_snapshot.yaml` 的 `snapshot_owner_uid/snapshot_owner_gid` 显式指定宿主机 `id -u`、`id -g`；
+默认 -1 自动识别，避免将 `tempfile` 的 0700 权限带入长期地图目录。
+长期目录名和 `map.json` 的 `created_at`
 默认按 `mapping_snapshot.yaml` 中的 `snapshot_timezone: Asia/Shanghai` 生成，
 不受容器本地时区影响。
 
@@ -360,7 +373,7 @@ ros2 launch robot_main robot.launch.py mode:=virtual \
 # 实机控制，同时由实机 /joint_states 和 /odom 驱动同一数字孪生模型
 ros2 launch robot_main robot.launch.py mode:=real
 
-# 使用已有地图时才显式传入；此时不启动在线 RTAB-Map 建图
+# 使用已有地图时显式传入；实机将加载同名 .db，启动 RTAB-Map 定位而非增量建图
 ros2 launch robot_main robot.launch.py mode:=real map_yaml_file:=/workspace/maps/example/map.yaml
 ```
 
@@ -420,7 +433,7 @@ ros2 service call /hardware/recover std_srvs/srv/Trigger '{}'
 轮速命令经过独立 500 ms 看门狗，转向反馈未进入允许误差时轮速保持零，到位后按误差比例调速；定距 Action 的 T 指令有独立停车服务和动作租约。8 路超声波统一为前3、后3、左1、右1。SE2 的 Range
 话题使用传感器 Best Effort QoS，避障和 `/scan` 合成节点使用相同 QoS 接收。最终安全层默认
 失效关闭：当前运动方向没有新鲜测距就输出零速；遇障默认停车，不自动倒车。SE2 原始测距
-默认只接受 30~2500mm；0、低于 30mm 的探头振铃，以及超出上限的无效值均不发布
+默认只接受 30~4000mm；0、低于 30mm 的探头振铃，以及超出上限的无效值均不发布
 `Range`，不会伪装成近距或最大距离。单帧丢失时下游仅使用未超时的上一帧；连续丢失
 超过 0.40 秒时安全层按失效关闭停车。上下限由 `hardware_bringup.yaml` 配置。
 
@@ -537,30 +550,69 @@ Foxglove 常用话题：
 ros2 launch robot_main robot.launch.py mode:=real
 ```
 
-加载工作区 `maps/` 中已有地图时传入对应 YAML；PGM 使用 YAML 中的相对路径自动加载，实时
-双目点云继续负责局部动态避障：
+加载已有地图时使用同一次保存的完整目录。二维地图由地图服务器发布；RTAB-Map 使用数据库临时副本进行视觉定位，并独占发布动态 `map -> odom`，不会修改长期保存的数据库：
 
 ```bash
-ros2 launch robot_navigation stereo_robot.launch.py \
-  map_yaml_file:=/workspace/maps/map_20260827_202256/map.yaml \
-  initial_x:=0.0 initial_y:=0.0 initial_yaw:=0.0
+ros2 launch robot_main robot.launch.py mode:=real \
+  map_yaml_file:=/workspace/maps/map_20261024_120000_123456/map.yaml
 ```
 
-只要 `map_yaml_file` 非空，就不会启动 RTAB-Map，也不会修改已有地图；地图服务器发布 `/map`，
-给定的 `initial_x`、`initial_y`、`initial_yaw` 用于发布 `map -> odom` 初始关系。不传该参数时，
-不会启动静态地图服务器或静态 `map -> odom`，两者均由在线 RTAB-Map 提供，避免重复发布。
+默认自动加载地图 YAML 同名的 `map.db`，也可显式传入 `database_path:=<对应数据库绝对路径>`。
+新快照的 `map.json` 含地图、图像和数据库 SHA-256，启动前检查文件成套关系。缺库、空库、损坏或新快照文件不配套时会明确报错，
+不会悄悄退回 `(0,0)`。旧版仅有 PGM/PLY 的快照不能恢复视觉特征，须使用对应 RTAB-Map 数据库或重新建图保存。
+没有清单的旧数据库需人工确保与二维地图来自同一次建图、同一坐标系。
 
-实机已有地图可在现场标定地图轴与磁东夹角、完成 GY95T 软硬铁校准并核对安装轴后，选择
-`initial_yaw_source:=magnetic magnetic_east_yaw_in_map:=<弧度>`。其中角度表示磁 ENU 东轴
-在 `map` 中的偏航角，必须显式给出；它不是地理真北或机器人当前 yaw。此模式等待 GY95T 的
-校准 Level、厂家姿态和 EKF TF 均有效，再一次性确定 `map -> odom` 朝向；超时不会启动
-Nav2 导航。默认 `manual` 继续使用 `initial_yaw`，在线 RTAB-Map、虚拟模式不得启用地磁模式。
+若明确知道本次摆放位置，可在启动时提供初始估计（yaw 为弧度，-130° 约为 -2.268928）：
+
+```bash
+ros2 launch robot_main robot.launch.py mode:=real \
+  map_yaml_file:=/workspace/maps/map_20261024_223322_743197/map.yaml \
+  initial_pose_enabled:=true initial_x:=-0.4 initial_y:=-1.0 initial_yaw:=-2.2689280275926285
+```
+
+默认 `initial_pose_enabled:=false`，不会把默认 0、0 当成已知实车位置。开启后先等待 RTAB-Map 实际处理双目帧的
+`Info`、odom 和订阅连接就绪，再发送初始估计一次；网页初始字段会回填该估计，人工修改优先。
+人工设点发生在数据库加载期间时会排队等待就绪，重试也会使用最新估计。数据库加载阶段单独显示
+“视觉地图加载中”，默认最多等待输入就绪 120 秒；匹配超时 60 秒从实际处理就绪后开始计算。
+初始估计只影响搜索与投影匹配，最终位置由视觉几何验证校正，不能据此直接解锁导航。
+
+本机短基线双目的定位配准保留旧地图 GFTT/ORB 词典，从历史原图重新提取最多 2000 个、2×3 均匀分布的配准特征，
+采用双向最近邻交叉验证与位姿先验辅助。重投影误差范围为 4 像素，几何内点仍至少 20 个，
+协方差、三次连续匹配和超时门控保持生效。不要把短时偶然匹配成功当作定位稳定，也不要只靠降低内点数解锁。
+这些设置只改变已有地图定位，不改写原数据库或在线建图配置。
+
+打开 9100 端口 `/robot/` 的地图面板：
+
+1. 先停车，点击“地图选位置与朝向”，先点实车位置，再点车头指向的位置；也可填写 X、Y（米）和朝向（度，0° 为地图 X 正向，90° 为 Y 正向）。
+2. 核对橙色初始估计箭头，点击“设置初始位姿”。这只提供估计，不能直接解锁导航。
+3. 页面显示等待、确认中、成功、超时、丢失或服务不可用；至少收到三次间隔不超过 5 秒的有效地图匹配、协方差合格且 TF 新鲜后允许自主导航。定位未确认时不绘制可信的机器人绿点。
+4. 默认 60 秒未定位成功显示超时。检查地图是否正确、相机是否断流及画面是否清晰，切手动低速移到建图时有纹理的位置，按原朝向重新设点并点击“重新尝试定位”。重试清除旧确认，重新等待匹配；后台仍持续尝试，超时不会强行放行，也不会自行旋转搜寻。
+5. 超过 5 秒没有成功匹配、TF 过期或定位监督消息超过 1 秒未更新时撤销许可。导航、探索、跟随和模型运动任务均受服务端约束，速度链另有独立许可门控；导航中失去定位会取消任务并停车，恢复后需要重新规划和确认。手动遥控与软件停止保持可用。
+
+阈值位于 `robot_navigation/config/map_localization.yaml`，可通过 `localization_config_file` 覆盖；
+许可心跳超时分别位于 `robot_control/config/nav_velocity_gate.yaml` 和 `robot_web/config/web_console.yaml`。
+匹配成功仍受环境重复纹理、光照及相机标定影响，需在实车上确认地图与实物对应关系。
+
+加载静态地图时默认同时启动 `map_server_recovery`：先等原 `lifecycle_manager_map` 完成本次操作，
+再读取 `map_server` 实际生命周期。未配置则通过原管理器执行 STARTUP，已配置但未激活则执行 RESUME，
+已激活时不重新配置；请求超时后重新核对状态，避免配置已完成却因响应丢失而重复配置。
+若地图管理器服务不可用或超时无响应，则暂时绕过它，通过地图节点自身服务按真实稳定状态单步配置/激活；
+后备窗口结束后重新探测原管理器，避免管理器本身卡住时自动恢复也被阻塞。
+默认每 2 秒非阻塞检查，单次响应等待 8 秒；连续失败 5 次后改为每 30 秒重试。
+参数位于 `config/map_server_recovery.yaml`，独立 Nav2 入口可用 `map_recovery_config_file` 覆盖，
+状态见 `/mapping/map_server_recovery/status`。在线建图关闭 `use_map_server` 时不启动此恢复节点。
+人工维护或有意暂停静态地图前，先运行
+`ros2 param set /map_server_recovery enabled false`；恢复自动监督时设回 `true`。
+终结状态不会被强制重新激活，恢复过程不发导航目标或速度指令。
+
+
+`initial_x/initial_y/initial_yaw` 在虚拟模式及独立 Nav2 固定位姿入口保持原用途；实机已有地图仅在 `initial_pose_enabled:=true` 时作为视觉初始估计，网页仍可重新设置。
+统一实机入口不再允许 `initial_yaw_source:=magnetic` 绕过视觉定位，地磁不能提供地图中的绝对位置。
+不传 `map_yaml_file` 时仍使用在线 RTAB-Map 建图及其地图变换，避免与静态变换重复发布。
 
 实机模式启动 GY95T、双目视觉里程计和三维 EKF：`/visual_odom` 与 IMU 三轴角速度、roll/pitch
 融合为 `/odom`，并由 EKF 发布 `odom -> base_link`。默认 `use_imu:=true`；没有映射 GY95T
-设备时应传入 `use_imu:=false`。已有地图模式当前不启动 AMCL，必须让机器人从命令给定的已知
-地图位姿开始；如果启动位置不确定，需要后续接入 RTAB-Map localization 或 AMCL，而不能靠
-IMU 推断地图中的绝对位置。
+设备时应传入 `use_imu:=false`。已有地图使用 RTAB-Map 视觉重定位；IMU 和 odom 负责连续运动估计，不能独立推断地图中的绝对位置。
 三维位姿还需现场核对 `/visual_odom_raw.pose.covariance`；视觉 z/roll/pitch 缺少有效方差时
 保护节点会将它们标为高不确定度，不能仅凭 `/odom` 中有六个数值就认定六轴速度可信。
 
@@ -628,7 +680,9 @@ GY95T 开始发布滤波数据前还会静止估计约 2 秒
 | `imu.yaml` | GY95T 串口、轴向、零偏、低通和无磁姿态滤波参数 |
 | `stereo_odometry.yaml` | 双目视觉里程计参数 |
 | `rtabmap_mapping.yaml` | RTAB-Map 在线建图参数 |
-| `mapping_snapshot.yaml` | 二维地图和三维点云快照参数 |
+| `map_localization.yaml` | 已有地图视觉重定位及定位确认、超时阈值 |
+| `map_server_recovery.yaml` | 静态地图生命周期自动恢复及重试退避参数 |
+| `mapping_snapshot.yaml` | 二维地图、三维点云及定位数据库成套保存参数 |
 | `state_estimation.yaml` | 视觉、IMU 和四轮反馈里程计的三维 EKF 参数 |
 | `nav2.yaml` | Nav2 控制器、规划器、代价地图和行为树参数 |
 | `stereo_robot.yaml` | 在线双目及独立 SegFormer 语义层的 Nav2 覆盖参数 |

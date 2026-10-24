@@ -22,6 +22,10 @@ web_console:
     mission_status_topic: /mission/status
     safety_status_topic: /obstacle_avoidance/status
     snapshot_service: /mapping/save_snapshot
+    snapshot_timeout: 90.0  # 数据库落盘可能比二维地图写盘慢，单位秒
+    localization_status_timeout: 1.0  # 定位监督消息超时禁止自主任务
+    initial_pose_xy_variance: 0.25
+    initial_pose_yaw_variance: 0.12
     imu_topic: /sensors/imu/data
     ultrasonic_topics: [/ultrasonic/front_left, /ultrasonic/front_center, /ultrasonic/front_right, /ultrasonic/rear_left, /ultrasonic/rear_center, /ultrasonic/rear_right, /ultrasonic/left, /ultrasonic/right]
     local_model_url: http://127.0.0.1:9100

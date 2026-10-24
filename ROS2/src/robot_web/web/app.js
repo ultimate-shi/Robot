@@ -1,4 +1,4 @@
-/* 作用：控制台页面导航、人工控制、状态和实时数据显示；使用方法：由 /robot/ 自动加载。 */
+/* 作用：控制台导航、人工控制及实时数据显示；使用方法：由 /robot/ 加载，地图支持滚轮缩放、拖动平移与点击选点。 */
 (() => {
   const $ = id => document.getElementById(id);
   const clientId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -138,29 +138,78 @@
     document.querySelectorAll('[data-mode]').forEach(button =>
       button.classList.toggle('selected', button.dataset.mode === mode));
   }
+  // 栅格缓存在离屏画布；视口按屏幕像素绘制，避免地图增长撑开布局或放大标记。
+  const mapRaster = document.createElement('canvas');
+  let initialPick = null;
+  let initialFormEdited = false;
+  let initialHint = null;
+  let rasterMap = null;
+  let centerOnRobot = false;
+  let centeredMapScale = null;
+  let mapView = null;
+  // 手动视图以世界坐标和像素/米保存，建图原点、栅格尺寸改变时仍保持局部位置。
+  let manualMapView = null;
+  let mapDrag = null;
+  let suppressMapClick = false;
+  const mapWorldAt = (x, y, view = mapView) => {
+    const gx = (x - view.offsetX) / view.scale;
+    const gy = view.height - (y - view.offsetY) / view.scale;
+    return {x: view.origin.x + view.resolution * (Math.cos(view.yaw)*gx - Math.sin(view.yaw)*gy),
+      y: view.origin.y + view.resolution * (Math.sin(view.yaw)*gx + Math.cos(view.yaw)*gy)};
+  };
   const renderMap = () => {
     if (!map) return;
     const canvas = $('mapCanvas');
+    const bounds = canvas.getBoundingClientRect();
+    if (!bounds.width || !bounds.height) return;
     const width = map.width, height = map.height;
-    canvas.width = width; canvas.height = height;
+    const pixelRatio = window.devicePixelRatio || 1;
+    canvas.width = Math.round(bounds.width * pixelRatio);
+    canvas.height = Math.round(bounds.height * pixelRatio);
     const context = canvas.getContext('2d');
-    const image = context.createImageData(width, height);
-    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
-      const value = map.data[(height - y - 1) * width + x];
-      const shade = value < 0 ? 58 : 235 - Math.round(value * 2.1);
-      const index = (y * width + x) * 4;
-      image.data[index] = shade; image.data[index+1] = shade;
-      image.data[index+2] = shade; image.data[index+3] = 255;
+    context.setTransform(pixelRatio, 0, 0, pixelRatio, 0, 0);
+    if (rasterMap !== map) {
+      mapRaster.width = width; mapRaster.height = height;
+      const rasterContext = mapRaster.getContext('2d');
+      const image = rasterContext.createImageData(width, height);
+      for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+        const value = map.data[(height - y - 1) * width + x];
+        const shade = value < 0 ? 58 : 235 - Math.round(value * 2.1);
+        const index = (y * width + x) * 4;
+        image.data[index] = shade; image.data[index+1] = shade;
+        image.data[index+2] = shade; image.data[index+3] = 255;
+      }
+      rasterContext.putImageData(image, 0, 0);
+      rasterMap = map;
     }
-    context.putImageData(image, 0, 0);
-    const toPixel = (x, y) => {
+    const mapYaw = 2 * Math.atan2(map.origin.z, map.origin.w);
+    const toGrid = (x, y) => {
       const dx = x - map.origin.x, dy = y - map.origin.y;
-      const yaw = 2 * Math.atan2(map.origin.z, map.origin.w);
-      return [(Math.cos(yaw)*dx + Math.sin(yaw)*dy) / map.resolution,
-        height - (-Math.sin(yaw)*dx + Math.cos(yaw)*dy) / map.resolution];
+      return [(Math.cos(mapYaw)*dx + Math.sin(mapYaw)*dy) / map.resolution,
+        height - (-Math.sin(mapYaw)*dx + Math.cos(mapYaw)*dy) / map.resolution];
+    };
+    const robot = state?.localization?.required && !state.localization.ready ? null : state?.pose;
+    let center = centerOnRobot && robot?.fresh ?
+      toGrid(robot.x, robot.y) : [width / 2, height / 2];
+    // 全图适配只用于默认视图；机器人居中保留点击按钮时的像素/米比例。
+    const fitScale = Math.min(Math.max(1, bounds.width - 16) / width,
+      Math.max(1, bounds.height - 16) / height);
+    if (manualMapView) center = toGrid(manualMapView.x, manualMapView.y);
+    const scale = manualMapView ? manualMapView.scale * map.resolution :
+      centerOnRobot && centeredMapScale !== null ? centeredMapScale * map.resolution : fitScale;
+    const offsetX = bounds.width / 2 - center[0] * scale;
+    const offsetY = bounds.height / 2 - center[1] * scale;
+    mapView = {scale, fitScale, offsetX, offsetY, width: bounds.width,
+      viewportHeight: bounds.height, height, origin: map.origin,
+      resolution: map.resolution, yaw: mapYaw};
+    context.imageSmoothingEnabled = false;
+    context.drawImage(mapRaster, offsetX, offsetY, width * scale, height * scale);
+    const toPixel = (x, y) => {
+      const [gx, gy] = toGrid(x, y);
+      return [offsetX + gx * scale, offsetY + gy * scale];
     };
     if (preview?.path?.length) {
-      context.strokeStyle = '#468fee'; context.lineWidth = 3;
+      context.strokeStyle = '#468fee'; context.lineWidth = 1.5;
       context.beginPath();
       preview.path.forEach((point, index) => {
         const [x,y] = toPixel(point.x, point.y);
@@ -168,30 +217,153 @@
       });
       context.stroke();
     }
-    if (state?.pose?.fresh) {
+    if (state?.pose?.fresh && !(state.localization?.required && !state.localization.ready)) {
       const [x,y] = toPixel(state.pose.x,state.pose.y);
-      context.fillStyle = '#20c790'; context.beginPath();
-      context.arc(x,y,6,0,2*Math.PI); context.fill();
+      context.save(); context.translate(x,y);
+      context.fillStyle = '#20c790'; context.strokeStyle = '#0d1621';
+      context.lineWidth = 1;
+      context.beginPath(); context.arc(0,0,3,0,2*Math.PI);
+      context.fill(); context.stroke();
+      // 地图画布的 Y 轴向下，车头相对地图的朝向需要反向旋转。
+      if (Number.isFinite(state.pose.yaw)) {
+        context.rotate(mapYaw - state.pose.yaw);
+        context.beginPath(); context.moveTo(2,-3);
+        context.lineTo(8,0); context.lineTo(2,3);
+        context.closePath(); context.fill(); context.stroke();
+      }
+      context.restore();
+    }
+    if (initialHint) {
+      const [px,py] = toPixel(initialHint.x,initialHint.y);
+      context.save(); context.translate(px,py);
+      context.strokeStyle = '#ef9a24'; context.lineWidth = 2;
+      context.beginPath(); context.arc(0,0,5,0,2*Math.PI); context.stroke();
+      if (Number.isFinite(initialHint.yaw)) {
+        context.rotate(mapYaw-initialHint.yaw);
+        context.beginPath(); context.moveTo(0,0); context.lineTo(24,0);
+        context.lineTo(17,-5); context.moveTo(24,0); context.lineTo(17,5); context.stroke();
+      }
+      context.restore();
     }
     if (selectedGoal) {
       const [cx,cy] = toPixel(selectedGoal.x,selectedGoal.y);
-      context.fillStyle = '#e84158'; context.beginPath(); context.arc(cx,cy,6,0,2*Math.PI); context.fill();
+      context.fillStyle = '#e84158'; context.beginPath(); context.arc(cx,cy,3,0,2*Math.PI); context.fill();
     }
     $('mapEmpty').hidden = true;
   };
   $('mapCanvas').addEventListener('click', event => {
-    if (!map) return;
+    if (suppressMapClick) { suppressMapClick = false; return; }
+    if (!map || !mapView) return;
     const bounds = event.currentTarget.getBoundingClientRect();
-    const cx = (event.clientX - bounds.left) / bounds.width * map.width;
-    const cy = map.height - (event.clientY - bounds.top) / bounds.height * map.height;
-    const yaw = 2 * Math.atan2(map.origin.z, map.origin.w);
-    selectedGoal = {x: map.origin.x + map.resolution * (Math.cos(yaw)*cx - Math.sin(yaw)*cy),
-      y: map.origin.y + map.resolution * (Math.sin(yaw)*cx + Math.cos(yaw)*cy),
+    const cx = (event.clientX - bounds.left - mapView.offsetX) / mapView.scale;
+    const gridY = (event.clientY - bounds.top - mapView.offsetY) / mapView.scale;
+    // 留白区不是地图，不能在此生成导航目标。
+    if (cx < 0 || cx >= map.width || gridY < 0 || gridY >= map.height) return;
+    if (initialPick) {
+      const point = mapWorldAt(event.clientX - bounds.left, event.clientY - bounds.top);
+      if (initialPick === 'position') {
+        initialHint = {...point, yaw: null}; initialPick = 'heading';
+        $('initialX').value = point.x.toFixed(2); $('initialY').value = point.y.toFixed(2);
+        notice('位置已选；再点击地图上的一点指定车头朝向。');
+      } else {
+        const dx = point.x - initialHint.x, dy = point.y - initialHint.y;
+        if (Math.hypot(dx,dy) < map.resolution) { notice('朝向点请离位置点稍远一些。', true); return; }
+        initialHint.yaw = Math.atan2(dy,dx);
+        $('initialYaw').value = (initialHint.yaw * 180 / Math.PI).toFixed(1);
+        initialPick = null; notice('位置和朝向已选，请核对箭头后点击“设置初始位姿”。');
+      }
+      renderMap(); return;
+    }
+    selectedGoal = {...mapWorldAt(event.clientX - bounds.left, event.clientY - bounds.top),
       yaw:state?.pose?.fresh ? state.pose.yaw : null};
     $('mapGoal').textContent = `目标：(${selectedGoal.x.toFixed(2)}, ${selectedGoal.y.toFixed(2)}) m`;
     preview = null; renderMap();
   });
-  $('centerMap').addEventListener('click', () => $('mapCanvas').scrollIntoView({block:'center'}));
+  $('mapCanvas').addEventListener('wheel', event => {
+    if (!mapView || !map || mapDrag) return;
+    event.preventDefault();
+    const bounds = event.currentTarget.getBoundingClientRect();
+    // WheelEvent 的增量可能以像素、行或页为单位。
+    const delta = event.deltaY * (event.deltaMode === 1 ? 16 :
+      event.deltaMode === 2 ? bounds.height : 1);
+    const scale = Math.max(mapView.fitScale / 4, Math.min(mapView.fitScale * 64,
+      mapView.scale * Math.exp(Math.max(-2, Math.min(2, -delta * 0.0015)))));
+    const ratio = scale / mapView.scale;
+    const center = mapWorldAt(bounds.width / 2 +
+      (event.clientX - bounds.left - bounds.width / 2) * (1 - 1 / ratio),
+      bounds.height / 2 +
+      (event.clientY - bounds.top - bounds.height / 2) * (1 - 1 / ratio));
+    centerOnRobot = false;
+    manualMapView = {...center, scale: scale / map.resolution};
+    renderMap();
+  }, {passive: false});
+  $('mapCanvas').addEventListener('pointerdown', event => {
+    if (!mapView || !map || event.button !== 0 || mapDrag) return;
+    suppressMapClick = false;
+    mapDrag = {id: event.pointerId, x: event.clientX, y: event.clientY,
+      view: mapView, moved: false};
+    event.currentTarget.setPointerCapture(event.pointerId);
+  });
+  $('mapCanvas').addEventListener('pointermove', event => {
+    if (!mapDrag || mapDrag.id !== event.pointerId) return;
+    const dx = event.clientX - mapDrag.x, dy = event.clientY - mapDrag.y;
+    if (!mapDrag.moved && Math.hypot(dx, dy) < 4) return;
+    mapDrag.moved = true;
+    suppressMapClick = true;
+    const view = mapDrag.view;
+    manualMapView = {...mapWorldAt(view.width / 2 - dx,
+      view.viewportHeight / 2 - dy, view), scale: view.scale / view.resolution};
+    centerOnRobot = false;
+    event.currentTarget.classList.add('dragging');
+    renderMap();
+  });
+  const finishMapDrag = event => {
+    if (!mapDrag || mapDrag.id !== event.pointerId) return;
+    // 拖动或取消之后浏览器仍可能发出 click，必须阻止它生成导航目标。
+    suppressMapClick = mapDrag.moved || event.type !== 'pointerup';
+    mapDrag = null;
+    event.currentTarget.classList.remove('dragging');
+    if (event.currentTarget.hasPointerCapture(event.pointerId))
+      event.currentTarget.releasePointerCapture(event.pointerId);
+  };
+  for (const name of ['pointerup', 'pointercancel', 'lostpointercapture'])
+    $('mapCanvas').addEventListener(name, finishMapDrag);
+  $('centerMap').addEventListener('click', () => {
+    if (!map || !state?.pose?.fresh || (state.localization?.required && !state.localization.ready)) {
+      notice('地图或机器人定位不可用，请等待恢复后再居中。', true); return;
+    }
+    if (!mapView) renderMap();
+    if (!mapView) return;
+    centeredMapScale = mapView.scale / mapView.resolution;
+    manualMapView = null; centerOnRobot = true; renderMap();
+  });
+  $('fitMap').addEventListener('click', () => { manualMapView = null; centeredMapScale = null; centerOnRobot = false; renderMap(); });
+  // 页面重新显示、屏幕旋转或容器大小变化时重新适配地图。
+  new ResizeObserver(() => renderMap()).observe($('mapCanvas'));
+  for (const id of ['initialX','initialY','initialYaw'])
+    $(id).addEventListener('input', () => { initialFormEdited = true; });
+  $('pickInitialPose').addEventListener('click', () => {
+    initialFormEdited = true;
+    initialPick = 'position'; initialHint = null; preview = null;
+    notice('先点击地图上实车所在的位置，再点击车头指向的位置。');
+  });
+  $('cancelInitialPose').addEventListener('click', () => {
+    initialPick = null; initialHint = null; renderMap(); notice('已取消初始位姿选取。');
+  });
+  $('submitInitialPose').addEventListener('click', () => guarded(async () => {
+    const inputs = ['initialX','initialY','initialYaw'].map(id => $(id).value.trim());
+    const [x,y,degrees] = inputs.map(Number);
+    if (inputs.some(value => value === '') || ![x,y,degrees].every(Number.isFinite))
+      throw new Error('请填写有效的位置和朝向');
+    if (initialPick) throw new Error('请先完成位置及朝向选取，或取消选取后输入数值');
+    preview = null;
+    const result = await api('localization/initial-pose', {x,y,yaw:degrees*Math.PI/180});
+    notice(result.message); initialHint = {x,y,yaw:degrees*Math.PI/180};
+  }));
+  $('retryLocalization').addEventListener('click', () => guarded(async () => {
+    preview = null;
+    const result = await api('localization/retry', {}); notice(result.message);
+  }));
   $('planMap').addEventListener('click', () => guarded(async () => {
     if (!selectedGoal) throw new Error('请先在地图上选目标');
     if (!Number.isFinite(selectedGoal.yaw))
@@ -209,7 +381,17 @@
     await api('cancel', {}); preview = null; notice('导航已取消并停车。');
   }));
   $('saveMap').addEventListener('click', () => guarded(async () => {
-    const result = await api('save-map', {}); notice(result.message);
+    const button = $('saveMap');
+    button.disabled = true;
+    button.textContent = '正在保存…';
+    try {
+      notice('正在保存地图和定位数据库，可能需要一分钟，请保持停车并等待结果…');
+      const result = await api('save-map', {});
+      notice(result.success ? `地图已保存：${result.message}` : result.message, !result.success);
+    } finally {
+      button.disabled = false;
+      button.textContent = '保存地图';
+    }
   }));
   document.querySelectorAll('[data-camera]').forEach(button => button.addEventListener('click', () => {
     camera = button.dataset.camera;
@@ -220,7 +402,7 @@
     const detection = state?.detections.find(item => item.id === $('target').value);
     if (!detection?.map_position || !detection.distance)
       throw new Error('目标缺少可靠深度或地图坐标');
-    const robot = state?.pose;
+    const robot = state?.localization?.required && !state.localization.ready ? null : state?.pose;
     if (!robot?.fresh) throw new Error('机器人地图位姿不可用');
     const dx = detection.map_position[0] - robot.x, dy = detection.map_position[1] - robot.y;
     const range = Math.hypot(dx,dy);
@@ -291,13 +473,43 @@
     }
     hardwareAlert.textContent = hardwareMessage;
     hardwareAlert.hidden = !hardwareMessage;
+    const localization = data.localization || {required:data.mode_source === 'real',ready:false,
+      state:'unavailable',message:'当前控制台尚未提供定位接口，请重启整车后刷新页面'};
+    $('localizationPanel').hidden = !localization.required;
+    const phases = {initializing:'视觉地图加载中',waiting:'等待定位',verifying:'正在确认定位',localized:'定位成功',
+      failed:'定位超时',lost:'定位丢失',unavailable:'定位服务不可用'};
+    $('localizationPhase').textContent = phases[localization.state] || localization.message;
+    $('localizationMessage').textContent = localization.message +
+      (localization.matches != null ? `（有效匹配 ${localization.matches}/${localization.required_matches}）` : '');
+    $('localizationPanel').dataset.state = localization.state;
+    if (!initialFormEdited && !initialHint && localization.initial_pose) {
+      const hint = localization.initial_pose;
+      if ([hint.x,hint.y,hint.yaw].every(Number.isFinite)) {
+        $('initialX').value = hint.x.toFixed(3);
+        $('initialY').value = hint.y.toFixed(3);
+        $('initialYaw').value = (hint.yaw*180/Math.PI).toFixed(1);
+        initialHint = {...hint};
+      }
+    }
+
+    const blocked = localization.required && !localization.ready;
+    if (blocked) preview = null;
+    for (const id of ['planMap','confirmMap','planObject','confirmTask'])
+      $(id).disabled = blocked || (id === 'confirmTask' && !pendingModelTask);
+    document.querySelectorAll('[data-mode]').forEach(button => {
+      button.disabled = blocked && button.dataset.mode !== 'manual';
+    });
+    document.querySelectorAll('[data-task]').forEach(button => {
+      button.disabled = blocked && ['explore-start','follow-start','resume'].includes(button.dataset.task);
+    });
     showMode(data.control.mode);
     renderNavigation(data);
     setRows($('robotStatus'), [
       ['模式',data.control.mode],['控制台接口',data.control.connected?'在线':'不可用'],
       ['软件停止',data.control.stopped?'已锁定':'已解除'],
       ['地图',data.map_ready?'可用':data.map_source || '等待地图'],
-      ['位姿',data.pose?.fresh?`${data.pose.x.toFixed(2)}, ${data.pose.y.toFixed(2)} m`:'不可用'],
+      ['定位',localization.message],
+      ['位姿',data.pose?.fresh && !blocked?`${data.pose.x.toFixed(2)}, ${data.pose.y.toFixed(2)} m`:'不可用'],
       ['速度',data.odom?.fresh?`${data.odom.linear.toFixed(2)} m/s`:'不可用'],
       ['任务',data.task || '空闲']]);
     const controllerNames = [
@@ -486,7 +698,7 @@
     try {
       try {
         renderStatus(await api('status'));
-        legacyBackend = typeof state.control.connected !== 'boolean';
+        legacyBackend = typeof state.control.connected !== 'boolean' || !state.localization;
         if (legacyBackend) {
           statusConnected = false;
           notice('整车仍运行旧版控制台；请重启 robot.launch.py 后刷新页面。', true);

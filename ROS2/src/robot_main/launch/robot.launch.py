@@ -1,6 +1,8 @@
 """作用：编排实机或仿真整车与网页手动/导航速度仲裁；使用方法：ros2 launch robot_main robot.launch.py mode:=real|virtual。"""
 
 import os
+import math
+from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
@@ -12,6 +14,7 @@ from launch.substitutions import LaunchConfiguration
 import yaml
 
 from robot_main.map_validation import validate_map_yaml
+from robot_navigation.mapping.database import validate_bundle
 
 
 def source(package, filename):
@@ -51,6 +54,12 @@ def generate_launch_description():
             'map_yaml_file', default_value='',
             description='已有地图 YAML；留空时实机启动在线 RTAB-Map 建图与导航'),
         DeclareLaunchArgument(
+            'database_path', default_value='',
+            description='已有地图配套数据库；留空自动使用地图 YAML 同名 .db，实机重定位必需'),
+        DeclareLaunchArgument(
+            'localization_config_file', default_value=os.path.join(nav_share, 'config', 'map_localization.yaml'),
+            description='已有地图视觉定位与匹配确认阈值 YAML'),
+        DeclareLaunchArgument(
             'ply_file', default_value=str(defaults['virtual_ply']),
             description='虚拟模式环境三维 PLY 文件路径'),
         DeclareLaunchArgument(
@@ -78,14 +87,17 @@ def generate_launch_description():
             default_value=str(defaults['use_wheel_odometry']).lower(),
             description='是否发布并融合四轮反馈里程计'),
         DeclareLaunchArgument(
+            'initial_pose_enabled', default_value='false',
+            description='实机已有地图是否使用明确提供的启动位置估计；仍需视觉确认，默认不假定当前在原点'),
+        DeclareLaunchArgument(
             'initial_x', default_value='0.0',
-            description='已有地图模式 map 到 odom 的初始 X，单位米'),
+            description='启动地图 X，单位米；实机启用 initial_pose_enabled 时作为初始估计，虚拟模式用于固定变换'),
         DeclareLaunchArgument(
             'initial_y', default_value='0.0',
-            description='已有地图模式 map 到 odom 的初始 Y，单位米'),
+            description='启动地图 Y，单位米；实机启用 initial_pose_enabled 时作为初始估计，虚拟模式用于固定变换'),
         DeclareLaunchArgument(
             'initial_yaw', default_value='0.0',
-            description='已有地图模式 map 到 odom 的初始偏航角，单位弧度'),
+            description='启动地图朝向，单位弧度；实机启用 initial_pose_enabled 时作为初始估计'),
         DeclareLaunchArgument(
             'initial_yaw_source', default_value='manual',
             description='已有地图的初始航向来源：manual 使用 initial_yaw；magnetic 仅允许实机且须提供 magnetic_east_yaw_in_map'),
@@ -281,6 +293,20 @@ def generate_launch_description():
         map_yaml = LaunchConfiguration('map_yaml_file').perform(context).strip()
         if map_yaml:
             map_yaml = validate_map_yaml(map_yaml)
+        localization_required = mode == 'real' and bool(map_yaml)
+        initial_enabled = LaunchConfiguration('initial_pose_enabled').perform(context).lower()
+        if initial_enabled not in ('true', 'false'):
+            raise RuntimeError('initial_pose_enabled 只能为 true 或 false')
+        if initial_enabled == 'true' and not localization_required:
+            raise RuntimeError('启动视觉初始估计仅用于实机已有地图模式')
+        if initial_enabled == 'true' and not all(math.isfinite(float(
+                LaunchConfiguration(key).perform(context))) for key in ('initial_x', 'initial_y', 'initial_yaw')):
+            raise RuntimeError('启动初始估计必须为有限数值')
+        database_path = ''
+        if localization_required:
+            database_path = validate_bundle(map_yaml,
+                LaunchConfiguration('database_path').perform(context).strip() or
+                str(Path(map_yaml).with_suffix('.db')))
         if mode == 'virtual' and not map_yaml:
             raise RuntimeError(
                 'virtual 模式没有实时双目建图源，请显式传入 map_yaml_file；'
@@ -290,6 +316,8 @@ def generate_launch_description():
         if initial_yaw_source not in ('manual', 'magnetic'):
             raise RuntimeError("initial_yaw_source 只允许 'manual' 或 'magnetic'")
         if initial_yaw_source == 'magnetic':
+            if localization_required:
+                raise RuntimeError('已有地图实机改用视觉持续定位；请使用 initial_yaw_source:=manual，并在网页设置初始位置和朝向')
             if mode != 'real' or not map_yaml:
                 raise RuntimeError(
                     'magnetic 初始航向只允许实机加载已有地图时使用')
@@ -386,6 +414,7 @@ def generate_launch_description():
                 'robot_control', 'safety.launch.py', {
                     'input_topic': '/cmd_vel_console',
                     'output_topic': '/cmd_vel_nav_safe',
+                    'require_localization': 'true' if localization_required else 'false',
                     'log_level': log_level})),
             include('robot_navigation', 'state_estimation.launch.py', {
                 'two_d_mode_override': 'true' if mode == 'virtual' else 'false',
@@ -395,6 +424,7 @@ def generate_launch_description():
                 'nav2_params_file': LaunchConfiguration('nav2_params_file'),
                 'nav2_overrides_file': nav_overrides,
                 'use_map_server': 'true' if map_yaml else 'false',
+                'publish_map_to_odom': 'false' if localization_required else 'true',
                 'initial_x': LaunchConfiguration('initial_x'),
                 'initial_y': LaunchConfiguration('initial_y'),
                 'initial_yaw': LaunchConfiguration('initial_yaw'),
@@ -460,6 +490,22 @@ def generate_launch_description():
                 'robot_perception', 'range_to_scan.launch.py', {
                     'log_level': log_level})),
         ])
+        if localization_required:
+            common.extend([
+                delayed(sensor_delay + 2.0, include(
+                    'robot_control', 'head_mapping_lock.launch.py', {
+                        'require_feedback': LaunchConfiguration('require_head_feedback'),
+                        'log_level': log_level})),
+                delayed(sensor_delay + 2.8, include(
+                    'robot_navigation', 'map_localization.launch.py', {
+                        'database_path': database_path,
+                        'config_file': LaunchConfiguration('localization_config_file'),
+                        'initial_pose_enabled': LaunchConfiguration('initial_pose_enabled'),
+                        'initial_x': LaunchConfiguration('initial_x'),
+                        'initial_y': LaunchConfiguration('initial_y'),
+                        'initial_yaw': LaunchConfiguration('initial_yaw'),
+                        'log_level': log_level})),
+            ])
         if not map_yaml:
             common.extend([
                 delayed(sensor_delay + 2.0, include(

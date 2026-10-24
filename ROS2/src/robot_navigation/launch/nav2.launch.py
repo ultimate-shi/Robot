@@ -48,13 +48,20 @@ def generate_launch_description():
             default_value=os.path.join(share, 'config', 'nav2.yaml'),
             description='Nav2 各节点使用的基础参数 YAML 文件路径'),
         DeclareLaunchArgument(
+            'map_recovery_config_file',
+            default_value=os.path.join(share, 'config', 'map_server_recovery.yaml'),
+            description='静态地图服务未激活时的自动恢复参数 YAML'),
+        DeclareLaunchArgument(
             'nav2_overrides_file',
             default_value=os.path.join(
                 share, 'config', 'nav2.yaml'),
             description='叠加到基础配置上的 Nav2 参数 YAML；默认重复加载基础配置'),
         DeclareLaunchArgument(
             'use_map_server', default_value='true',
-            description='是否加载静态地图并发布固定 map 到 odom；在线 RTAB-Map 导航时关闭'),
+            description='是否加载静态地图；在线 RTAB-Map 导航时关闭'),
+        DeclareLaunchArgument(
+            'publish_map_to_odom', default_value='true',
+            description='是否发布固定 map 到 odom；已有地图视觉定位时关闭以避免 TF 冲突'),
         DeclareLaunchArgument(
             'initial_x', default_value='0.0',
             description='map 到 odom 初始静态变换的 X 坐标，单位为米'),
@@ -96,6 +103,18 @@ def generate_launch_description():
         }],
         condition=IfCondition(LaunchConfiguration('use_map_server')),
         arguments=ros_args, output='screen')))
+    def create_map_recovery(context):
+        """定时器触发前解析子作用域中的恢复参数，避免上层延时 include 后丢失配置。"""
+        config = LaunchConfiguration('map_recovery_config_file').perform(context)
+        level = log_level.perform(context)
+        interval = float(LaunchConfiguration('node_start_interval').perform(context))
+        return [TimerAction(period=interval, actions=[Node(
+            package='robot_navigation', executable='map_server_recovery',
+            name='map_server_recovery', parameters=[config],
+            arguments=['--ros-args', '--log-level', level], output='screen')])]
+
+    actions.append(OpaqueFunction(function=create_map_recovery,
+        condition=IfCondition(LaunchConfiguration('use_map_server'))))
     remaps = [('/tf', 'tf'), ('/tf_static', 'tf_static')]
     definitions = [
         ('nav2_controller', 'controller_server', 'controller_server',
@@ -149,11 +168,16 @@ def generate_launch_description():
         static_map = LaunchConfiguration('use_map_server').perform(context).lower()
         if static_map not in ('true', 'false'):
             raise ValueError('use_map_server 只能为 true 或 false')
+        publish_map_tf = LaunchConfiguration('publish_map_to_odom').perform(context).lower()
+        if publish_map_tf not in ('true', 'false'):
+            raise ValueError('publish_map_to_odom 只能为 true 或 false')
+        if source == 'magnetic' and publish_map_tf != 'true':
+            raise ValueError('视觉定位发布 map 到 odom 时不能同时启用磁航向静态变换')
         if source == 'magnetic' and static_map != 'true':
             raise ValueError('magnetic 模式只能用于静态地图')
         if source == 'manual':
             result = []
-            if static_map == 'true':
+            if static_map == 'true' and publish_map_tf == 'true':
                 result.append(TimerAction(period=resolved['interval'] * 2,
                     actions=[Node(
                     package='tf2_ros', executable='static_transform_publisher',

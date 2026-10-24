@@ -1,4 +1,4 @@
-"""使用方法：pytest 执行纯协议约束测试，不需要连接真实控制板。"""
+"""作用：检查硬件协议与超声波默认量程等约束；使用方法：pytest 执行，无需连接真实控制板。"""
 
 import pathlib
 import re
@@ -46,6 +46,18 @@ def test_calibration_has_six_servos():
         item['brake_deadzone'] >= 2.0
         for item in data['servos'][:2]
     ), '头部停止死区过小会被编码器噪声反复触发，导致相机来回抖动'
+
+
+def test_sonar_range_accepts_measured_right_echo_and_matches_scan():
+    """使用方法：核对实测右侧回波不会被硬件过滤，且不超过 /scan 的量程。"""
+    import yaml
+    root = pathlib.Path(__file__).parents[3]
+    hardware = yaml.safe_load((root / 'src/robot_hardware/config/hardware_bringup.yaml')
+                              .read_text(encoding='utf-8'))['hardware']
+    scan = yaml.safe_load((root / 'src/robot_perception/config/range_to_scan.yaml')
+                          .read_text(encoding='utf-8'))['range_to_scan']['ros__parameters']
+    assert hardware['sonar_min_valid_mm'] <= 3332 <= hardware['sonar_max_valid_mm']
+    assert hardware['sonar_max_valid_mm'] <= scan['range_max'] * 1000
 
 
 def test_steering_resume_threshold_is_below_wheel_release_threshold():

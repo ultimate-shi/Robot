@@ -7,6 +7,7 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
 
 
 def generate_launch_description():
@@ -20,9 +21,13 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'log_level', default_value='warn',
             description='Nav2 速度门控节点的 ROS 日志级别'),
+        DeclareLaunchArgument('require_localization', default_value='false',
+                              description='是否必须获得新鲜的地图定位许可才放行自主速度'),
         Node(
             package='robot_control', executable='nav_controller_node',
-            parameters=[LaunchConfiguration('config_file')],
+            parameters=[LaunchConfiguration('config_file'), {
+                'require_localization': ParameterValue(
+                    LaunchConfiguration('require_localization'), value_type=bool)}],
             arguments=[
                 '--ros-args', '--log-level',
                 LaunchConfiguration('log_level'),

@@ -7,4 +7,7 @@ web:
   request_timeout_seconds: 60
   chat_timeout_seconds: 200
   health_timeout_seconds: 3
+  console_request_timeout_seconds: 20  # 普通控制台请求等待上限
+  console_save_timeout_seconds: 120  # 数据库备份和成套校验耗时较长，须覆盖控制台的 snapshot_timeout
+  console_chat_timeout_seconds: 220  # 大模型任务解析等待上限
   console_socket: ../../../.runtime/robot-console.sock

@@ -1,0 +1,15 @@
+# 作用：静态地图未激活时自动恢复；使用方法：由 nav2.launch.py 或 map_server_recovery.launch.py 加载。
+map_server_recovery:
+  ros__parameters:
+    enabled: true  # 人工维护、暂停地图服务前可动态设为 false，避免被自动重新激活
+    map_state_service: /map_server/get_state
+    map_change_service: /map_server/change_state  # 管理器超时无响应时，按真实稳定状态单步后备恢复
+    manager_active_service: /lifecycle_manager_map/is_active
+    manager_service: /lifecycle_manager_map/manage_nodes
+    status_topic: /mapping/map_server_recovery/status
+    startup_grace: 6.0  # 先等待原地图管理器正常启动，单位秒
+    check_interval: 2.0  # 非阻塞检查间隔，单位秒
+    request_timeout: 8.0  # 单次响应等待上限；超时后重读状态，单位秒
+    retry_interval: 3.0  # 失败或状态转换后的重试间隔，单位秒
+    max_fast_retries: 5  # 连续失败达到该次数后降频，避免高负载时密集重试
+    slow_retry_interval: 30.0  # 持续失败时仍以此间隔重试，单位秒

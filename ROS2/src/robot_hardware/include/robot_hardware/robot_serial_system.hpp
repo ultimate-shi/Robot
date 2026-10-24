@@ -151,7 +151,7 @@ private:
   double wheel_diameter_{0.110};
   double sonar_alpha_{0.2};
   int sonar_min_valid_mm_{30};
-  int sonar_max_valid_mm_{2500};
+  int sonar_max_valid_mm_{4000};
   bool outputs_enabled_{false};
   bool manual_recovery_required_{false};
   std::string fault_;

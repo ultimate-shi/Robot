@@ -107,11 +107,21 @@ def create_app(config_file=None):
             status, body, content_type = await asyncio.to_thread(
                 call_inference, config['console_socket'], request.method,
                 target, await request.body(),
-                220 if path == 'api/model/parse' else 20,
+                config['console_chat_timeout_seconds'] if path == 'api/model/parse' else
+                config['console_save_timeout_seconds'] if path == 'api/save-map' else
+                config['console_request_timeout_seconds'],
                 request.headers.get('content-type', 'application/json'))
-        except (OSError, TimeoutError, HTTPException):
+        except TimeoutError:
+            return JSONResponse(status_code=504, content={'detail': (
+                '保存请求等待超时，后台可能仍在保存；请稍后检查保存目录，勿重复点击'
+                if path == 'api/save-map' else '机器人控制台响应超时，请稍后重试')})
+        except (FileNotFoundError, ConnectionRefusedError):
             return JSONResponse(status_code=503,
                                 content={'detail': '机器人控制台未启动'})
+        except (OSError, HTTPException):
+            return JSONResponse(status_code=502, content={
+                'detail': '与机器人控制台的连接中断；保存请求可能仍在后台执行，请先检查结果'
+                if path == 'api/save-map' else '与机器人控制台的连接中断，请稍后重试'})
         return Response(content=body, status_code=status,
                         headers={'content-type': content_type,
                                  'cache-control': 'no-store'})

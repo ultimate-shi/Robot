@@ -20,7 +20,7 @@
 ## ROS 接口
 
 - 发布 `/hardware/chassis_state`、`/diagnostics` 和 8 路 `/ultrasonic/*` `Range`。
-- SE2 返回 0 或超出 `sonar_min_valid_mm`～`sonar_max_valid_mm` 时跳过该通道本次 `Range` 发布；接收者按最近有效样本的超时判定失联，不会收到伪造的远距读数。
+- SE2 返回 0 或超出 `sonar_min_valid_mm`～`sonar_max_valid_mm` 时跳过该通道本次 `Range` 发布；默认接受 30～4000 mm，覆盖右侧实测的 3332 mm 回波，并与 `/scan` 的 4.0 m 量程一致。接收者按最近有效样本的超时判定失联，不会收到伪造的远距读数。
 - 订阅 `/hardware/command_heartbeat` 和 `/wheel_motion/active`；T 定距期间任一心跳超时会发 DMC1 停车命令。
 - 服务 `/hardware/recover`、内部 `/hardware/execute_encoder_motion` 和 `/hardware/stop_encoder_motion`。
 - 导出腿、转向、车轮和头部的 ros2_control 命令/状态接口。

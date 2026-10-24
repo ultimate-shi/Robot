@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<!-- 使用方法：由 robot_description/description.launch.py 展开并发布完整机器人模型。 -->
+<!-- 作用：定义实机与仿真共用的机器人模型和硬件参数；使用方法：由 robot_description/description.launch.py 展开。 -->
 <robot name="robot" xmlns:xacro="http://www.ros.org/wiki/xacro">
 
   <!-- mode 只决定 ros2_control 插件；模型、关节和控制接口保持完全一致。 -->
@@ -18,7 +18,7 @@
   <xacro:arg name="wheel_diameter" default="0.110"/>
   <xacro:arg name="sonar_lpf_alpha" default="0.2"/>
   <xacro:arg name="sonar_min_valid_mm" default="30"/>
-  <xacro:arg name="sonar_max_valid_mm" default="2500"/>
+  <xacro:arg name="sonar_max_valid_mm" default="4000"/>
 
   <!-- 引入xacro文件 -->
   <xacro:include filename="materials.xacro"/>

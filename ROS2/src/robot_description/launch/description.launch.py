@@ -1,4 +1,4 @@
-"""使用方法：ros2 launch robot_description description.launch.py 发布 robot_description 与 TF."""
+"""作用：展开机器人模型并发布 TF；使用方法：ros2 launch robot_description description.launch.py。"""
 
 import os
 
@@ -80,7 +80,7 @@ def generate_launch_description():
             'sonar_min_valid_mm', default_value='30',
             description='SE2 超声波最小有效距离，单位毫米'),
         DeclareLaunchArgument(
-            'sonar_max_valid_mm', default_value='2500',
+            'sonar_max_valid_mm', default_value='4000',
             description='SE2 超声波最大有效距离，单位毫米'),
         DeclareLaunchArgument(
             'use_sim_time', default_value='false',

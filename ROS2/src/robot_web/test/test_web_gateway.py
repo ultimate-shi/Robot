@@ -2,6 +2,7 @@
 
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.client import HTTPException
 import json
 from pathlib import Path
 import socket
@@ -11,6 +12,7 @@ import time
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
+import pytest
 import uvicorn
 import yaml
 
@@ -212,3 +214,75 @@ def test_console_isolated_socket_does_not_change_existing_gateway(tmp_path,
             upstream.shutdown()
             upstream.server_close()
             thread.join(timeout=5)
+
+
+def console_test_config(tmp_path, monkeypatch, **overrides):
+    """生成可缩短等待时间的隔离网关配置。"""
+    monkeypatch.setenv('XDG_RUNTIME_DIR', str(tmp_path))
+    log_config = tmp_path / 'logging.yaml'
+    log_config.write_text(yaml.safe_dump({'logging': {'root': str(tmp_path / 'logs')}}))
+    values = {
+        'host': '127.0.0.1', 'port': 9100,
+        'inference_socket_name': 'inference.sock',
+        'console_socket': str(tmp_path / 'console.sock'),
+        'log_config': str(log_config), 'request_timeout_seconds': 2,
+        'chat_timeout_seconds': 2, 'health_timeout_seconds': 1,
+        **overrides}
+    config = tmp_path / 'web.yaml'
+    config.write_text(yaml.safe_dump({'web': values}))
+    return config
+
+
+@pytest.mark.parametrize('path,error,status,message', [
+    ('api/save-map', TimeoutError, 504, '后台可能仍在保存'),
+    ('api/status', TimeoutError, 504, '响应超时'),
+    ('api/status', FileNotFoundError, 503, '未启动'),
+    ('api/status', ConnectionRefusedError, 503, '未启动'),
+    ('api/save-map', HTTPException, 502, '连接中断'),
+])
+def test_console_transport_errors_are_not_all_reported_as_offline(
+        tmp_path, monkeypatch, path, error, status, message):
+    config = console_test_config(tmp_path, monkeypatch)
+    budgets = []
+
+    def upstream(socket_path, method, target, body, timeout, content_type):
+        budgets.append(timeout)
+        raise error('测试连接异常')
+
+    monkeypatch.setattr('robot_web.server.call_inference', upstream)
+    with web_server(config) as base:
+        request = Request(base + '/robot/' + path, data=b'{}')
+        with pytest.raises(HTTPError) as caught:
+            urlopen(request, timeout=2)
+        assert caught.value.code == status
+        detail = json.load(caught.value)['detail']
+        assert message in detail
+        if error is TimeoutError:
+            assert '未启动' not in detail
+    assert budgets == [120 if path == 'api/save-map' else 20]
+
+
+def test_slow_save_uses_its_own_longer_timeout(tmp_path, monkeypatch):
+    config = console_test_config(
+        tmp_path, monkeypatch, console_request_timeout_seconds=0.01,
+        console_save_timeout_seconds=1)
+
+    class SlowSaveHandler(InferenceHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers['Content-Length']))
+            time.sleep(0.12)
+            self.reply(200, {'success': True, 'message': '/maps/saved/map.yaml'})
+
+    upstream = UnixHTTPServer(str(tmp_path / 'console.sock'), SlowSaveHandler)
+    thread = threading.Thread(target=upstream.serve_forever)
+    thread.start()
+    try:
+        with web_server(config) as base:
+            request = Request(base + '/robot/api/save-map', data=b'{}')
+            with urlopen(request, timeout=2) as response:
+                assert response.status == 200
+                assert json.load(response)['success']
+    finally:
+        upstream.shutdown()
+        upstream.server_close()
+        thread.join(timeout=5)

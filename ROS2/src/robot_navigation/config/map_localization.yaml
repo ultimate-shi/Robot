@@ -1,0 +1,37 @@
+# 作用：已有地图视觉重定位和导航放行阈值；使用方法：由 map_localization.launch.py 加载。
+rtabmap:
+  ros__parameters:
+    Mem/IncrementalMemory: "false"
+    Mem/InitWMWithAllNodes: "true"
+    RGBD/StartAtOrigin: "false"
+    pub_loc_pose_only_when_localizing: true  # 只有真实匹配成功才发布 localization_pose
+    map_always_update: false
+    RGBD/LoopClosureReextractFeatures: "true"  # 配准时从历史原图重提取特征，兼容旧地图词典
+    RGBD/ProximityOdomGuess: "true"  # 使用人工初始估计和连续 odom 辅助邻近位置的投影匹配
+    Vis/FeatureType: "8"  # 保持 GFTT/ORB 类型，与已有数据库兼容
+    Vis/MaxFeatures: "2000"  # 提高配准特征覆盖；不更换地点识别词典的 Kp/DetectorStrategy
+    Vis/GridRows: "2"  # 将配准特征均匀分布到图像各区域，减少地砖反光区域垄断角点
+    Vis/GridCols: "3"
+    Vis/CorNNType: "5"  # 双向最近邻交叉验证，减少重复纹理造成的错误对应
+    Vis/CorGuessWinSize: "80"  # 使用位姿先验时的投影匹配搜索窗口，单位像素
+    Vis/PnPReprojError: "4"  # 短基线双目深度噪声下的重投影误差范围，单位像素
+    Vis/MinInliers: "20"  # 保留几何验证内点要求，不能用人工估计直接授予许可
+localization_guard:
+  ros__parameters:
+    localization_timeout: 60.0  # 超时仅提示失败，不移动机器人；后续匹配仍可恢复
+    match_timeout: 5.0  # 无成功匹配超过该时长即撤销许可，单位秒
+    required_matches: 3  # 至少连续三次有效匹配，人工初始位姿不计入
+    max_xy_variance: 0.25  # XY 方差上限，单位平方米
+    max_yaw_variance: 0.12  # 航向方差上限，单位弧度平方
+    tf_timeout: 1.0
+    update_rate: 5.0
+    pose_topic: /rtabmap/localization_pose
+    initial_pose_topic: /localization/initialpose
+    info_topic: /info  # RTAB-Map 真正处理双目帧后的诊断，作为初始估计发送的就绪确认
+    input_ready_timeout: 120.0  # 视觉地图加载/输入准备与定位匹配分别计时，单位秒
+    initial_pose_enabled: false  # 仅明确提供启动位置时开启；初始估计仍须经过视觉确认
+    initial_x: 0.0
+    initial_y: 0.0
+    initial_yaw: 0.0  # 弧度；网页输入仍使用度
+    initial_pose_xy_variance: 0.25
+    initial_pose_yaw_variance: 0.12

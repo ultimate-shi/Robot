@@ -1,6 +1,7 @@
 """作用：读取统一网页入口配置；使用方法：由网页入口和推理进程共同调用。"""
 
 import os
+import math
 from pathlib import Path
 
 import yaml
@@ -30,6 +31,13 @@ def load_config(path=None):
     config['request_timeout_seconds'] = float(config['request_timeout_seconds'])
     config['chat_timeout_seconds'] = float(config['chat_timeout_seconds'])
     config['health_timeout_seconds'] = float(config['health_timeout_seconds'])
+    for key, default in (
+            ('console_request_timeout_seconds', 20.0),
+            ('console_save_timeout_seconds', 120.0),
+            ('console_chat_timeout_seconds', 220.0)):
+        config[key] = float(config.get(key, default))
+        if not math.isfinite(config[key]) or config[key] <= 0:
+            raise ValueError(f'{key} 必须是正有限秒数')
     console_socket = Path(config.get('console_socket',
                                      '../../../.runtime/robot-console.sock'))
     config['console_socket'] = (console_socket if console_socket.is_absolute()

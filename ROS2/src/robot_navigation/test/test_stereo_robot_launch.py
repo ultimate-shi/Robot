@@ -1,4 +1,4 @@
-"""使用方法：pytest 运行本文件，验证实机兼容入口和 Nav2 的关键 launch 合同。"""
+"""作用：验证实机兼容入口、串行启动与 Nav2 合同；使用方法：pytest 运行本文件。"""
 
 from pathlib import Path
 
@@ -54,7 +54,9 @@ def test_stereo_robot_preserves_staged_startup():
     assert "'node_start_interval', default_value='0.0'" in camera_text
     assert "'node_start_interval', default_value='0.0'" in nav2_text
     assert 'target_action=current' in controllers_text
-    assert 'on_exit=[following]' in controllers_text
+    # 启动器退出必须经过退出状态检查，再决定是否继续下一个控制器。
+    assert 'on_exit=after_exit' in controllers_text
+    assert 'return bootstrap_exit_actions(event, context, name, next_spawner)' in controllers_text
     assert 'OpaqueFunction(function=create_deferred_spawners)' in controllers_text
     assert ".perform(context)" in controllers_text
     assert 'OpaqueFunction(function=register_camera_after_controls)' in camera_text
@@ -93,7 +95,8 @@ def test_nav2_online_mode_can_disable_static_map_publishers():
     assert "name='map_server'" in text
     assert "name='lifecycle_manager_map'" in text
     assert "name='static_tf_map'" in text
-    assert text.count("LaunchConfiguration('use_map_server')") == 3
+    assert "name='map_server_recovery'" in text
+    assert text.count("LaunchConfiguration('use_map_server')") == 4
 
 
 def test_segformer_uses_an_independent_local_costmap_layer():

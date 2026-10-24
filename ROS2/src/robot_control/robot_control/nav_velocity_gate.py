@@ -26,7 +26,7 @@ try:
     from rclpy.qos import qos_profile_action_status
 except ImportError:
     from rclpy.qos import qos_profile_action_status_default as qos_profile_action_status
-from std_msgs.msg import String
+from std_msgs.msg import Bool, String
 
 
 def twist_norm(msg: Twist) -> float:
@@ -52,6 +52,13 @@ class NavControllerNode(Node):
         super().__init__('nav_controller_node')
 
         self.declare_parameter('update_rate', 20.0)
+        self.declare_parameter('require_localization', False)
+        self.declare_parameter('localization_status_timeout', 1.0)
+        self.require_localization = bool(self.get_parameter('require_localization').value)
+        self.localization_timeout = float(self.get_parameter('localization_status_timeout').value)
+        self.localization_ready = False
+        self.localization_stamp = None
+        self.create_subscription(Bool, '/localization/ready', self.on_localization, 1)
         self.declare_parameter('cmd_vel_timeout', 0.5)
         self.declare_parameter('require_active_nav_goal', False)
         self.declare_parameter('nav_goal_status_timeout', 3.0)
@@ -120,6 +127,12 @@ class NavControllerNode(Node):
         self.latest_nav_cmd = msg
         self.last_nav_cmd_time = self.get_clock().now()
 
+    def on_localization(self, msg):
+        self.localization_ready = msg.data
+        self.localization_stamp = self.get_clock().now()
+        if self.require_localization and not msg.data:
+            self.publish_zero('LOCALIZATION_BLOCKED', 'waiting_for_map_match')
+
     def nav_goal_status_callback(self, msg: GoalStatusArray, action_name: str):
         """记录 Nav2 action 状态，并在终态时切断遗留速度。"""
         state = self.goal_states[action_name]
@@ -153,6 +166,11 @@ class NavControllerNode(Node):
 
     def control_loop(self):
         """速度新鲜时转发速度；启用严格门控时才要求 action 目标活跃。"""
+        if self.require_localization and (not self.localization_ready or
+                self.localization_stamp is None or
+                self.age(self.localization_stamp) > self.localization_timeout):
+            self.publish_zero('LOCALIZATION_BLOCKED', 'map_localization_unavailable')
+            return
         if self.require_active_nav_goal and not self.nav_goal_active():
             self.publish_zero('IDLE', 'no_active_goal')
             return

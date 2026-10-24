@@ -7,3 +7,12 @@ mapping_snapshot_manager:
     save_directory: /workspace/maps
     snapshot_basename: current
     snapshot_timezone: Asia/Shanghai  # 长期快照目录名和元数据统一使用北京时间
+    database_path: /tmp/robot_rtabmap_mapping.db  # 必须与建图节点使用同一路径
+    database_service_timeout: 60.0  # 等待内存写盘及数据库备份的上限，单位秒
+    resume_service_timeout: 5.0  # 保存异常后等待建图恢复响应的上限，单位秒
+    backup_service: /rtabmap/backup
+    pause_service: /rtabmap/pause
+    resume_service: /rtabmap/resume
+    map_service: /rtabmap/get_map
+    snapshot_owner_uid: -1  # -1 自动识别：普通进程用当前用户，root 容器用保存路径上最近的非 root 目录属主
+    snapshot_owner_gid: -1  # 默认随上述用户；可显式指定宿主机 id -g 的结果

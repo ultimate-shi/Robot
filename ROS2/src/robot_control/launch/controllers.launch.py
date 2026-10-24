@@ -112,7 +112,7 @@ def generate_launch_description():
             'sonar_min_valid_mm', default_value='30',
             description='SE2 超声波最小有效距离，单位毫米'),
         DeclareLaunchArgument(
-            'sonar_max_valid_mm', default_value='2500',
+            'sonar_max_valid_mm', default_value='4000',
             description='SE2 超声波最大有效距离，单位毫米'),
         DeclareLaunchArgument(
             'manager_config_file', default_value=default_controller_config,
