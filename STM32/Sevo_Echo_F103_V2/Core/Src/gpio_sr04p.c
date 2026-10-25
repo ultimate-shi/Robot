@@ -1,5 +1,8 @@
 /*
- * echo.c
+ * 作用：驱动八路 SR04P 超声波，通过 GPIO 中断记录 Echo 脉宽。
+ * 使用方法：初始化后调用 process_echo() 或 trigger_echo()/wait_echo()，再读取毫米距离。
+ * 超过 30ms 未结束的 Echo 返回 4000mm；未收到 Echo 上升沿仍返回 0。
+ * gpio_sr04p.c
  *
  *  Created on: Sep 9, 2025
  *      Author: Luke 1281772125@qq.com
@@ -12,9 +15,9 @@
 #include "stm32f1xx_hal.h"
 #include "gpio_sr04p.h"
 
-//SR04P最大有效探测距离为450cm，60毫秒超时
-//考虑到扫描效率，限制最大探测距离为250cm
+// 为保证扫描效率，单次等待限制为 30ms；已响应但回波未结束时报告量程外距离。
 #define SR04P_TIMEOUT_MS  (30)
+#define SR04P_TIMEOUT_DISTANCE_MM  (4000)
 #define SR04P_MAX_DISTANCE_MM  (340*SR04P_TIMEOUT_MS/2)
 
 /*
@@ -58,6 +61,23 @@ sr04p_t _sr04ps[SR04P_NUM] = {
 uint16_t _sr04p_interval_ms = SR04P_TIMEOUT_MS*2;       //距离评估的间隔时间（毫秒）
 #endif
 
+// 结束超时通道并刷新时间戳，确保 F/f/E 命令不会将 4000mm 再转换为 0。
+static void finish_echo_timeout(uint16_t index) {
+    uint32_t primask = __get_PRIMASK();
+    __disable_irq();
+    if(_sr04ps[index].stage == ECHO_STAGE_WAIT_ECHO) {
+        _sr04ps[index].distance = SR04P_TIMEOUT_DISTANCE_MM;
+        _sr04ps[index].distance_ms = millis();
+        _sr04ps[index].stage = ECHO_STAGE_END;
+    } else if(_sr04ps[index].stage == ECHO_STAGE_WAIT_TRIG) {
+        // 没有上升沿，保留无响应标记；禁止沿用上次测距结果。
+        _sr04ps[index].distance = 0;
+        _sr04ps[index].distance_ms = 0;
+        _sr04ps[index].stage = ECHO_STAGE_END;
+    }
+    __set_PRIMASK(primask);
+}
+
 int16_t process_echo_int(uint16_t GPIO_Pin) {
 	//根据GPIO_Pin找到SR04P序号
 	int8_t index;
@@ -76,7 +96,8 @@ int16_t process_echo_int(uint16_t GPIO_Pin) {
         _sr04ps[index].echo_us = get_us();
         _sr04ps[index].distance_ms = _sr04ps[index].echo_us/1000;
         int64_t us = _sr04ps[index].echo_us - _sr04ps[index].trig_us;
-        _sr04ps[index].distance = 343 * us / 2000;
+        _sr04ps[index].distance = us > SR04P_TIMEOUT_MS * 1000
+            ? SR04P_TIMEOUT_DISTANCE_MM : 343 * us / 2000;
         _sr04ps[index].stage = ECHO_STAGE_END;
     }
     return 0;
@@ -102,7 +123,7 @@ uint16_t wait_echo_end(uint16_t index, uint32_t timeout_ms) {
 //获得距离值以及距离有效的时间戳
 uint32_t get_echo_distance(uint16_t index, uint32_t *time_ms) {
     if(wait_echo_end(index, SR04P_TIMEOUT_MS) != ECHO_STAGE_END)
-        return 0;
+        finish_echo_timeout(index);
     //xSemaphoreTake(_sr04p_mutex, portMAX_DELAY);
     if(time_ms != NULL)
         *time_ms = _sr04ps[index].distance_ms;
@@ -180,6 +201,8 @@ void task_echo(void *arg) {
                 break;
             vTaskDelay(pdMS_TO_TICKS(1));
         }
+        for(index = 0; index < SR04P_NUM; index++)
+            finish_echo_timeout(index);
         xSemaphoreGive(_sr04p_mutex);
 
         if(busy) {
@@ -262,6 +285,9 @@ void process_echo() {
         HAL_Delay(1);
     }
 
+    for(index = 0; index < SR04P_NUM; index++)
+        finish_echo_timeout(index);
+
     if(busy) {
         /*
         printf("Echo[%d] Pin-%d: stage:%u, trig:%ld, echo:%ld, Time-out!\n", index,
@@ -323,6 +349,9 @@ void wait_echo() {
             break;
         HAL_Delay(1);
     }
+
+    for(index = 0; index < SR04P_NUM; index++)
+        finish_echo_timeout(index);
 
     if(busy) {
         /*

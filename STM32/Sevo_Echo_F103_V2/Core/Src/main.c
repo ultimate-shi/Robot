@@ -2,7 +2,8 @@
 /**
   ******************************************************************************
   * @file           : main.c
-  * @brief          : Main program body
+  * @brief          : SE2 板初始化、USB 命令循环和超声波微秒时基。
+  * @note           : 上电初始化后运行主循环；TIM3 溢出中断累计 get_us() 的回绕次数。
   * @note           : 六路 PWM 定时器初始化入口；使用时先初始化定时器，再调用 init_servo()。
   ******************************************************************************
   * @attention
@@ -81,7 +82,8 @@ uint64_t get_us(void) {
   uint32_t count;
   uint32_t overflow;
 
-  // 关闭中断防止读取时发生溢出
+  // 保留调用者中断状态，原子读取计数器和溢出次数。
+  uint32_t primask = __get_PRIMASK();
   __disable_irq();
   count = htim3.Instance->CNT;
   overflow = us_overflow_count;
@@ -91,9 +93,11 @@ uint64_t get_us(void) {
     // 手动处理这次溢出
     count = htim3.Instance->CNT;
     overflow++;
+    // 本次已代替 TIM3 中断处理溢出，必须持久化，避免下次时间倒退。
+    us_overflow_count = overflow;
     __HAL_TIM_CLEAR_FLAG(&htim3, TIM_FLAG_UPDATE);
   }
-  __enable_irq();
+  __set_PRIMASK(primask);
 
   // 计算总微秒数：溢出次数*65536 + 当前计数值
   uint64_t us = (uint64_t)overflow * 65536;
@@ -731,6 +735,11 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
     HAL_IncTick();
   }
   /* USER CODE BEGIN Callback 1 */
+  // TIM3 为 1MHz、16 位计数器；每 65536us 必须累计一次回绕。
+  if (htim->Instance == TIM3)
+  {
+    timer_us_overflow();
+  }
 
   /* USER CODE END Callback 1 */
 }
