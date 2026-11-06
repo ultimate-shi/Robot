@@ -19,7 +19,11 @@ rtabmap:
 localization_guard:
   ros__parameters:
     localization_timeout: 60.0  # 超时仅提示失败，不移动机器人；后续匹配仍可恢复
-    match_timeout: 5.0  # 无成功匹配超过该时长即撤销许可，单位秒
+    match_timeout: 5.0  # 初始连续匹配及视觉结果新鲜窗口；途中超过此窗口转为里程计跟踪
+    tracking_timeout: 120.0  # 已视觉确认后最长无新匹配时间，超过后停车，单位秒
+    tracking_max_distance: 5.0  # 无视觉纠偏期间累计路程上限，单位米
+    tracking_max_angle: 6.28  # 无视觉纠偏期间累计转角上限，单位弧度
+    odom_topic: /odom  # 使用现有轮速/IMU 融合里程计，不新增 map→odom 发布者
     required_matches: 3  # 至少连续三次有效匹配，人工初始位姿不计入
     max_xy_variance: 0.25  # XY 方差上限，单位平方米
     max_yaw_variance: 0.12  # 航向方差上限，单位弧度平方
@@ -28,6 +32,7 @@ localization_guard:
     pose_topic: /rtabmap/localization_pose
     initial_pose_topic: /localization/initialpose
     info_topic: /info  # RTAB-Map 真正处理双目帧后的诊断，作为初始估计发送的就绪确认
+    input_dropout_timeout: 20.0  # 已定位后允许的双目处理短时中断；期间仍须融合里程计、TF 及跟踪预算有效
     input_ready_timeout: 120.0  # 视觉地图加载/输入准备与定位匹配分别计时，单位秒
     initial_pose_enabled: false  # 仅明确提供启动位置时开启；初始估计仍须经过视觉确认
     initial_x: 0.0

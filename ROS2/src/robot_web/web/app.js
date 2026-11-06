@@ -1,4 +1,4 @@
-/* 作用：控制台导航、人工控制及实时数据显示；使用方法：由 /robot/ 加载，地图支持滚轮缩放、拖动平移与点击选点。 */
+/* 作用：控制台导航、支持多方向组合的四轮转向人工控制及中文状态显示，腿部角度/电流、轮速/电流同行展示；使用方法：由 /robot/ 加载，地图支持滚轮缩放、拖动平移与点击选点。 */
 (() => {
   const $ = id => document.getElementById(id);
   const clientId = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
@@ -6,7 +6,6 @@
   let map = null;
   let selectedGoal = null;
   let preview = null;
-  let pressed = '';
   let driveSequence = 0;
   let camera = 'right';
   let frameBusy = false;
@@ -29,6 +28,7 @@
       headers: {'Content-Type': 'application/json'},
       body: body === undefined ? undefined : JSON.stringify(body),
       cache: 'no-store',
+      signal: ['status','drive','joint-motion','joint-step','joints','joints/zero','body-balance'].includes(path) ? AbortSignal.timeout(2000) : undefined,
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(payload.detail || `请求失败 ${response.status}`);
@@ -46,7 +46,8 @@
     const page = location.pathname.endsWith('/status') ? 'status' :
       location.pathname.endsWith('/console') ? 'logs' : 'home';
     for (const name of ['home','status','logs']) $(name).hidden = name !== page;
-    $('sideStop').hidden = page === 'home';
+    $('sideStop').hidden = false;
+    window.dispatchEvent(new Event('robot-route'));
     document.querySelectorAll('[data-page]').forEach(link =>
       link.classList.toggle('active', link.dataset.page === page));
   };
@@ -55,67 +56,352 @@
   }));
   window.addEventListener('popstate', route); route();
   const stop = async () => {
-    pressed = '';
+    releaseAll();
     const result = await guarded(() => api('stop', {}));
     if (result) notice('软件停止已锁定；请在首页明确解除。');
   };
-  $('stop').addEventListener('click', stop);
   $('sideStop').addEventListener('click', stop);
   $('resetStop').addEventListener('click', () => guarded(async () => {
     await api('reset-stop', {}); notice('软件停止已解除。');
   }));
-  const sendDrive = (linear, angular) =>
-    api('drive', {linear, angular, client_id:clientId,
-      sequence:++driveSequence});
+  function createDriveSender() {
+    let socket = null;
+    let retryAt = 0;
+    let lastAck = null;
+    let timeoutMs = 0;
+    const now = () => typeof performance === 'undefined' ? Date.now() : performance.now();
+    const send = (linear, angular) => {
+      const body = {linear, angular, client_id:clientId, sequence:++driveSequence};
+      if (!socket && typeof WebSocket !== 'undefined' && Date.now() >= retryAt) {
+        socket = new WebSocket(`${location.protocol === 'https:'?'wss:':'ws:'}//${location.host}/robot/api/drive-stream`);
+        const current = socket;
+        current.onmessage = event => {
+          try {
+            const result = JSON.parse(event.data);
+            if (result.ok && result.accepted && Number.isFinite(result.timeout_seconds) && result.timeout_seconds > 0) {
+              lastAck=now(); timeoutMs=result.timeout_seconds*1000;
+            }
+            if (result.ok === false) {notice(result.detail || '驾驶输入未接受',true); releaseAll();}
+          } catch (_) { /* 非 JSON 帧不改变驾驶意图。 */ }
+        };
+        current.onclose = () => {if (socket === current) {socket=null;lastAck=null;retryAt=Date.now()+1000;}};
+        current.onerror = () => current.close();
+        // 建连时不缓存/重放非零命令；只有仍按住时的下一次刷新才发送。
+      }
+      if (socket?.readyState === 1) {
+        if (!socket.bufferedAmount) {
+          socket.send(JSON.stringify(body));
+          return Promise.resolve({ok:true});
+        }
+        if (linear || angular) return Promise.resolve({ok:true});
+        // 松键时不能排在旧帧后面：关流令服务端立即释放，并以 HTTP 补发零速。
+        socket.close();
+      }
+      return api('drive',body);
+    };
+    send.isHealthy = () => socket?.readyState === 1 && lastAck !== null && now()-lastAck <= timeoutMs;
+    return send;
+  }
+  const sendDrive = createDriveSender();
   const velocity = () => ({linear: Number($('linearSpeed').value), angular: Number($('angularSpeed').value)});
-  const driveValues = key => {
-    const speed = velocity();
-    return key === 'forward' ? [speed.linear, 0] :
-      key === 'back' ? [-speed.linear, 0] :
-      key === 'left' ? [0, speed.angular] :
-      key === 'right' ? [0, -speed.angular] : [0, 0];
-  };
-  const hold = key => { pressed = key; guarded(() => sendDrive(...driveValues(key))); };
-  const releaseDrive = () => {
-    const wasPressed = Boolean(pressed);
-    pressed = '';
-    if (wasPressed) guarded(() => sendDrive(0, 0));
-  };
+  // 每组独立记录按键，允许驾驶、姿态和头部同时操作。
+  const heldKeys = new Set();
+  // 每根手指独立保存方向，与键盘合并后只发布一条线/角速度命令。
+  const drivePointers = new Map();
   document.querySelectorAll('[data-drive]').forEach(button => {
     const key = button.dataset.drive;
-    button.addEventListener('pointerdown', event => { event.preventDefault(); hold(key); });
-    button.addEventListener('pointerup', releaseDrive);
-    button.addEventListener('pointercancel', releaseDrive);
-    button.addEventListener('pointerleave', releaseDrive);
+    button.addEventListener('pointerdown', event => {
+      event.preventDefault();
+      if (key === 'stop') { releaseAll(); return; }
+      if (state?.control?.mode !== 'manual' || state?.control?.stopped) return;
+      button.setPointerCapture?.(event.pointerId);
+      drivePointers.set(event.pointerId, key);
+      updateKeyboard();
+    });
+    for (const name of ['pointerup','pointercancel','pointerleave','lostpointercapture'])
+      button.addEventListener(name, event => {
+        if (drivePointers.delete(event.pointerId)) updateKeyboard();
+      });
   });
-  const keys = {w:'forward',ArrowUp:'forward',s:'back',ArrowDown:'back',
-    a:'left',ArrowLeft:'left',d:'right',ArrowRight:'right',' ':'stop'};
+  let motionSequence = 0;
+  let keyboardDriving = false;
+  let jointMoving = false;
+  let motionBusy = false;
+  let motionDirty = false;
+  let forceJointHold = false;
+  const legKeys=new Set(['w','a','s','d','q','e']);
+  const oppositeLeg={w:'s',s:'w',a:'d',d:'a',q:'e',e:'q'};
+  const nextLegRepeat=new Map();
+  let legStepEpoch=0;
+  let legStepQueue=Promise.resolve();
+  const sendLegStep=key => {
+    const epoch=legStepEpoch;
+    legStepQueue=legStepQueue.then(async () => {
+      if (epoch !== legStepEpoch) return;
+      if (state?.actuators?.leg_reason) { notice(state.actuators.leg_reason,true); return; }
+      const result=await guarded(() => api('joint-step',{action:key,client_id:clientId,
+        sequence:++motionSequence,generation:state?.actuators?.generation ?? 0}));
+      if (result === null) releaseAll();
+    });
+  };
+  const pressLeg=key => {
+    if (heldKeys.has(key)) return;
+    heldKeys.add(key);
+    nextLegRepeat.set(key,Date.now()+1000*(state?.actuators?.leg_step_repeat_seconds ?? 0.3));
+    if (!heldKeys.has(oppositeLeg[key])) sendLegStep(key);
+  };
+  const knownKeys = new Set(['arrowup','arrowdown','arrowleft','arrowright',
+    'w','a','s','d','q','e','j','l','i','k',' ']);
   const textFocus = element => element && (
-    element.tagName === 'TEXTAREA' || element.tagName === 'SELECT' ||
-    element.isContentEditable || (element.tagName === 'INPUT' &&
-      ['text','number','search','password','email','url'].includes(element.type)));
+    ['TEXTAREA','SELECT','INPUT'].includes(element.tagName) || element.isContentEditable);
+  const axis = (positive, negative) => Number(heldKeys.has(positive))-Number(heldKeys.has(negative));
+  const intentValues = () => {
+    const data = {pitch:0,roll:0,lift:0,
+      yaw:axis('j','l'),head_pitch:axis('i','k')};
+    if (state?.actuators?.leg_reason) data.pitch=data.roll=data.lift=0;
+    if (state?.actuators?.head_reason) data.yaw=data.head_pitch=0;
+    return data;
+  };
+  const sendJointIntent = async (forceHold=false) => {
+    if (forceHold) forceJointHold=true;
+    if (motionBusy) { motionDirty = true; return; }
+    const values = intentValues();
+    const moving = Object.values(values).some(Boolean);
+    if (!moving && !jointMoving && !forceJointHold) return;
+    const holding=forceJointHold; forceJointHold=false;
+    jointMoving = moving;
+    motionBusy = true;
+    try {
+      await api('joint-motion', {client_id:clientId,sequence:++motionSequence,generation:state?.actuators?.generation ?? 0,hold:holding,...values});
+    } catch (error) {
+      heldKeys.clear(); notice(error.message, true);
+    } finally {
+      motionBusy = false;
+      if (motionDirty) { motionDirty=false; sendJointIntent(); }
+    }
+  };
+  const updateKeyboard = (forceHold=false) => {
+    const directions = new Set(drivePointers.values());
+    const active = (key, direction) => heldKeys.has(key) || directions.has(direction);
+    const linear = (Number(active('arrowup','forward'))-Number(active('arrowdown','back')))*velocity().linear;
+    const angular = (Number(active('arrowleft','left'))-Number(active('arrowright','right')))*velocity().angular;
+    const moving = linear !== 0 || angular !== 0;
+    if (moving || keyboardDriving) guarded(() => sendDrive(linear,angular));
+    keyboardDriving = moving;
+    sendJointIntent(forceHold);
+  };
+  function releaseAll() {
+    legStepEpoch++; nextLegRepeat.clear();
+    heldKeys.clear();
+    drivePointers.clear();
+    updateKeyboard(true);
+  }
   window.addEventListener('keydown', event => {
     if (!$('keyboardEnabled').checked || textFocus(document.activeElement) ||
         document.hidden || $('home').hidden) return;
-    const key = keys[event.key] || keys[event.key.toLowerCase()];
-    if (!key) return;
+    const key = event.key.toLowerCase();
+    if (!knownKeys.has(key)) return;
+    // 首页驾驶键即使被停止锁拦截也不滚动页面，并明确说明当前不能驾驶的原因。
     event.preventDefault();
-    if (!event.repeat && key !== pressed) hold(key);
+    if (state?.control?.stopped || state?.control?.mode !== 'manual') {
+      if (!event.repeat) notice(state?.control?.stopped ?
+        '软件停止仍锁定，请先点击“解除软件停止”。' : '请先切换到手动控制。', true);
+      return;
+    }
+    if (key === ' ') { releaseAll(); return; }
+    if (legKeys.has(key)) { if (!event.repeat) pressLeg(key); return; }
+    if (!event.repeat) { heldKeys.add(key); updateKeyboard(); }
   });
   window.addEventListener('keyup', event => {
-    const key = keys[event.key] || keys[event.key.toLowerCase()];
-    if (key && key === pressed) { event.preventDefault(); releaseDrive(); }
+    const key = event.key.toLowerCase();
+    nextLegRepeat.delete(key);
+    if (legKeys.has(key)) legStepEpoch++;
+    if (heldKeys.delete(key)) { event.preventDefault(); updateKeyboard(); }
   });
-  window.addEventListener('blur', releaseDrive);
-  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseDrive(); });
+  window.addEventListener('blur', releaseAll);
+  window.addEventListener('robot-route', releaseAll);
+  document.addEventListener('focusin', event => { if (textFocus(event.target)) releaseAll(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseAll(); });
+  $('keyboardEnabled').addEventListener('change', event => {
+    releaseAll();
+    // 勾选后交回驾驶焦点，避免复选框一直被当成表单输入而吞掉方向键。
+    event?.currentTarget?.blur?.();
+  });
   window.addEventListener('pagehide', () => {
-    if (pressed) navigator.sendBeacon('/robot/api/drive', new Blob([
-      JSON.stringify({linear:0, angular:0, client_id:clientId,
-        sequence:++driveSequence})], {type:'application/json'}));
+    heldKeys.clear(); drivePointers.clear();
+    for (const [path, data] of [
+      ['drive',{linear:0,angular:0,client_id:clientId,sequence:++driveSequence}],
+      ['joint-motion',{client_id:clientId,sequence:++motionSequence,hold:true}]
+    ]) navigator.sendBeacon('/robot/api/'+path,new Blob([JSON.stringify(data)],{type:'application/json'}));
   });
   setInterval(() => {
-    if (pressed) guarded(() => sendDrive(...driveValues(pressed)));
+    const now=Date.now();
+    for (const key of heldKeys) if (legKeys.has(key) && !heldKeys.has(oppositeLeg[key]) && now >= (nextLegRepeat.get(key) ?? 0)) {
+      nextLegRepeat.set(key,now+1000*(state?.actuators?.leg_step_repeat_seconds ?? 0.3));
+      sendLegStep(key);
+    }
+    if (heldKeys.size || drivePointers.size || keyboardDriving || jointMoving) updateKeyboard();
   }, 100);
+  document.querySelectorAll('[data-joint-key]').forEach(button => {
+    const key = button.dataset.jointKey;
+    button.addEventListener('pointerdown', event => {
+      event.preventDefault(); button.setPointerCapture?.(event.pointerId);
+      if (legKeys.has(key)) pressLeg(key);
+      else { heldKeys.add(key); updateKeyboard(); }
+    });
+    for (const name of ['pointerup','pointercancel','lostpointercapture'])
+      button.addEventListener(name, () => {
+        if (heldKeys.delete(key) && legKeys.has(key)) legStepEpoch++;
+        nextLegRepeat.delete(key); updateKeyboard();
+      });
+  });
+  for (const [id,group] of [['legsZero','leg'],['headZero','head']])
+    $(id).addEventListener('click', () => guarded(async () => {
+      // 回零与清除本组输入由后端一次完成，不先发送异步保持命令。
+      for (const key of group === 'leg'?legKeys:['j','l','i','k']) heldKeys.delete(key);
+      if (group === 'leg') { legStepEpoch++; nextLegRepeat.clear(); }
+      await api('joints/zero',{group,client_id:clientId,sequence:++motionSequence,
+        generation:state?.actuators?.generation ?? 0});
+      notice(group === 'leg'?'四条大腿已一次提交 0° 目标。':'头部两个关节已一次提交 0° 目标。');
+    }));
+  // 表单草稿持续保留到成功提交，不能仅依赖焦点（点击标签或触屏可不聚焦）。
+  let balanceFormDirty = false;
+  for (const id of ['balanceEnabled','balanceLevel','balanceRoll','balancePitch']) {
+    for (const event of ['input','change'])
+      $(id).addEventListener(event, () => { balanceFormDirty = true; });
+  }
+  function syncBalanceForm(b) {
+    if (balanceFormDirty || document.activeElement?.closest('.balance-box') || !b.fresh || b.pending) return;
+    $('balanceEnabled').checked=b.enabled;
+    $('balanceLevel').value=b.level;
+    $('balanceRoll').value=b.target_roll_deg;
+    $('balancePitch').value=b.target_pitch_deg;
+    for (const id of ['balanceRoll','balancePitch']) $(id).disabled=b.level !== 'mid';
+  }
+  const applyBalance = enabled => guarded(async () => {
+    releaseAll();
+    const level = $('balanceLevel').value;
+    await api('body-balance',{enabled,level,
+      target_roll_deg: level === 'mid' ? Number($('balanceRoll').value) : 0,
+      target_pitch_deg: level === 'mid' ? Number($('balancePitch').value) : 0});
+    balanceFormDirty = false;
+    notice('平衡设置已提交，等待节点确认。');
+  });
+  $('applyBalance').addEventListener('click', () => applyBalance($('balanceEnabled').checked));
+  $('resumeHeadLock').addEventListener('click', () => guarded(async () => {
+    await api('head-lock/resume',{}); notice('已恢复建图/定位头部归中。');
+  }));
+  $('disableBalance').addEventListener('click', () => applyBalance(false));
+  $('balanceLevel').addEventListener('change', () => {
+    for (const id of ['balanceRoll','balancePitch']) $(id).disabled = $('balanceLevel').value !== 'mid';
+  });
+  const legLabels = ['左前腿','右前腿','左后腿','右后腿'];
+  const headLabels = ['水平旋转','俯仰'];
+  for (const [group,labels,container] of [['leg',legLabels,'legSliders'],['head',headLabels,'headSliders']]) {
+    labels.forEach((label,index) => {
+      const card=document.createElement('label'); card.className='joint-slider '+group;
+      const title=document.createElement('strong'); title.textContent=label;
+      const input=document.createElement('input'); input.type='range'; input.step='0.1';
+      input.id=`joint-${group}-${index}`; input.disabled=true;
+      const angleNumber=group === 'leg'?document.createElement('input'):null;
+      if (angleNumber) {
+        angleNumber.type='number'; angleNumber.step=input.step='0.01'; angleNumber.disabled=true;
+        angleNumber.id=`joint-angle-${index}`; angleNumber.setAttribute('aria-label',label+'板端目标角度');
+      }
+      input.setAttribute('aria-label',label+(group === 'leg' ? '板端角度' : '角度'));
+      const output=document.createElement('output'); output.id=`joint-value-${group}-${index}`;
+      output.textContent='等待反馈'; card.append(title,input);
+      if (angleNumber) card.append(angleNumber);
+      card.append(output); $(container).append(card);
+      input.addEventListener('input', () => {
+        if (angleNumber) angleNumber.value=input.value;
+        output.textContent=`目标 ${input.value}°`;
+      });
+      const submitAngle=() => guarded(async () => {
+        const items=state?.actuators?.joints?.filter(item => item.group === group) || [];
+        const values=items.map(item => group === 'leg' ? (item.hardware_target_deg ?? item.hardware_actual_deg) : (item.target_deg ?? item.actual_deg));
+        if (values.length !== labels.length || values.some(v => !Number.isFinite(v)))
+          throw new Error('关节反馈不可用');
+        values[index]=Number(input.value);
+        await api('joints',{group,values,unit:group === 'leg' ? 'hardware_deg' : 'deg'});
+      });
+      input.addEventListener('change',submitAngle);
+      if (angleNumber) angleNumber.addEventListener('change',() => {
+        const value=Number(angleNumber.value);
+        if (!String(angleNumber.value).trim() || !Number.isFinite(value) || value < Number(input.min) || value > Number(input.max)) {
+          notice('角度超出限位或数值无效',true); return;
+        }
+        input.value=angleNumber.value; submitAngle();
+      });
+    });
+  }
+  function renderActuators(data) {
+    const a=data.actuators;
+    $('jointManualControls').hidden=data.control.mode !== 'manual';
+    if (!a) { $('legReason').textContent=$('headReason').textContent='关节接口不可用，请更新并重启控制台'; return; }
+    $('legReason').textContent=a.leg_reason || '手动可用；允许同时驾驶';
+    $('headReason').textContent=a.head_reason || '手动可用';
+    $('resumeHeadLock').hidden=!['stopped','paused'].includes(a.head_lock?.state);
+    $('resumeHeadLock').disabled=data.control.stopped;
+    $('jointLimit').textContent=a.stop_warning || (a.limited ? '已到行程限位；可反向操作，其他有行程的动作仍可使用。' : '松键保持；整体升降保留各腿高度差。');
+    const b=a.balance;
+    for (const id of ['balanceRoll','balancePitch']) {
+      $(id).min=-a.balance_max_setpoint_deg; $(id).max=a.balance_max_setpoint_deg;
+    }
+    const balanceText=!b.fresh ? '状态未知或过期' :
+      `${b.enabled?'已开启':'已关闭'} · ${{low:'低档固定高度',mid:'中档自动调平',high:'高档固定高度'}[b.level] || b.level} · ${balanceState(b.state)}`;
+    $('sideBalance').textContent='自动平衡：'+balanceText;
+    $('balanceState').textContent=balanceText+(b.pending?' · 设置确认中':'')+
+      (b.error?' · '+b.error:'')+(b.overload_active?' · 过流保护':'')+
+      (b.fresh?`；实际横滚 ${fmt(b.actual_roll_deg)}°，俯仰 ${fmt(b.actual_pitch_deg)}°；目标 ${fmt(b.target_roll_deg)}° / ${fmt(b.target_pitch_deg)}°`:'');
+    $('applyBalance').disabled=b.pending || data.control.stopped;
+    $('disableBalance').disabled=b.pending;
+    syncBalanceForm(b);
+    document.querySelectorAll('[data-joint-key]').forEach(button => {
+      button.disabled=Boolean('wasdqe'.includes(button.dataset.jointKey)?a.leg_reason:a.head_reason);
+    });
+    $('legsZero').disabled=Boolean(a.leg_reason); $('headZero').disabled=Boolean(a.head_reason);
+    const rows=[];
+    for (const item of a.joints) {
+      const {group,index}=item;
+      const label=(group === 'leg'?legLabels:headLabels)[index];
+      const input=$(`joint-${group}-${index}`), output=$(`joint-value-${group}-${index}`);
+      input.disabled=Boolean(item.reason);
+      const angleNumber=group === 'leg'?$(`joint-angle-${index}`):null;
+      if (angleNumber) angleNumber.disabled=input.disabled;
+      input.min=group === 'leg'?item.hardware_min_deg:item.min_deg;
+      input.max=group === 'leg'?item.hardware_max_deg:item.max_deg;
+      if (group === 'leg') input.style.direction=item.extension_direction < 0?'ltr':'rtl';
+      if (angleNumber) { angleNumber.min=input.min; angleNumber.max=input.max; }
+      if (document.activeElement !== input && document.activeElement !== angleNumber) {
+        input.value=(group === 'leg'?item.hardware_actual_deg:item.actual_deg) ?? 0;
+        if (angleNumber) angleNumber.value=Number(input.value).toFixed(2);
+        output.textContent=item.fresh ? `实际 ${fmt(group === 'leg'?item.hardware_actual_deg:item.actual_deg)}°；目标 ${fmt(group === 'leg'?item.hardware_target_deg:item.target_deg)}°` : '反馈缺失或过期';
+      }
+      const actual=group === 'leg'?item.hardware_actual_deg:item.actual_deg;
+      const angle=item.fresh?`角度 ${fmt(actual)}°`:'角度反馈缺失或过期';
+      rows.push([label,angle+(group === 'leg'?`；电流 ${data.hardware?.fresh?fmt(data.hardware.leg_current_ma?.[index])+' mA':'无有效反馈'}`:'')]);
+    }
+    rows.push(['自动平衡',balanceText],['平衡目标',`${fmt(b.target_roll_deg)}° / ${fmt(b.target_pitch_deg)}°`],
+      ['实际姿态',b.fresh?`${fmt(b.actual_roll_deg)}° / ${fmt(b.actual_pitch_deg)}°`:'无有效反馈'],
+      ['过流保护',b.fresh?(b.overload_active?'降档保护中':'未触发'):'未知']);
+    // 电流数组沿用硬件 FL/FR/RL/RR 顺序，不能按关节消息到达顺序配对。
+    for (const [index,position] of ['front_left','front_right','rear_left','rear_right'].entries()) {
+      const label=legLabels[index].replace('腿','');
+      const steer=a.other_joints?.[`${position}_steer_joint`];
+      const wheel=a.other_joints?.[`${position}_wheel_joint`];
+      rows.push([label+'转向',steer?.fresh?`角度 ${fmt(steer.actual_deg)}°`:'角度反馈缺失或过期']);
+      rows.push([label+'轮',`${wheel?.fresh?'速度 '+fmt(wheel.velocity_rad_s)+' rad/s':'速度反馈缺失或过期'}；电流 ${data.hardware?.fresh?fmt(data.hardware.wheel_current_ma?.[index])+' mA':'无有效反馈'}`]);
+    }
+    setRows($('jointStatus'),rows);
+  }
+  function fmt(value) { return Number.isFinite(value)?value.toFixed(1):'未知'; }
+  function balanceState(value) {
+    return ({disabled:'未启用',stopped:'停止锁定',hardware_fault:'硬件失能，平衡已关闭',cycle_late:'控制周期延迟，已暂停追加调节',balanced:'已调平',balancing:'调平中',
+      waiting_imu:'等待 IMU',waiting_joint_state:'等待腿反馈',joint_stale:'腿反馈过期',imu_stale:'IMU 过期',
+      static_low:'低档固定高度',static_high:'高档固定高度',restoring_mid:'恢复中档',
+      overload_low:'过流降至低档',overload_recovered_low:'过流恢复，保持低档'})[value] || value;
+  }
   for (const [id, output, suffix] of [['linearSpeed','linearValue',' m/s'],
                                        ['angularSpeed','angularValue',' rad/s']]) {
     $(id).addEventListener('input', () => { $(output).textContent = $(id).value + suffix; });
@@ -127,7 +413,7 @@
     $('angularSpeed').dispatchEvent(new Event('input'));
   }));
   document.querySelectorAll('[data-mode]').forEach(button => button.addEventListener('click', () => guarded(async () => {
-    releaseDrive();
+    releaseAll();
     const mode = button.dataset.mode;
     await api('mode', {mode});
     showMode(mode); notice('已切换到' + button.textContent.trim());
@@ -378,14 +664,15 @@
     notice('Nav2 已接收导航目标。');
   }));
   $('cancelNav').addEventListener('click', () => guarded(async () => {
-    await api('cancel', {}); preview = null; notice('导航已取消并停车。');
+    const result = await api('cancel', {}); preview = null;
+    notice(result.canceled ? 'Nav2 已确认导航结束。' : '已切断导航速度，取消结果请查看地图下方导航状态。');
   }));
   $('saveMap').addEventListener('click', () => guarded(async () => {
     const button = $('saveMap');
     button.disabled = true;
     button.textContent = '正在保存…';
     try {
-      notice('正在保存地图和定位数据库，可能需要一分钟，请保持停车并等待结果…');
+      notice('正在保存地图和定位数据库；建图退出后将尝试恢复，可能需要数分钟，请保持停车并等待结果…');
       const result = await api('save-map', {});
       notice(result.success ? `地图已保存：${result.message}` : result.message, !result.success);
     } finally {
@@ -454,8 +741,13 @@
   };
   const renderStatus = data => {
     state = data;
+    renderActuators(data);
+    if (data.control.stopped || data.control.mode !== 'manual') releaseAll();
     $('robotMode').textContent = data.mode_source === 'real' ? '当前：实机' : '当前：仿真';
-    $('overall').textContent = data.control.stopped ? '软件停止已锁定' : '控制链运行中';
+    $('overall').textContent = data.control.stopped ? '紧急停止已锁定' :
+      data.mode_source === 'real' && (!data.hardware?.fresh || !data.hardware.outputs_enabled ||
+      !data.hardware.connected || !data.hardware.watchdog_ok || data.hardware.fault) ? '硬件异常或反馈不可用' :
+      !data.controllers?.available ? '控制器状态不可用' : '状态监测中，详见各设备反馈';
     const hardware = data.hardware;
     const hardwareAlert = $('hardwareAlert');
     let hardwareMessage = '';
@@ -473,14 +765,23 @@
     }
     hardwareAlert.textContent = hardwareMessage;
     hardwareAlert.hidden = !hardwareMessage;
+    const astraCamera = data.camera_source === 'astra';
+    document.querySelector('[data-camera="left"]').hidden = astraCamera;
+    document.querySelector('[data-camera="right"]').textContent = astraCamera ? '彩色' : '右目';
+    if (astraCamera && camera === 'left') camera = 'right';
     const localization = data.localization || {required:data.mode_source === 'real',ready:false,
       state:'unavailable',message:'当前控制台尚未提供定位接口，请重启整车后刷新页面'};
     $('localizationPanel').hidden = !localization.required;
-    const phases = {initializing:'视觉地图加载中',waiting:'等待定位',verifying:'正在确认定位',localized:'定位成功',
+    const phases = {initializing:'视觉地图加载中',waiting:'等待定位',verifying:'正在确认定位',localized:'定位成功',tracking:'里程计跟踪中',
       failed:'定位超时',lost:'定位丢失',unavailable:'定位服务不可用'};
     $('localizationPhase').textContent = phases[localization.state] || localization.message;
     $('localizationMessage').textContent = localization.message +
-      (localization.matches != null ? `（有效匹配 ${localization.matches}/${localization.required_matches}）` : '');
+      (localization.matches != null ? `（有效匹配 ${localization.matches}/${localization.required_matches}）` : '') +
+      (localization.state === 'tracking' ? `；距上次地图确认 ${localization.match_age_seconds} 秒，累计 ${localization.tracking_distance_m} 米 / ${localization.tracking_angle_deg}°` : '') +
+      (localization.source ? `；来源：${({visual:'视觉',amcl:'深度轮廓',fused:'视觉＋轮廓',tracking:'里程计跟踪',waiting:'等待定位'})[localization.source] || localization.source}` : '') +
+      (localization.scan_score != null ? `；轮廓吻合度 ${(localization.scan_score*100).toFixed(0)}%` : '') +
+      (localization.sources ? Object.entries(localization.sources).filter(([,value]) => value.rejection)
+        .map(([key,value]) => `；${key === 'visual' ? '视觉' : '轮廓'}：${value.rejection}`).join('') : '');
     $('localizationPanel').dataset.state = localization.state;
     if (!initialFormEdited && !initialHint && localization.initial_pose) {
       const hint = localization.initial_pose;
@@ -505,7 +806,7 @@
     showMode(data.control.mode);
     renderNavigation(data);
     setRows($('robotStatus'), [
-      ['模式',data.control.mode],['控制台接口',data.control.connected?'在线':'不可用'],
+      ['模式',({manual:'手动',navigation:'导航',explore:'自主探索',follow:'跟随'})[data.control.mode] || '未知'],['控制台接口',data.control.connected?'在线':'不可用'],
       ['软件停止',data.control.stopped?'已锁定':'已解除'],
       ['地图',data.map_ready?'可用':data.map_source || '等待地图'],
       ['定位',localization.message],
@@ -526,7 +827,8 @@
       ({active:'运行中',inactive:'未激活',unconfigured:'未配置'}[controllers.states?.[name]] ||
       controllers.states?.[name] || '未加载');
     const boardState = name => !data.hardware?.fresh ? '无新反馈' :
-      data.hardware[name] ? '已连接' : '断开';
+      !data.hardware[name] ? '断开' : data.hardware.fault ? '已发现；通信/整车故障待检查' :
+      !data.hardware.outputs_enabled ? '已发现；输出未就绪' : '已连接，有整车反馈';
     setRows($('controllerStatus'), [
       ...controllerNames.map(([name,label]) => [label,controllerState(name)]),
       ['DMC0 控制板',boardState('dmc0_connected')],
@@ -541,15 +843,24 @@
       ['left','左侧超声波'],['right','右侧超声波']];
     const sonarState = name => {
       const item = data.ultrasonic?.[name];
-      return !item?.received ? '无新数据' : item.fresh ?
+      return !item ? '等待首个数据' : !item.received ? '数据过期' : item.fresh ?
         `${item.range_m.toFixed(2)} m` : '读数无效';
     };
+    const imageState = image => !data.vision_enabled ? '当前模式未接入' : image?.state === 'unconfigured' ? '未配置' : image?.fresh ? '正常' :
+      image?.state === 'delayed' ? `短时延迟（${image.age_seconds} 秒）` :
+      !image || image.state === 'waiting' ? '等待首帧' : '持续断流';
+    setRows($('cameraStatus'),[
+      ['设备类型',astraCamera?'Astra RGB-D 深度相机':'双目相机（计算深度）'],
+      ...(astraCamera?[
+        ['原始彩色流',imageState(data.camera_raw?.color)],
+        ['原始深度流',imageState(data.camera_raw?.depth)],
+        ['处理后彩色流',imageState(data.images.right)],
+        ['处理后深度流',imageState(data.images.depth)]
+      ]:[['左目',imageState(data.images.left)],['右目',imageState(data.images.right)],
+        ['计算深度',imageState(data.images.depth)]])]);
     setRows($('sensorStatus'), [
-      ['左目',!data.vision_enabled?'当前模式未接入':data.images.left?.fresh?'正常':'断流'],
-      ['右目',!data.vision_enabled?'当前模式未接入':data.images.right?.fresh?'正常':'断流'],
-      ['深度',!data.vision_enabled?'当前模式未接入':data.images.depth?.fresh?'正常':'断流'],
       ['YOLO',!data.vision_enabled?'当前模式未接入':data.detection_fresh?'正常':'数据过期'],
-      ['IMU',data.imu_fresh?'正常':'数据过期'],
+      ['IMU',!data.imu_fresh?'数据过期':data.imu_valid?'正常':'数据无效'],
       ...sonarNames.map(([name,label]) => [label,sonarState(name)]),
       ['避障',data.safety?.fresh?'有新数据':'数据过期']]);
     setRows($('systemStatus'), [['节点在线',Math.round(data.uptime_seconds)+' 秒'],
@@ -587,7 +898,7 @@
     const nav = data.navigation || {phase:'idle', message:'控制台尚未提供导航反馈'};
     const titles = {idle:'尚未开始导航',planning:'正在规划路径',ready:'路径已规划',
       starting:'正在启动导航',navigating:'正在前往目标',succeeded:'已到达目标',
-      canceled:'导航已取消',failed:'导航失败'};
+      canceling:'正在取消导航',canceled:'导航已取消',failed:'导航失败'};
     const active = nav.phase === 'starting' || nav.phase === 'navigating';
     let title = titles[nav.phase] || '导航状态未知';
     const rows = [];
@@ -713,9 +1024,12 @@
         $('connection').textContent = '连接断开'; notice(error.message,true);
         $('hardwareAlert').textContent = '控制台状态无法获取，无法确认底盘是否可用。';
         $('hardwareAlert').hidden = false;
-        releaseDrive(); return;
+        // 驾驶流有及时确认时，页面查询超时不能伪造一次松键。
+        if (!sendDrive.isHealthy?.()) releaseAll();
+        else $('hardwareAlert').textContent='状态更新暂时延迟，驾驶连接正常。';
+        return;
       }
-      if (state?.map_ready && (!map || Date.now() - lastMapFetch >= 2000)) {
+      if (!keyboardDriving && !jointMoving && state?.map_ready && (!map || Date.now() - lastMapFetch >= 2000)) {
         lastMapFetch = Date.now();
         try { map = await api('map'); renderMap(); }
         catch (error) {
@@ -772,6 +1086,7 @@
     }
   }
   async function pollLogs() {
+    if ($('logs').hidden) return;
     try {
       const payload = await api(`logs?after=${lastLog}&level=${$('logLevel').value}`);
       for (const entry of payload.items) {

@@ -1,10 +1,12 @@
-"""作用：用合成双目验证真实 RTAB-Map 保存及重载匹配；使用方法：独立 ROS_DOMAIN_ID 下设 RUN_RTABMAP_INTEGRATION=1 后 pytest 本文件。"""
+"""作用：用双目/RGB-D 验证保存、强制退出恢复、定位重载及里程计；用法：独立 DDS 域设 RUN_RTABMAP_INTEGRATION=1 后 pytest。"""
 
 import os
+import json
 from pathlib import Path
 import signal
 import subprocess
 import time
+import yaml
 
 import cv2
 import numpy as np
@@ -14,6 +16,8 @@ from geometry_msgs.msg import TransformStamped, PoseWithCovarianceStamped
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import CameraInfo, Image
+from nav_msgs.msg import Odometry
+from rtabmap_msgs.msg import RGBDImage
 from std_srvs.srv import Trigger
 from std_msgs.msg import Bool
 from tf2_ros import TransformBroadcaster, StaticTransformBroadcaster
@@ -22,7 +26,8 @@ from robot_navigation.mapping.database import validate_bundle, file_digest
 
 
 @pytest.mark.skipif(os.environ.get('RUN_RTABMAP_INTEGRATION') != '1', reason='需显式启用隔离域合成双目集成测试')
-def test_real_rtabmap_database_roundtrip(tmp_path):
+@pytest.mark.parametrize('camera_source', ['stereo', 'astra'])
+def test_real_rtabmap_database_roundtrip(tmp_path, camera_source):
     assert os.environ.get('ROS_DOMAIN_ID', '0') != '0', '必须使用独立 DDS 域，禁止接入实车'
     config = Path(__file__).parents[1] / 'config' / 'rtabmap_mapping.yaml'
     database = tmp_path / 'active.db'
@@ -43,6 +48,9 @@ def test_real_rtabmap_database_roundtrip(tmp_path):
     q.x, q.y, q.z, q.w = -0.5, 0.5, -0.5, 0.5
     static.sendTransform(camera_tf)
     dynamic = TransformBroadcaster(node)
+    rgbd_pub = node.create_publisher(RGBDImage, '/camera/rgbd_image', 10)
+    visual_odometry = []
+    node.create_subscription(Odometry, '/visual_odom_raw', visual_odometry.append, 10)
     publishers = {name: node.create_publisher(kind, '/stereo/' + name, 10)
                   for name, kind in [('left/image_rect', Image), ('right/image_rect', Image),
                                      ('left/camera_info', CameraInfo), ('right/camera_info', CameraInfo)]}
@@ -67,7 +75,17 @@ def test_real_rtabmap_database_roundtrip(tmp_path):
                 '-r', 'localization_pose:=/rtabmap/localization_pose']
         if localization:
             args = ['ros2', 'launch', 'robot_navigation', 'map_localization.launch.py',
-                    f'database_path:={db}']
+                    f'database_path:={db}', f'camera_source:={camera_source}']
+        elif camera_source == 'astra':
+            mapping_config = yaml.safe_load(config.read_text())
+            mapping_config['rtabmap']['ros__parameters'].update(database_path=str(db),
+                                                               **{'Rtabmap/DetectionRate': '2.0'})
+            mapping_path = tmp_path/'rgbd_mapping.yaml'
+            mapping_path.write_text(yaml.safe_dump(mapping_config))
+            args = ['ros2', 'launch', 'robot_navigation', 'rtabmap_mapping.launch.py',
+                    'camera_source:=astra', f'config_file:={mapping_path}',
+                    f'save_directory:={tmp_path / "auto_recovered"}',
+                    f'preview_directory:={tmp_path / "preview"}']
         process = subprocess.Popen(args, stdout=logfile, stderr=subprocess.STDOUT)
         processes.append(process)
         return process
@@ -96,6 +114,15 @@ def test_real_rtabmap_database_roundtrip(tmp_path):
                       0.0, 200.0, 120.0, 0.0, 0.0, 0.0, 1.0, 0.0]
             publishers[side + '/image_rect'].publish(image)
             publishers[side + '/camera_info'].publish(info)
+            if camera_source == 'astra' and side == 'left':
+                bundle = RGBDImage()
+                bundle.header, bundle.rgb, bundle.rgb_camera_info = image.header, image, info
+                depth = Image()
+                depth.header, depth.width, depth.height = image.header, 320, 240
+                depth.encoding, depth.step = '16UC1', 640
+                depth.data = np.full((240, 320), 2000, dtype=np.uint16).tobytes()
+                bundle.depth, bundle.depth_camera_info = depth, info
+                rgbd_pub.publish(bundle)
 
     def until(predicate, timeout=35, check_process=True, images=True):
         deadline = time.monotonic() + timeout
@@ -112,6 +139,13 @@ def test_real_rtabmap_database_roundtrip(tmp_path):
         pytest.fail((tmp_path / 'rtabmap.log').read_text()[-6000:])
 
     try:
+        if camera_source == 'astra':
+            odometry = subprocess.Popen(['ros2', 'launch', 'robot_navigation', 'rgbd_odometry.launch.py'],
+                stdout=logfile, stderr=subprocess.STDOUT)
+            processes.append(odometry)
+            until(lambda: len(visual_odometry) >= 3)
+            assert visual_odometry[-1].header.frame_id == 'odom'
+            assert visual_odometry[-1].child_frame_id == 'base_link'
         mapping = start(database)
         until(lambda: snapshots.latest_map is not None and snapshots.latest_cloud is not None)
         client = node.create_client(Trigger, '/mapping/save_snapshot')
@@ -122,8 +156,30 @@ def test_real_rtabmap_database_roundtrip(tmp_path):
         assert response.success, response.message
         map_yaml = Path(response.message)
         validate_bundle(map_yaml, map_yaml.with_suffix('.db'))
-        mapping.send_signal(signal.SIGINT)
-        mapping.wait(timeout=10)
+        # 仅杀隔离域的合成建图进程，验证与 OOM 同样的无清理退出路径。
+        if camera_source == 'astra':
+            children = Path(f'/proc/{mapping.pid}/task/{mapping.pid}/children').read_text().split()
+            slam_pid = next(int(pid) for pid in children if b'/rtabmap_slam/rtabmap' in
+                            Path(f'/proc/{pid}/cmdline').read_bytes())
+            os.kill(slam_pid, signal.SIGKILL)
+            until(lambda: bool(list((tmp_path / 'auto_recovered').glob('map_*/map.yaml'))),
+                  timeout=45, check_process=False, images=False)
+            map_yaml = next((tmp_path / 'auto_recovered').glob('map_*/map.yaml'))
+            mapping.wait(timeout=15)
+        else:
+            mapping.kill()
+            mapping.wait(timeout=10)
+            until(lambda: not any(service.service_is_ready() for service in (
+                snapshots.pause_client, snapshots.resume_client, snapshots.map_client, snapshots.backup_client)),
+                check_process=False, images=False)
+            # 即使没有地图/点云订阅缓存，也要从数据库副本恢复，不再被缓存前置检查挡住。
+            snapshots.latest_map = snapshots.latest_cloud = None
+            future = client.call_async(Trigger.Request())
+            until(future.done, timeout=45, check_process=False, images=False)
+            assert future.result().success, future.result().message
+            map_yaml = Path(future.result().message)
+        assert json.loads(map_yaml.with_suffix('.json').read_text())['recovered']
+        validate_bundle(map_yaml, map_yaml.with_suffix('.db'))
         matches.clear()
         digest = file_digest(map_yaml.with_suffix('.db'))
         localization = start(map_yaml.with_suffix('.db'), localization=True)

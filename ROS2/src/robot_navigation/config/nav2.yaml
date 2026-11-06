@@ -1,4 +1,4 @@
-# 使用方法：由 robot_navigation/nav2.launch.py 加载 Nav2 基础参数。
+# 作用：配置 Nav2 控制、代价地图与动作超时；使用方法：由 robot_navigation/nav2.launch.py 加载 Nav2 基础参数。
 # 本文件由 robot.launch.py 传给本项目显式启动的 Nav2 节点。
 # bt_navigator
 # 行为树导航器。负责接收 /navigate_to_pose、/navigate_through_poses 目标，然后按行为树调度“规划路
@@ -47,7 +47,7 @@ bt_navigator:
     robot_base_frame: base_link  # 机器人底盘坐标系名称
     odom_topic: /odom  # 里程计话题名称
     bt_loop_duration: 10  # 行为树循环周期，单位 ms
-    default_server_timeout: 10  # 默认服务等待超时时间，单位 s
+    default_server_timeout: 2000  # 行为树 Action 目标确认/服务响应超时，单位毫秒；原 10 实为 10ms，不是 10 秒
     wait_for_service_timeout: 1000  # 等待服务可用的超时时间，单位 ms
     action_server_result_timeout: 900.0  # Action 结果等待超时时间，单位 s
     navigators: ["navigate_to_pose", "navigate_through_poses"]  # 启用的导航器插件名称列表
@@ -169,7 +169,7 @@ local_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"  # 膨胀层插件类型
         cost_scaling_factor: 3.0  # 膨胀层代价衰减系数
-        inflation_radius: 0.30  # 障碍物膨胀半径，单位 m；必须大于车体内切半径，避免中心路径贴障碍导致车身边缘碰撞
+        inflation_radius: 0.10  # 障碍代价传播范围，单位 m；不改变车体碰撞轮廓
 
 global_costmap:
   global_costmap:
@@ -207,7 +207,7 @@ global_costmap:
       inflation_layer:
         plugin: "nav2_costmap_2d::InflationLayer"  # 膨胀层插件类型
         cost_scaling_factor: 3.0  # 膨胀层代价衰减系数
-        inflation_radius: 0.30  # 障碍物膨胀半径，单位 m；让全局规划按车体半径外扩障碍，避免中心线贴边
+        inflation_radius: 0.10  # 全局障碍代价传播范围，单位 m；与局部范围分别配置
 
 smoother_server:
   ros__parameters:

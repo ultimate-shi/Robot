@@ -2,6 +2,7 @@
 web_console:
   ros__parameters:
     socket_path: /workspace/.runtime/robot-console.sock
+    startup_stop_latched: false  # 控制台单独重启验收时可通过 ROS 参数置 true，避免重启解除停止锁
     mode: virtual
     vision_source: real  # 虚拟模式默认不读取固定在环境中的实机相机或 YOLO
     static_map: false
@@ -11,6 +12,11 @@ web_console:
     chassis_cmd_topic: /cmd_vel_safe
     manual_command_timeout: 0.35
     nav_command_timeout: 0.5
+    navigation_diagnostic_grace_seconds: 2.0  # Action 失败后继续收集迟到的本次 rosout 原因，单位秒
+    image_fresh_timeout: 2.0  # 超过后标记短时延迟，不等同于定位丢失
+    image_dropout_timeout: 20.0  # 持续无图超过该时长才显示断流，不直接决定导航许可
+    navigation_status_topic: /web_console/navigation_status  # 只在关键事件变化时发布，供历史日志记录目标与失败原因
+    navigation_cancel_timeout_seconds: 8.0  # 取消服务和目标终态等待上限；超时保持拦截旧导航速度
     navigation_stall_notice_seconds: 10.0  # 连续此时长距离未缩短 0.05m 时显示进度停滞提醒，单位秒
     update_rate: 20.0
     map_topic: /map
@@ -22,7 +28,7 @@ web_console:
     mission_status_topic: /mission/status
     safety_status_topic: /obstacle_avoidance/status
     snapshot_service: /mapping/save_snapshot
-    snapshot_timeout: 90.0  # 数据库落盘可能比二维地图写盘慢，单位秒
+    snapshot_timeout: 300.0  # 包含退出后复制、校验和离线恢复导出，单位秒
     localization_status_timeout: 1.0  # 定位监督消息超时禁止自主任务
     initial_pose_xy_variance: 0.25
     initial_pose_yaw_variance: 0.12
@@ -34,3 +40,60 @@ web_console:
     external_model_token_env: ROBOT_EXTERNAL_MODEL_TOKEN
     follow_lost_timeout: 2.0
     follow_replan_distance: 0.4
+
+    # 手动车身、头部与硬件状态参数；高度单位 mm，角度单位 deg。
+    joint_state_topic: /joint_states
+    leg_joint_names:
+    - lap_body_joint_fl
+    - lap_body_joint_fr
+    - lap_body_joint_rl
+    - lap_body_joint_rr
+    leg_command_topics:
+    - /lap_fl_position_controller/commands
+    - /lap_fr_position_controller/commands
+    - /lap_rl_position_controller/commands
+    - /lap_rr_position_controller/commands
+    head_joint_names:
+    - head_yaw_joint
+    - head_pitch_joint
+    head_command_topic: /head_controller/commands
+    leg_step_deg: 5.0  # 腿部按钮/WASDQE 每步参与腿最大变化角度
+    leg_step_repeat_seconds: 0.3  # 按住重复发送步进的间隔，单位秒
+    leg_hardware_sign: [-1.0, 1.0, -1.0, 1.0]  # FL/FR/RL/RR：与 RobotSerialSystem 的 R 命令映射一致
+    leg_min_deg:
+    - -30.0
+    - -30.0
+    - -30.0
+    - -30.0
+    leg_max_deg:
+    - 30.0
+    - 30.0
+    - 30.0
+    - 30.0
+    head_min_deg:
+    - -90.0
+    - -30.0
+    head_max_deg:
+    - 90.0
+    - 30.0
+    leg_length_mm: 60.0
+    body_speed_mm_s: 5.0
+    head_speed_deg_s: 15.0
+    head_pitch_up_sign: -1.0  # 头部 -Y 朝前，绕 +X 负方向为抬头
+    joint_feedback_timeout: 0.5
+    joint_command_timeout: 0.35
+    balance_status_timeout: 0.5
+    joint_max_tick_seconds: 0.1  # 单次积分时间上限，避免定时器迟到造成跳变
+    joint_target_lead_deg: 5.0  # 目标领先反馈的最大角度，超过时保持实测位置
+    joint_arrival_tolerance_deg: 0.2  # 关节动作到位容差
+    controller_status_timeout: 5.0  # 控制器查询结果有效期，单位秒
+    head_lock_status_timeout: 1.0  # 头部归中状态有效期，单位秒
+    balance_service_timeout: 3.0
+    balance_max_setpoint_deg: 10.0
+    balance_service: /body_balance/set
+    balance_status_topic: /body_balance/status
+    head_lock_status_topic: /mapping/head_lock_status
+    head_lock_node: head_mapping_lock
+    head_lock_resume_service: /mapping/resume_head_lock
+    camera_raw_color_topic: /astra/color/image_raw
+    camera_raw_depth_topic: /astra/depth/image_raw

@@ -1,4 +1,4 @@
-# 使用方法：由 body_balance.launch.py 加载；实机确认机械状态后通过服务启用。
+# 作用：配置平衡几何、保持滞回及安全保护；使用方法：由 body_balance.launch.py 加载，实机确认机械状态后通过服务启用。
 body_balance:
   ros__parameters:
     enabled: false
@@ -6,21 +6,37 @@ body_balance:
     joint_state_topic: /joint_states
     hardware_state_topic: /hardware/chassis_state
     control_rate: 10.0
+    position_gain: 1.0  # 中档几何姿态修正比例，完整位置目标，不逐周期积分
+    rate_prediction_s: 0.06  # 用 IMU 角速度提前预测回正，单位 s
+    target_change_deg: 0.5  # 完整目标变化不足此值时不重复下发，单位 deg
+    attitude_gain: 1.0  # 保留旧参数兼容；中档不再使用速度积分
+    rate_damping: 1.0  # IMU 角速度阻尼，提前抑制回正过冲
+    max_target_lead_deg: 3.0  # 仅用于低/高档与回中轨迹，中档直接下发完整目标
+    max_velocity_deg_s: 30.0
+    max_acceleration_deg_s2: 60.0
+    resume_deadzone_deg: 1.5  # 离开保持区的倾角阈值；与 1° 进入门槛形成滞回，减少来回微调
+    settle_gyro_rad_s: 0.03
+    resume_gyro_rad_s: 0.05
+    max_cycle_ratio: 2.0  # 超过正常周期两倍则丢弃本轮追加修正
+    require_hardware_timing: false  # 实机整车入口强制开启真实腿板反馈年龄检查
+    diagnostics_topic: /diagnostics
     leg_length: 0.060
     leg_min_deg: [-30.0, -30.0, -30.0, -30.0]  # FL、FR、RL、RR；实测后保守限位，与硬件插件及 URDF 一致，单位 deg
     leg_max_deg: [30.0, 30.0, 30.0, 30.0]  # FL、FR、RL、RR；实测后保守限位，与硬件插件及 URDF 一致，单位 deg
     wheelbase: 0.312
     track: 0.280
-    deadzone_deg: 1.0
-    imu_filter_alpha: 0.5
-    kp: 0.1
+    deadzone_deg: 1.0  # 横滚/俯仰均低于此值且角速度低时保持已下发位置，单位 deg
+    imu_filter_alpha: 0.7
+    kp: 0.1  # 兼容旧参数；新算法不使用
     kd_pitch: 2.0
     kd_roll: 2.0
     derivative_window: 0.05
-    max_step_deg: 5.0
+    max_step_deg: 5.0  # 兼容旧参数；由速度、加速度和领先量限制取代
     soft_margin_mm: 4.0
     hard_margin_mm: 1.0
     safe_margin_mm: 0.1
+    joint_feedback_timeout: 0.5  # 腿反馈超时后停止调节，单位秒
+    stop_topic: /web_console/stop_latched  # 网页停止锁
     imu_timeout: 0.5
     overload_current_ma: 3200.0  # 四腿绝对电流过载降档阈值，单位 mA
     overload_hold: 2.0

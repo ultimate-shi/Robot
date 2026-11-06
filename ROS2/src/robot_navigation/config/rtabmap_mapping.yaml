@@ -1,4 +1,4 @@
-# 使用方法：由 robot_navigation/launch/rtabmap_mapping.launch.py 加载；现场差异请通过 launch 参数覆盖。
+# 作用：配置有界工作内存及静止观察；使用方法：rtabmap_mapping.launch.py 加载，活跃库持久保存在 /workspace/mapping/。
 rtabmap:
   ros__parameters:
     frame_id: base_link  # 机器人主体坐标系；传感器数据会通过 TF 转换到该坐标系参与建图
@@ -6,6 +6,11 @@ rtabmap:
     map_frame_id: map  # 全局地图坐标系，也是输出占据栅格地图所在的坐标系
     publish_tf: true  # 是否由 RTAB-Map 发布 map -> odom 变换
     map_always_update: true  # 即使图优化位姿未变化，也根据静止位置的新观测重新发布地图
+    map_cleanup: true  # 清理已不参与地图的局部缓存
+    map_cache_loaded_on_init: false  # 重载时按需加载局部地图，避免备份后同时读回全部缓存
+    map_filter_radius: 0.1  # 地图装配过滤近邻重复位姿，单位 m；不裁剪全局地图范围
+    map_filter_angle: 15.0  # 上述近邻位姿角度范围，单位度
+    cloud_output_voxelized: true  # 输出点云体素合并，减少重复点
     wait_for_transform: 1.0  # 等待视觉里程计发布对应图像时间戳的 odom -> base_link
     subscribe_stereo: true  # 订阅同步后的左、右目图像及相机标定信息作为建图输入
     subscribe_depth: false  # 是否订阅 RGB-D 深度图；本项目使用双目输入，因此关闭
@@ -16,16 +21,25 @@ rtabmap:
     topic_queue_size: 2  # 每个输入订阅器的消息队列深度；较小可减少处理旧帧造成的延迟
     sync_queue_size: 10  # 消息同步器缓存的候选消息数量，用于等待同时间戳的双目数据
     qos: 1  # 图像类订阅使用的 ROS 2 QoS 可靠性编号；1 表示 RELIABLE
-    database_path: /tmp/robot_rtabmap_mapping.db  # RTAB-Map 图、特征和地图数据库路径；位于 /tmp，重启系统后可能被清理
+    database_path: /workspace/mapping/rtabmap.db  # 持久活跃库；启动不清库，新建地图需指定新的数据库文件名
     Rtabmap/DetectionRate: "1.0"  # RTAB-Map 最多每秒接收一次地图观测；静止更新时限制数据库和 CPU 增长
     Mem/IncrementalMemory: "true"  # 启用增量建图；true 会把新观测加入数据库，false 通常用于已有地图定位
     Mem/InitWMWithAllNodes: "false"  # 启动时是否把数据库全部节点载入工作内存；增量建图关闭可降低启动内存占用
-    Mem/RehearsalSimilarity: "1.0"  # 禁止把同一位置的新画面合并掉，保留静止时环境变化的观测
+    Rtabmap/MemoryThr: "200"  # 工作内存目标上限（节点数，非 MB）；旧节点转长期数据库，并非删除地图
+    Rtabmap/PublishRAMUsage: "true"  # 在 /info 统计中发布 RAM 使用量，便于长时间跟踪
+    Mem/STMSize: "10"  # 短期观测缓存节点数
+    Mem/RehearsalSimilarity: "0.6"  # 合并静止时相似观察，避免每秒永久保留重复节点
+    Mem/RehearsalIdUpdatedToNewOne: "true"  # 合并时保留最新观测，支持静止场景变化更新
+    Mem/NotLinkedNodesKept: "false"  # 未保存且无连接的重复节点不额外保留；已写盘历史仍保留
+    Mem/ImageKept: "false"  # 不在工作内存保留原始图像；视觉数据仍写入数据库
+    Mem/LoadVisualLocalFeaturesOnInit: "false"  # 重启或备份后按需读特征，降低重新加载峰值
+    DbSqlite3/InMemory: "false"  # 使用磁盘数据库
+    DbSqlite3/CacheSize: "2000"  # SQLite 缓存页数，约 8 MiB（4 KiB 页）
     RGBD/CreateOccupancyGrid: "true"  # 是否根据传感器数据生成并发布二维/三维占据地图
     RGBD/LinearUpdate: "0.0"  # 不要求平移即可创建新地图节点；机器人静止时仍处理新画面
     RGBD/AngularUpdate: "0.0"  # 不要求旋转即可创建新地图节点；与 LinearUpdate 共同启用静止更新
     Reg/Force3DoF: "true"  # 将位姿优化约束为平面 x、y、yaw，避免地面机器人地图产生俯仰和高度漂移
-    Grid/FromDepth: "true"  # 从双目/RGB-D 深度数据生成局部占据栅格，而不是依赖激光扫描
+    Grid/Sensor: "1"  # 从双目/RGB-D 深度生成栅格，使用当前 RTAB-Map 参数名
     Grid/3D: "false"  # false 生成二维 OccupancyGrid；true 则构建三维占据表示
     Grid/RayTracing: "true"  # 沿传感器到测量点进行射线清空，将射线穿过区域标记为空闲空间
     Grid/CellSize: "0.02"  # 占据栅格边长，单位 m；越小地图越细，但计算量、内存和噪声敏感度越高

@@ -10,9 +10,12 @@
 
 ## 入口和启动
 
-- 14 个 Python 入口覆盖双目拆分、配对节流、深度、点云过滤、地形、语义、IMU、虚拟传感器和诊断。
+当前整车默认 `astra_camera.launch.py`：官方 Astra Pro 原生图像经标准 C++ 校正/深度配准、RGB-D 同步及 C++ 限速，发布 `/camera/*`；原双目处理保留为兼容模式。安装 TF 独立由 `astra_mount.launch.py` 读取实测配置，详见 [Astra 接入](../astra_pro.md)。
+
+- Python 入口覆盖双目拆分、配对节流、深度、点云过滤、地形、语义、IMU、虚拟传感器和诊断。
 - `stereo_camera.launch.py` 组合 usb_cam、拆分、左右校正、节流、视差、深度和点云；`splitter_backend` 默认使用 C++，Python 是回退实现。
 - `stereo_perception.launch.py` 组合语义和点云过滤；其余 launch 按同名 YAML 分别启动 IMU、地形、虚拟传感器和验收采样。
+- `localization_scan.launch.py` 独立选择 stereo/astra 点云、光心坐标与过滤配置，输出 `/localization/scan` 和 `/localization/scan_status`；拒绝过龄、缺历史 TF、倾角和光心移动超限的输入，不替换避障点云或超声波 `/scan`。详见 [联合定位](../joint_localization.md)。
 - 相机标定位于 `config/cameras/<profile>/left.yaml` 与 `right.yaml`。
 
 ## 关键接口

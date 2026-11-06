@@ -1,4 +1,4 @@
-"""使用方法：pytest 运行本文件，检查视觉六轴方差保护与无效数据处理。"""
+"""作用：验证视觉时间、位姿和六轴方差保护；使用方法：pytest 运行本文件，无需 ROS。"""
 
 import importlib.util
 import math
@@ -75,6 +75,11 @@ def test_callback_preserves_pose_and_reports_invalid_axes(guard_module):
     guard = object.__new__(guard_module.OdometryCovarianceGuard)
     guard.variance_floors = guard_module.DEFAULT_VARIANCE_FLOORS
     guard.invalid_variance = 1e6
+    guard.max_message_age = 1.5
+    guard.future_tolerance = 0.1
+    guard.quaternion_norm_tolerance = 0.01
+    guard.get_clock = lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(nanoseconds=10_000_000_000))
     guard.publisher = SimpleNamespace(publish=published.append)
     guard.get_logger = lambda: SimpleNamespace(
         warning=lambda *args, **kwargs: warnings.append((args, kwargs)))
@@ -82,7 +87,9 @@ def test_callback_preserves_pose_and_reports_invalid_axes(guard_module):
                            orientation=SimpleNamespace(x=0.0, y=0.0, z=0.0, w=1.0))
     covariance = [0.0] * 36
     covariance[0] = 0.2
-    message = SimpleNamespace(pose=SimpleNamespace(pose=pose, covariance=covariance))
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=9, nanosec=200_000_000)),
+        pose=SimpleNamespace(pose=pose, covariance=covariance))
 
     guard._callback(message)
 
@@ -91,6 +98,44 @@ def test_callback_preserves_pose_and_reports_invalid_axes(guard_module):
     assert message.pose.pose.position.z == 3.0
     assert message.pose.covariance[14] == 1e6
     assert warnings and 'z' in warnings[0][0][0]
+    assert message.header.stamp.sec == 9
+    assert message.header.stamp.nanosec == 200_000_000
+
+
+@pytest.mark.parametrize('age,invalid', [(0.8, False), (1.5, False),
+                                       (1.51, True), (-0.11, True)])
+def test_visual_age_window(guard_module, age, invalid):
+    stamp_ns = round((10.0-age)*1e9)
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(
+            sec=stamp_ns//1_000_000_000, nanosec=stamp_ns % 1_000_000_000)),
+        pose=SimpleNamespace(pose=SimpleNamespace(
+            position=SimpleNamespace(x=0., y=0., z=0.),
+            orientation=SimpleNamespace(x=0., y=0., z=0., w=1.))))
+    reason = guard_module.invalid_visual_reason(message, 10_000_000_000, 1.5, 0.1)
+    assert bool(reason) == invalid
+
+
+@pytest.mark.parametrize('field,value', [('x', math.nan), ('z', math.inf), ('w', 0.)])
+def test_invalid_pose_is_dropped_before_ekf(guard_module, field, value):
+    pose = SimpleNamespace(position=SimpleNamespace(x=0., y=0., z=0.),
+                           orientation=SimpleNamespace(x=0., y=0., z=0., w=1.))
+    setattr(pose.orientation if field == 'w' else pose.position, field, value)
+    message = SimpleNamespace(
+        header=SimpleNamespace(stamp=SimpleNamespace(sec=10, nanosec=0)),
+        pose=SimpleNamespace(pose=pose))
+    assert guard_module.invalid_visual_reason(message, 10_000_000_000, 1.5, 0.1)
+
+
+def test_visual_age_fits_inside_ekf_history():
+    configs = Path(__file__).parents[1] / 'config'
+    ekf = yaml.safe_load((configs/'state_estimation.yaml').read_text())[
+        'ekf_filter_node']['ros__parameters']
+    guard = yaml.safe_load((configs/'odometry_covariance_guard.yaml').read_text())[
+        'odometry_covariance_guard']['ros__parameters']
+    assert ekf['smooth_lagged_data'] and ekf['predict_to_current_time']
+    assert ekf['permit_corrected_publication'] is False
+    assert ekf['history_length'] > guard['max_message_age'] + 1/ekf['frequency']
 
 
 def test_config_defines_all_six_floors_and_invalid_fallback(guard_module):

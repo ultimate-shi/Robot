@@ -47,6 +47,14 @@ def generate_launch_description():
         hardware_defaults = yaml.safe_load(stream)['hardware']
 
     declarations = [
+        DeclareLaunchArgument('camera_source', default_value=str(defaults.get('camera_source', 'astra')),
+            description='实机视觉与深度来源 astra 或 stereo，默认 Astra Pro RGB-D'),
+        DeclareLaunchArgument('astra_config_file', default_value=os.path.join(perception_share, 'config', 'astra_camera.yaml'),
+            description='Astra Pro 原生相机及 RGB-D 配准参数 YAML'),
+        DeclareLaunchArgument('astra_start_driver', default_value='true',
+            description='是否随整车启动 Astra 官方驱动；外部驱动或回放时关闭'),
+        DeclareLaunchArgument('astra_mount_config_file', default_value=os.path.join(perception_share, 'config', 'astra_mount.yaml'),
+            description='Astra 头部安装位姿；默认沿用原双目中心和高度，可按实测校正'),
         DeclareLaunchArgument(
             'mode', default_value='virtual',
             description='运行模式，只允许 real 或 virtual'),
@@ -56,9 +64,29 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'database_path', default_value='',
             description='已有地图配套数据库；留空自动使用地图 YAML 同名 .db，实机重定位必需'),
+        DeclareLaunchArgument('mapping_database_path', default_value='/workspace/mapping/rtabmap.db',
+            description='在线建图持久活跃库，默认重启保留；新建地图请指定新的文件名'),
+        DeclareLaunchArgument('mapping_recover_on_exit', default_value='true',
+            description='在线建图异常退出后是否独立恢复保存地图'),
+        DeclareLaunchArgument('mapping_recovery_config_file', default_value=os.path.join(nav_share, 'config', 'mapping_recovery.yaml'),
+            description='异常退出后的地图恢复参数 YAML'),
         DeclareLaunchArgument(
             'localization_config_file', default_value=os.path.join(nav_share, 'config', 'map_localization.yaml'),
             description='已有地图视觉定位与匹配确认阈值 YAML'),
+        DeclareLaunchArgument('localization_backend', default_value='fused',
+            description='实机已有地图定位：fused 联合、visual 视觉或 amcl 轮廓定位'),
+        DeclareLaunchArgument('localization_cloud_source', default_value='auto',
+            description='定位点云来源 auto 随视觉来源选择，也可显式 stereo 或 astra'),
+        DeclareLaunchArgument('localization_cloud_topic', default_value='',
+            description='定位点云话题覆盖，留空使用所选来源默认值'),
+        DeclareLaunchArgument('localization_sensor_frame', default_value='',
+            description='定位深度光心坐标覆盖，留空使用所选来源默认值'),
+        DeclareLaunchArgument('localization_scan_config_file', default_value=os.path.join(perception_share, 'config', 'localization_scan.yaml'),
+            description='定位扫描过滤、范围和精确 TF 参数 YAML'),
+        DeclareLaunchArgument('localization_fusion_config_file', default_value=os.path.join(nav_share, 'config', 'global_localization.yaml'),
+            description='联合定位质量、冲突和失效保护参数 YAML'),
+        DeclareLaunchArgument('amcl_config_file', default_value=os.path.join(nav_share, 'config', 'amcl_localization.yaml'),
+            description='AMCL 虚拟扫描定位参数 YAML'),
         DeclareLaunchArgument(
             'ply_file', default_value=str(defaults['virtual_ply']),
             description='虚拟模式环境三维 PLY 文件路径'),
@@ -168,6 +196,24 @@ def generate_launch_description():
             'command_timeout_ms',
             default_value=str(hardware_defaults['ros_command_timeout_ms']),
             description='实机 ROS 轮速命令心跳超时，单位毫秒'),
+        DeclareLaunchArgument(
+            'servo_watchdog_ms', default_value=str(hardware_defaults['servo_watchdog_ms']),
+            description='SE2 固件现有 U 刷新看门狗期限，单位毫秒；仅用于监测，不修改固件'),
+        DeclareLaunchArgument(
+            'telemetry_rate', default_value=str(hardware_defaults['telemetry_rate']),
+            description='硬件状态与诊断独立发布频率，单位 Hz；不占控制管理器读写周期'),
+        DeclareLaunchArgument(
+            'leg_io_rate', default_value=str(hardware_defaults['leg_io_rate']),
+            description='DMC0 腿板独立读写频率，单位 Hz；20 Hz 需先验收'),
+        DeclareLaunchArgument(
+            'wheel_io_rate', default_value=str(hardware_defaults['wheel_io_rate']),
+            description='DMC1 轮板独立读写频率，单位 Hz'),
+        DeclareLaunchArgument(
+            'servo_feedback_rate', default_value=str(hardware_defaults['servo_feedback_rate']),
+            description='SE2 舵机与超声波反馈查询频率，单位 Hz'),
+        DeclareLaunchArgument(
+            'feedback_timeout_ms', default_value=str(hardware_defaults['feedback_timeout_ms']),
+            description='控制板真实反馈失效期限，单位毫秒'),
         DeclareLaunchArgument(
             'servo_keepalive_period_ms',
             default_value=str(hardware_defaults['servo_keepalive_period_ms']),
@@ -279,7 +325,7 @@ def generate_launch_description():
             'log_level', default_value=str(defaults['log_level']),
             description='整车各 ROS 节点日志级别'),
         DeclareLaunchArgument(
-            'start_logging', default_value='false',
+            'start_logging', default_value='true',
             description='是否随整车启动 MCAP 日常采集与异常录制管理器'),
         DeclareLaunchArgument(
             'logging_config_file', default_value='',
@@ -294,6 +340,15 @@ def generate_launch_description():
         if map_yaml:
             map_yaml = validate_map_yaml(map_yaml)
         localization_required = mode == 'real' and bool(map_yaml)
+        localization_backend = LaunchConfiguration('localization_backend').perform(context)
+        cloud_source = LaunchConfiguration('localization_cloud_source').perform(context)
+        camera_source = LaunchConfiguration('camera_source').perform(context)
+        if camera_source not in ('stereo', 'astra'):
+            raise ValueError('camera_source 只能为 stereo 或 astra')
+        if cloud_source == 'auto':
+            cloud_source = camera_source
+        if localization_backend not in ('visual', 'amcl', 'fused') or cloud_source not in ('stereo', 'astra'):
+            raise ValueError('定位模式或点云来源无效')
         initial_enabled = LaunchConfiguration('initial_pose_enabled').perform(context).lower()
         if initial_enabled not in ('true', 'false'):
             raise RuntimeError('initial_pose_enabled 只能为 true 或 false')
@@ -303,7 +358,7 @@ def generate_launch_description():
                 LaunchConfiguration(key).perform(context))) for key in ('initial_x', 'initial_y', 'initial_yaw')):
             raise RuntimeError('启动初始估计必须为有限数值')
         database_path = ''
-        if localization_required:
+        if localization_required and localization_backend != 'amcl':
             database_path = validate_bundle(map_yaml,
                 LaunchConfiguration('database_path').perform(context).strip() or
                 str(Path(map_yaml).with_suffix('.db')))
@@ -342,6 +397,7 @@ def generate_launch_description():
                 'inter_command_delay_ms', 'discovery_retry_count',
                 'discovery_retry_delay_ms', 'encoder_query_delay_ms', 'command_timeout_ms',
                 'servo_keepalive_period_ms', 'servo_command_timeout_ms',
+                'leg_io_rate', 'wheel_io_rate', 'servo_feedback_rate', 'feedback_timeout_ms', 'servo_watchdog_ms', 'telemetry_rate',
                 'wheel_diameter', 'sonar_lpf_alpha',
                 'sonar_min_valid_mm', 'sonar_max_valid_mm')}
         geometry_arguments = {
@@ -358,11 +414,14 @@ def generate_launch_description():
                 f'robot_main 已选择 mode={mode}，ros2_control 插件={plugin}')),
             include('robot_web', 'web_console.launch.py', {
                 'config_file': LaunchConfiguration('web_console_config_file'),
+                'leg_length': LaunchConfiguration('leg_length'),
                 'mode': mode,
+                'camera_source': camera_source if mode == 'real' else 'stereo',
                 'static_map': 'true' if map_yaml else 'false',
                 'log_level': log_level}),
             include('robot_description', 'description.launch.py', {
                 'hardware_plugin': plugin,
+                'camera_model': 'none' if mode == 'real' and camera_source == 'astra' else 'stereo',
                 'servo_calibration_file': LaunchConfiguration(
                     'servo_calibration_file'),
                 'wheel_calibration_file': LaunchConfiguration(
@@ -374,6 +433,7 @@ def generate_launch_description():
                 'log_level': LaunchConfiguration('foxglove_log_level')}),
             delayed(control_delay, include('robot_control', 'controllers.launch.py', {
                 'hardware_plugin': plugin,
+                'camera_model': 'none' if mode == 'real' and camera_source == 'astra' else 'stereo',
                 'servo_calibration_file': LaunchConfiguration(
                     'servo_calibration_file'),
                 'wheel_calibration_file': LaunchConfiguration(
@@ -453,6 +513,9 @@ def generate_launch_description():
             ])
             return common
 
+        if camera_source == 'astra':
+            common.append(include('robot_perception', 'astra_mount.launch.py', {
+                'config_file': LaunchConfiguration('astra_mount_config_file')}))
         if LaunchConfiguration('use_imu').perform(context).lower() == 'true':
             common.append(include('robot_perception', 'imu.launch.py', {
                 'device': LaunchConfiguration('imu_device'),
@@ -462,14 +525,18 @@ def generate_launch_description():
         common.extend([
             delayed(control_delay + 2.0, include(
                 'robot_control', 'body_balance.launch.py', {
+                    'require_hardware_timing': str(mode == 'real').lower(),
                     'wheelbase': LaunchConfiguration('wheelbase'),
                     'track': LaunchConfiguration('track'),
                     'leg_length': LaunchConfiguration('leg_length'),
                     'log_level': log_level})),
-            include('robot_navigation', 'stereo_odometry.launch.py', {
+            include('robot_navigation', 'rgbd_odometry.launch.py' if camera_source == 'astra' else 'stereo_odometry.launch.py', {
                 'wait_imu_to_init': LaunchConfiguration('wait_imu_to_init'),
                 'log_level': log_level}),
-            delayed(sensor_delay, include('robot_perception', 'stereo_camera.launch.py', {
+            (delayed(sensor_delay, include('robot_perception', 'astra_camera.launch.py', {
+                'config_file': LaunchConfiguration('astra_config_file'),
+                'start_driver': LaunchConfiguration('astra_start_driver'), 'log_level': log_level}))
+             if camera_source == 'astra' else delayed(sensor_delay, include('robot_perception', 'stereo_camera.launch.py', {
                 'camera_config': LaunchConfiguration('camera_config_file'),
                 'video_device': LaunchConfiguration('video_device'),
                 'left_calibration_file': LaunchConfiguration(
@@ -481,9 +548,10 @@ def generate_launch_description():
                 'apply_auto_camera_controls': LaunchConfiguration(
                     'apply_auto_camera_controls'),
                 'node_start_interval': LaunchConfiguration('node_start_interval'),
-                'log_level': log_level})),
+                'log_level': log_level}))),
             delayed(sensor_delay + 1.0, include(
                 'robot_perception', 'stereo_pointcloud_filter.launch.py', {
+                    'input_topic': '/camera/points' if camera_source == 'astra' else '/stereo/points2',
                     'output_topic': '/nav/stereo_obstacle_points',
                     'log_level': log_level})),
             delayed(sensor_delay + 1.5, include(
@@ -491,6 +559,14 @@ def generate_launch_description():
                     'log_level': log_level})),
         ])
         if localization_required:
+            if localization_backend != 'visual':
+                common.append(delayed(sensor_delay + 2.8, include(
+                    'robot_perception', 'localization_scan.launch.py', {
+                        'cloud_source': cloud_source,
+                        'cloud_topic': LaunchConfiguration('localization_cloud_topic'),
+                        'sensor_frame': LaunchConfiguration('localization_sensor_frame'),
+                        'config_file': LaunchConfiguration('localization_scan_config_file'),
+                        'log_level': log_level})))
             common.extend([
                 delayed(sensor_delay + 2.0, include(
                     'robot_control', 'head_mapping_lock.launch.py', {
@@ -499,6 +575,10 @@ def generate_launch_description():
                 delayed(sensor_delay + 2.8, include(
                     'robot_navigation', 'map_localization.launch.py', {
                         'database_path': database_path,
+                        'camera_source': camera_source,
+                        'localization_backend': localization_backend,
+                        'amcl_config_file': LaunchConfiguration('amcl_config_file'),
+                        'fusion_config_file': LaunchConfiguration('localization_fusion_config_file'),
                         'config_file': LaunchConfiguration('localization_config_file'),
                         'initial_pose_enabled': LaunchConfiguration('initial_pose_enabled'),
                         'initial_x': LaunchConfiguration('initial_x'),
@@ -515,9 +595,17 @@ def generate_launch_description():
                         'log_level': log_level})),
                 delayed(sensor_delay + 2.8, include(
                     'robot_navigation', 'rtabmap_mapping.launch.py', {
+                        'camera_source': camera_source,
+                        'database_path': LaunchConfiguration('mapping_database_path'),
+                        'recover_on_exit': LaunchConfiguration('mapping_recover_on_exit'),
+                        'recovery_config_file': LaunchConfiguration('mapping_recovery_config_file'),
+                        'save_directory': LaunchConfiguration('save_directory'),
+                        'preview_directory': LaunchConfiguration('preview_directory'),
                         'log_level': log_level})),
                 delayed(sensor_delay + 3.6, include(
                     'robot_navigation', 'mapping_snapshot.launch.py', {
+                        'database_path': LaunchConfiguration('mapping_database_path'),
+                        'recovery_config_file': LaunchConfiguration('mapping_recovery_config_file'),
                         'preview_directory': LaunchConfiguration(
                             'preview_directory'),
                         'save_directory': LaunchConfiguration('save_directory'),
@@ -526,6 +614,9 @@ def generate_launch_description():
         if LaunchConfiguration('start_semantic_perception').perform(context).lower() == 'true':
             common.append(delayed(perception_delay, include(
                 'robot_perception', 'semantic_detection.launch.py', {
+                    'image_topic': '/camera/rgb/image_rect' if camera_source == 'astra' else '/stereo/right/image_rect',
+                    'depth_topic': '/camera/depth/image_rect' if camera_source == 'astra' else '/stereo/depth/right/image',
+                    'camera_info_topic': '/camera/rgb/camera_info' if camera_source == 'astra' else '/stereo/right/camera_info',
                     'inference_url': LaunchConfiguration('inference_url'),
                     'detection_mode': LaunchConfiguration('detection_mode'),
                     'start_segmentation': LaunchConfiguration(

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""作用：成套保存地图、点云及已落盘的 SLAM 数据库；使用方法：调用 /mapping/save_snapshot。"""
+"""作用：成套保存地图并支持 SLAM 退出后恢复；使用方法：调用 /mapping/save_snapshot 或 /mapping/recover_snapshot。"""
 
 import json
 import math
@@ -9,6 +9,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -25,6 +26,7 @@ from sensor_msgs.msg import PointCloud2, PointField
 from std_msgs.msg import String
 from std_srvs.srv import Empty, Trigger
 from robot_navigation.mapping.database import copy_database, file_digest
+from ament_index_python.packages import get_package_share_directory
 
 
 def snapshot_identity(directory, owner_uid=-1, owner_gid=-1):
@@ -171,7 +173,9 @@ class SnapshotManager(Node):
             'save_directory': '/workspace/maps',
             'snapshot_basename': 'current',
             'snapshot_timezone': 'UTC',
-            'database_path': '/tmp/robot_rtabmap_mapping.db',
+            'database_path': '/workspace/mapping/rtabmap.db',
+            'recovery_config_file': str(Path(get_package_share_directory('robot_navigation')) /
+                                        'config' / 'mapping_recovery.yaml'),
             'database_service_timeout': 60.0,
             'resume_service_timeout': 5.0,
             'backup_service': '/rtabmap/backup',
@@ -201,6 +205,7 @@ class SnapshotManager(Node):
         self.latest_map = None
         self.latest_cloud = None
         self.database_path = str(self.get_parameter('database_path').value)
+        self.recovery_config_file = str(self.get_parameter('recovery_config_file').value)
         self.database_timeout = float(self.get_parameter('database_service_timeout').value)
         self.resume_timeout = float(self.get_parameter('resume_service_timeout').value)
         self.backup_future = None
@@ -232,6 +237,8 @@ class SnapshotManager(Node):
             self._create_preview)
         self.create_service(
             Trigger, '/mapping/save_snapshot', self._save_snapshot)
+        self.create_service(
+            Trigger, '/mapping/recover_snapshot', self._recover_snapshot)
         self.get_logger().info('地图快照管理节点已启动，默认不会自动写盘')
 
     def _map_callback(self, msg):
@@ -247,10 +254,41 @@ class SnapshotManager(Node):
 
     def _save_snapshot(self, request, response):
         del request
+        # 只有所有在线服务都消失时才转离线恢复；在线超时不能当作进程已退出。
+        if not any(client.service_is_ready() for client in (
+                self.pause_client, self.resume_client, self.map_client, self.backup_client)):
+            return self._recover_snapshot(None, response)
         session = snapshot_time(self.snapshot_timezone).strftime(
             'map_%Y%m%d_%H%M%S_%f')
         directory = os.path.join(self.save_directory, session)
         return self._handle_snapshot(directory, 'map', response, save_database=True)
+
+    def _recover_snapshot(self, request, response):
+        """无需缓存也可恢复二维地图及数据库，退出后仍兼容网页保存按钮。"""
+        del request
+        from robot_navigation.mapping.recovery import load_options, recover_snapshot
+        try:
+            if any(client.service_is_ready() for client in (
+                    self.pause_client, self.resume_client, self.map_client, self.backup_client)):
+                raise ValueError('建图服务仍在线，请使用普通保存；离线恢复仅用于进程完全退出后')
+            # 进程被杀时旧 Future 可能永远不完成；是否能离线恢复由库占用检查决定。
+            self._publish_status('recovering', '正在从残留数据库恢复地图', '')
+            if self.latest_map is not None and self.latest_cloud is not None:
+                try:
+                    self._write_snapshot(self.preview_directory, 'current')
+                except (OSError, ValueError, TypeError):
+                    # 缓存点云不可用不影响数据库恢复。
+                    pass
+            options = load_options(self.recovery_config_file)
+            response.message = recover_snapshot(self.database_path, self.save_directory,
+                                                self.preview_directory, options)
+            response.success = True
+            self._publish_status('saved', '退出后的地图已恢复保存', os.path.dirname(response.message))
+        except (OSError, TypeError, ValueError, RuntimeError, sqlite3.DatabaseError) as exc:
+            response.success = False
+            response.message = f'恢复地图失败: {exc}'
+            self._publish_status('error', response.message, '')
+        return response
 
     def _request(self, client, request, deadline):
         if not client.service_is_ready():
@@ -326,6 +364,9 @@ class SnapshotManager(Node):
             else:
                 paths = self._write_snapshot(directory, basename)
         except (OSError, TypeError, ValueError, RuntimeError, sqlite3.DatabaseError) as exc:
+            if save_database and not any(client.service_is_ready() for client in (
+                    self.pause_client, self.resume_client, self.map_client, self.backup_client)):
+                return self._recover_snapshot(None, response)
             response.success = False
             response.message = f'创建地图快照失败: {exc}'
             self._publish_status('error', response.message, directory)
@@ -360,6 +401,7 @@ class SnapshotManager(Node):
             'map_height': self.latest_map.info.height,
             'resolution': self.latest_map.info.resolution,
             'point_count': int(len(points)),
+            'database_path': self.database_path,
         }
         with open(paths['metadata'], 'w', encoding='utf-8') as stream:
             json.dump(metadata, stream, ensure_ascii=False, indent=2)

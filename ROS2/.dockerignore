@@ -1,10 +1,13 @@
-# 运行时和标定输出通过卷挂载使用，不应进入 Jazzy 基础镜像构建上下文。
+# 作用：排除运行时、套接字和标定输出；用法：Docker 自动读取，数据通过卷挂载使用。
+.runtime
+*.sock
 .git
 build
 install
 log
 model
 maps
+mapping
 acceptance_dataset
 calibration_output
 __pycache__

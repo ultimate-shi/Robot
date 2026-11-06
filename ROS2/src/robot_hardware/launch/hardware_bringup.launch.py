@@ -34,6 +34,7 @@ def generate_launch_description():
             'inter_command_delay_ms', 'discovery_retry_count',
             'discovery_retry_delay_ms', 'encoder_query_delay_ms', 'command_timeout_ms',
             'servo_keepalive_period_ms', 'servo_command_timeout_ms',
+                'leg_io_rate', 'wheel_io_rate', 'servo_feedback_rate', 'feedback_timeout_ms', 'servo_watchdog_ms', 'telemetry_rate',
             'wheel_diameter', 'sonar_lpf_alpha',
             'sonar_min_valid_mm', 'sonar_max_valid_mm')}
     return LaunchDescription([
@@ -74,6 +75,24 @@ def generate_launch_description():
             'command_timeout_ms',
             default_value=str(defaults['ros_command_timeout_ms']),
             description='ROS 轮速命令心跳超时，单位毫秒'),
+        DeclareLaunchArgument(
+            'servo_watchdog_ms', default_value=str(defaults['servo_watchdog_ms']),
+            description='SE2 固件现有 U 刷新看门狗期限，单位毫秒；仅用于监测，不修改固件'),
+        DeclareLaunchArgument(
+            'telemetry_rate', default_value=str(defaults['telemetry_rate']),
+            description='硬件状态与诊断独立发布频率，单位 Hz；不占控制管理器读写周期'),
+        DeclareLaunchArgument(
+            'leg_io_rate', default_value=str(defaults['leg_io_rate']),
+            description='DMC0 腿板独立读写频率，单位 Hz；20 Hz 需先验收'),
+        DeclareLaunchArgument(
+            'wheel_io_rate', default_value=str(defaults['wheel_io_rate']),
+            description='DMC1 轮板独立读写频率，单位 Hz'),
+        DeclareLaunchArgument(
+            'servo_feedback_rate', default_value=str(defaults['servo_feedback_rate']),
+            description='SE2 舵机与超声波反馈查询频率，单位 Hz'),
+        DeclareLaunchArgument(
+            'feedback_timeout_ms', default_value=str(defaults['feedback_timeout_ms']),
+            description='控制板真实反馈失效期限，单位毫秒'),
         DeclareLaunchArgument(
             'servo_keepalive_period_ms',
             default_value=str(defaults['servo_keepalive_period_ms']),

@@ -1,4 +1,4 @@
-"""使用方法：ros2 run robot_logging log_indexer --config-file 日志参数文件。"""
+"""作用：按独立话题策略建立精简历史索引，原始 MCAP 不变；使用方法：ros2 run robot_logging log_indexer --config-file 日志参数文件。"""
 
 import argparse
 import logging
@@ -6,8 +6,10 @@ import os
 from pathlib import Path
 import sqlite3
 import time
+from mcap.exceptions import McapError
 
 from robot_logging.storage import KINDS, ensure_layout, load_config, sessions
+from robot_logging.topic_policy import IndexSelector, TopicPolicy
 
 
 SCHEMA = '''
@@ -66,6 +68,9 @@ def connect(database):
     conn.execute('PRAGMA busy_timeout=5000')
     had_fts = conn.execute("SELECT 1 FROM sqlite_master WHERE name='messages_fts'").fetchone()
     conn.executescript(SCHEMA)
+    if 'policy_hash' not in [row[1] for row in conn.execute('PRAGMA table_info(indexed_files)')]:
+        conn.execute("ALTER TABLE indexed_files ADD COLUMN policy_hash TEXT NOT NULL DEFAULT ''")
+        conn.commit()
     if not had_fts and not fresh:
         # 旧索引把相同文本同时存入摘要和正文；升级时仅保留正文。
         with conn:
@@ -102,23 +107,43 @@ def decode(schema, message, max_bytes):
         return '', '', None
 
 
-def index_file(conn, file_path, max_bytes):
+def index_file(conn, file_path, max_bytes, policy=None, max_decode_bytes=65536, start_time=None):
     """单文件原子写入，重试或进程重启不会产生重复消息。"""
     from mcap.reader import make_reader
 
     file_path = Path(file_path).resolve()
     size = file_path.stat().st_size
-    if conn.execute('SELECT 1 FROM indexed_files WHERE path=? AND size_bytes=?',
-                    (str(file_path), size)).fetchone():
+    policy_hash = policy.fingerprint if policy is not None else ''
+    if conn.execute('SELECT 1 FROM indexed_files WHERE path=? AND size_bytes=? AND policy_hash=?',
+                    (str(file_path), size, policy_hash)).fetchone():
         return 0
     count = 0
     with file_path.open('rb') as stream, conn:
         conn.execute('DELETE FROM messages WHERE bag_file=?', (str(file_path),))
         reader = make_reader(stream)
+        selector = IndexSelector(policy, max_decode_bytes) if policy is not None else None
+        summary = reader.get_summary() if selector else None
+        topics = ([channel.topic for channel in summary.channels.values()
+                   if policy.match(channel.topic)] if summary else None)
+        messages = (reader.iter_messages(topics=topics, start_time=start_time,
+                                        log_time_order=False) if topics != [] else iter(()))
         batch = []
-        for ordinal, (schema, channel, message) in enumerate(reader.iter_messages()):
+        warned = set()
+        for ordinal, (schema, channel, message) in enumerate(messages):
             category, name = category_name(channel.topic)
-            payload, node, level = decode(schema, message, max_bytes)
+            if selector is not None:
+                try:
+                    selected = selector.select(channel.topic, schema, message, max_bytes)
+                except (ImportError, LookupError, RuntimeError, ValueError, AttributeError, TypeError) as exc:
+                    if channel.topic not in warned:
+                        logging.warning('跳过不可解码或配置不匹配的索引话题 %s：%s', channel.topic, exc)
+                        warned.add(channel.topic)
+                    continue
+                if selected is None:
+                    continue
+                payload, node, level = selected
+            else:
+                payload, node, level = decode(schema, message, max_bytes)
             summary = '' if payload else f'{len(message.data)} B 原始消息；请下载 MCAP 回放'
             batch.append((
                 int(message.log_time), category, name,
@@ -138,8 +163,8 @@ def index_file(conn, file_path, max_bytes):
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)''', batch)
             count += len(batch)
         conn.execute('''INSERT OR REPLACE INTO indexed_files
-            (path, size_bytes, indexed_at) VALUES (?, ?, ?)''',
-                     (str(file_path), size, int(time.time())))
+            (path, size_bytes, indexed_at, policy_hash) VALUES (?, ?, ?, ?)''',
+                     (str(file_path), size, int(time.time()), policy_hash))
     return count
 
 
@@ -159,25 +184,59 @@ def sync_deleted(conn):
 
 def scan(conn, config):
     root = config['root']
-    database = Path(conn.execute('PRAGMA database_list').fetchone()[2])
+    policy = config.get('_index_policy')
+    start_time = (int((time.time()-float(config['index_retention_days'])*86400)*1e9)
+                  if 'index_retention_days' in config else None)
+    sync_deleted(conn)
+    trim_index(conn, config)
     for kind in KINDS:
         for mode in ('real', 'virtual'):
             for session in (root / kind / mode).glob('*'):
-                if not session.is_dir() or (session / '.active').exists():
+                if not session.is_dir():
                     continue
-                for file_path in sorted(session.glob('**/*.mcap')):
-                    if database.stat().st_size >= int(config['index_max_bytes']):
-                        logging.warning('日志索引达到配额，暂停新增索引：%s', database)
-                        sync_deleted(conn)
-                        return
+                files = sorted(session.glob('**/*.mcap'), key=lambda path: path.stat().st_mtime_ns)
+                if (session / '.active').exists():
+                    files = files[:-1]  # 正在录制时也索引已关闭的分片，最后一片仍由录制器写入。
+                for file_path in files:
                     try:
                         count = index_file(conn, file_path,
-                                           int(config['index_max_message_bytes']))
+                                           int(config['index_max_message_bytes']), policy,
+                                           int(config.get('index_max_decode_bytes', 65536)), start_time)
                         if count:
                             logging.info('已索引 %s：%d 条', file_path, count)
-                    except (OSError, ValueError, RuntimeError) as exc:
+                            trim_index(conn, config)
+                    except (OSError, ValueError, RuntimeError, McapError) as exc:
                         logging.warning('索引失败 %s：%s', file_path, exc)
     sync_deleted(conn)
+
+
+def trim_index(conn, config):
+    """滚动淘汰旧查询行，保留文件处理标记和 MCAP，避免配额满后反复重建旧行。"""
+    changed = False
+    if 'index_retention_days' in config:
+        cutoff = int((time.time()-float(config['index_retention_days'])*86400)*1e9)
+        with conn:
+            changed = conn.execute('DELETE FROM messages WHERE ts_ns < ?', (cutoff,)).rowcount > 0
+            if changed:
+                conn.execute("INSERT INTO messages_fts(messages_fts) VALUES ('optimize')")
+    page_size = conn.execute('PRAGMA page_size').fetchone()[0]
+    def used_bytes():
+        pages = conn.execute('PRAGMA page_count').fetchone()[0]
+        free = conn.execute('PRAGMA freelist_count').fetchone()[0]
+        return (pages-free)*page_size
+    while used_bytes() > int(config['index_max_bytes']):
+        with conn:
+            count = conn.execute('''DELETE FROM messages WHERE id IN (
+                SELECT id FROM messages ORDER BY ts_ns ASC LIMIT 1000)''').rowcount
+            if count:
+                conn.execute("INSERT INTO messages_fts(messages_fts) VALUES ('optimize')")
+        if not count:
+            break
+        changed = True
+        logging.info('索引配额清理最旧查询记录 %d 条，原始 MCAP 保留', count)
+    if changed:
+        conn.execute('PRAGMA incremental_vacuum')
+        conn.execute('PRAGMA wal_checkpoint(TRUNCATE)')
 
 
 def main():
@@ -187,6 +246,8 @@ def main():
     logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
     os.umask(0o002)
     config = load_config(args.config_file)
+    if 'index_topics_file' in config:
+        config['_index_policy'] = TopicPolicy(config['index_topics_file'])
     if config.get('require_mount', False) and not os.path.ismount(config['root']):
         raise RuntimeError(f"日志目录没有挂载到容器：{config['root']}")
     ensure_layout(config['root'])

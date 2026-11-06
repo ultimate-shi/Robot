@@ -1,6 +1,8 @@
 # 使用方法：由 robot_control/launch/head_mapping_lock.launch.py 加载；现场差异请通过 launch 参数覆盖。
 head_mapping_lock:
   ros__parameters:
+    resume_service: /mapping/resume_head_lock  # 停止后显式恢复归中
+    stop_topic: /web_console/stop_latched  # 网页停止期间禁止归中动作
     command_topic: /head_controller/commands  # 两自由度头部位置控制器命令话题
     joint_state_topic: /joint_states  # 头部实际 yaw/pitch 反馈话题
     status_topic: /mapping/head_lock_status  # 建图头部锁定状态 JSON

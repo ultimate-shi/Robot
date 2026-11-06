@@ -1,4 +1,4 @@
-"""使用方法：在工作区执行 colcon build 安装感知节点、配置和标定文件。"""
+"""作用：安装感知节点、配置和标定；使用方法：在工作区执行 colcon build。"""
 import os
 from glob import glob
 from setuptools import find_packages, setup
@@ -29,6 +29,7 @@ setup(
         'snapshot_local_observer = robot_perception.snapshot_local_observer:main',
         'virtual_imu = robot_perception.virtual_sensors.virtual_imu:main',
         'gy95t_driver = robot_perception.imu.gy95t_driver:main',
+        'localization_scan = robot_perception.localization_scan:main',
         'virtual_ultrasonic = robot_perception.virtual_sensors.virtual_ultrasonic:main',
         'range_to_scan = robot_perception.virtual_sensors.range_to_scan:main',
         'acceptance_sampler = robot_perception.diagnostics.acceptance_sampler:main',

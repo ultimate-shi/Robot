@@ -12,7 +12,7 @@ from urllib.request import Request as UrlRequest, urlopen
 
 import cv2
 from cv_bridge import CvBridge
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, Response
 from geometry_msgs.msg import PoseStamped, PoseWithCovarianceStamped, Twist
 from action_msgs.srv import CancelGoal
@@ -21,6 +21,7 @@ from nav_msgs.msg import OccupancyGrid, Odometry, Path as RosPath
 from nav_msgs.srv import GetMap
 from nav2_msgs.action import ComputePathToPose, NavigateToPose
 from pydantic import BaseModel
+from typing import Literal
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
@@ -41,8 +42,10 @@ import uvicorn
 from ament_index_python.packages import get_package_share_directory
 from tf2_ros import Buffer, TransformListener
 
+from robot_web.joint_control import JointControl, JOINT_DEFAULTS
 from robot_web.control import ControlState
 from robot_web.navigation_status import NavigationStatus
+from robot_web.stream_health import stream_status
 
 
 class ModeBody(BaseModel):
@@ -78,6 +81,45 @@ class ConfirmModelBody(BaseModel):
     proposal_id: str
 
 
+class JointBody(BaseModel):
+    group: Literal['leg', 'head']
+    values: list[float]
+    unit: Literal['deg', 'height_mm', 'hardware_deg'] = 'deg'
+
+
+class JointZeroBody(BaseModel):
+    group: Literal['leg', 'head']
+    client_id: str
+    sequence: int
+    generation: int = 0
+
+
+class JointMotionBody(BaseModel):
+    generation: int = 0
+    hold: bool = False
+    client_id: str
+    sequence: int
+    pitch: float = 0.0
+    roll: float = 0.0
+    lift: float = 0.0
+    yaw: float = 0.0
+    head_pitch: float = 0.0
+
+
+class JointStepBody(BaseModel):
+    action: Literal['w', 'a', 's', 'd', 'q', 'e']
+    client_id: str
+    sequence: int
+    generation: int = 0
+
+
+class BalanceBody(BaseModel):
+    enabled: bool
+    level: str = 'mid'
+    target_roll_deg: float = 0.0
+    target_pitch_deg: float = 0.0
+
+
 class RobotConsole(Node):
     """手动速度直达底盘话题，导航速度仍经过避障链。"""
 
@@ -85,6 +127,7 @@ class RobotConsole(Node):
         super().__init__('web_console')
         defaults = {
             'socket_path': '/workspace/.runtime/robot-console.sock',
+            'startup_stop_latched': False,
             'mode': 'virtual', 'vision_source': 'real', 'static_map': False,
             'nav_input_topic': '/cmd_vel_nav',
             'safe_input_topic': '/cmd_vel_console',
@@ -93,15 +136,20 @@ class RobotConsole(Node):
             'manual_command_timeout': 0.35,
             'nav_command_timeout': 0.5, 'update_rate': 20.0,
             'navigation_stall_notice_seconds': 10.0,
+            'navigation_cancel_timeout_seconds': 8.0,
+            'navigation_status_topic': '/web_console/navigation_status',
+            'navigation_diagnostic_grace_seconds': 2.0,
+            'image_fresh_timeout': 2.0, 'image_dropout_timeout': 20.0,
             'map_topic': '/map', 'odom_topic': '/odom',
             'detections_topic': '/perception/semantic_detections',
+            'camera_source': 'stereo',
             'left_image_topic': '/stereo/left/image_rect',
             'right_image_topic': '/stereo/right/image_rect',
             'depth_image_topic': '/stereo/depth/image_visual',
             'mission_status_topic': '/mission/status',
             'safety_status_topic': '/obstacle_avoidance/status',
             'snapshot_service': '/mapping/save_snapshot',
-            'snapshot_timeout': 90.0,
+            'snapshot_timeout': 300.0,
             'localization_status_timeout': 1.0,
             'initial_pose_xy_variance': 0.25,
             'initial_pose_yaw_variance': 0.12,
@@ -119,12 +167,17 @@ class RobotConsole(Node):
             'follow_lost_timeout': 2.0,
             'follow_replan_distance': 0.4,
         }
+        defaults.update(JOINT_DEFAULTS)
         for key, value in defaults.items():
             self.declare_parameter(key, value)
         self.settings = {key: self.get_parameter(key).value for key in defaults}
+        if not (0 < self.settings['image_fresh_timeout'] <= self.settings['image_dropout_timeout']):
+            raise ValueError('画面健康阈值须满足 0 < 新鲜时间 <= 持续断流时间')
         self.vision_enabled = self.settings['vision_source'] == self.settings['mode']
         self.control = ControlState(
             float(self.settings['manual_command_timeout']))
+        if self.settings['startup_stop_latched']:
+            self.control.stop()
         self.data_lock = threading.RLock()
         self.last_nav = Twist()
         self.nav_stamp = 0.0
@@ -134,6 +187,7 @@ class RobotConsole(Node):
         self.map_request = None
         self.controllers = None
         self.controller_request = None
+        self.controller_request_started = 0.0
         self.odom = None
         self.detections = None
         self.hardware = None
@@ -150,9 +204,18 @@ class RobotConsole(Node):
         self.bridge = CvBridge()
         self.pending_goal = None
         self.active_goal = None
+        self.canceling_goals = set()
+        self.cancel_requests = []
+        self.motion_generation = 0
+        self.cancel_building = False
+        self.cancel_started = None
         self.preview = None
         self.navigation_status = NavigationStatus(
-            stalled_after=float(self.settings['navigation_stall_notice_seconds']))
+            stalled_after=float(self.settings['navigation_stall_notice_seconds']),
+            diagnostic_grace_seconds=float(self.settings['navigation_diagnostic_grace_seconds']))
+        self.navigation_event_pub = self.create_publisher(
+            String, str(self.settings['navigation_status_topic']), 10)
+        self.last_navigation_event = None
         self.task = ''
         self.task_paused = False
         self.target_id = ''
@@ -233,11 +296,26 @@ class RobotConsole(Node):
             Trigger, '/hardware/stop_encoder_motion')
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
+        self.joint_control = JointControl(self)
+        self.raw_camera_seen = {}
+        if self.vision_enabled and self.settings['camera_source'] == 'astra':
+            for name in ('color', 'depth'):
+                if not self.settings[f'camera_raw_{name}_topic']:
+                    continue
+                self.create_subscription(
+                    Image, str(self.settings[f'camera_raw_{name}_topic']),
+                    lambda msg, name=name: self.on_raw_camera(name, msg), qos_profile_sensor_data)
         self.create_timer(1 / float(self.settings['update_rate']), self.control_loop)
         self.create_timer(0.5, self.task_loop)
         self.create_timer(2.0, self.refresh_diagnostics)
         self.create_timer(5.0, lambda: threading.Thread(
             target=self.refresh_model_health, daemon=True).start())
+
+    def on_raw_camera(self, name, msg):
+        """只观察原始流，不执行额外编码；空帧不能更新健康状态。"""
+        if msg.width > 0 and msg.height > 0 and len(msg.data):
+            with self.data_lock:
+                self.raw_camera_seen[name] = time.monotonic()
 
     def save(self, name, value):
         with self.data_lock:
@@ -260,7 +338,7 @@ class RobotConsole(Node):
 
     def on_ultrasonic(self, topic, msg):
         with self.data_lock:
-            self.ultrasonic[topic] = (float(msg.range), time.monotonic())
+            self.ultrasonic[topic] = (float(msg.range) if msg.min_range <= msg.range <= msg.max_range else float('nan'), time.monotonic())
 
     def on_localization(self, msg):
         try:
@@ -345,6 +423,13 @@ class RobotConsole(Node):
 
     def refresh_diagnostics(self):
         """使用方法：后台轮询静态地图和控制器状态，网页启动早于硬件时持续重试。"""
+        if (self.controller_request is not None and
+                time.monotonic()-self.controller_request_started >
+                float(self.settings['controller_status_timeout'])):
+            stale = self.controller_request
+            self.controller_request = None
+            self.controller_client.remove_pending_request(stale)
+            stale.cancel()
         if (self.settings['static_map'] and self.map is None and
                 self.map_request is None and self.map_client.service_is_ready()):
             self.map_request = self.map_client.call_async(GetMap.Request())
@@ -353,6 +438,7 @@ class RobotConsole(Node):
                 self.controller_client.service_is_ready()):
             self.controller_request = self.controller_client.call_async(
                 ListControllers.Request())
+            self.controller_request_started = time.monotonic()
             self.controller_request.add_done_callback(self.on_controller_response)
 
     def on_map_response(self, future):
@@ -366,15 +452,21 @@ class RobotConsole(Node):
             self.map_request = None
 
     def on_controller_response(self, future):
+        if future is not self.controller_request:
+            return
         try:
             states = {item.name: item.state for item in future.result().controller}
             self.save('controllers', states)
         except Exception as exc:
             self.get_logger().warning(f'控制器状态读取失败，稍后重试：{exc}')
         finally:
-            self.controller_request = None
+            if future is self.controller_request:
+                self.controller_request = None
 
     def on_log(self, msg):
+        self.navigation_status.diagnostic(
+            msg.name, int(msg.level), msg.msg[:1200],
+            stamp=msg.stamp.sec+msg.stamp.nanosec/1e9)
         with self.data_lock:
             self.log_sequence += 1
             self.logs.append({
@@ -385,6 +477,8 @@ class RobotConsole(Node):
                 del self.logs[:len(self.logs) - 600]
 
     def on_image(self, camera, msg):
+        if msg.width <= 0 or msg.height <= 0 or not len(msg.data):
+            return
         with self.data_lock:
             self.image_seen[camera] = time.monotonic()
             if time.monotonic() - self.frame_requested.get(camera, 0.0) > 2.0:
@@ -404,21 +498,36 @@ class RobotConsole(Node):
             self.get_logger().warning(f'{camera} 图像编码失败: {exc}')
 
     def control_loop(self):
+        with self.data_lock:
+            self._control_loop_locked()
+
+    def _control_loop_locked(self):
+        if (self.cancel_started is not None and
+                self.navigation_status.snapshot()['phase'] == 'canceling' and
+                time.monotonic()-self.cancel_started >
+                float(self.settings['navigation_cancel_timeout_seconds'])):
+            self.navigation_status.fail('Nav2 取消确认超时，导航速度保持切断；请检查导航节点或使用全局停止')
         state = self.control.snapshot()
-        if not self.localization_status()['ready'] and state['mode'] != 'manual':
+        localization = self.localization_status()
+        if not localization['ready'] and state['mode'] != 'manual':
+            phase = self.navigation_status.snapshot()['phase']
             self.cancel_motion()
-            self.navigation_status.fail('定位不可用，导航已取消；恢复后请重新规划并确认')
+            if phase not in ('failed', 'succeeded', 'canceled'):
+                self.navigation_status.fail(
+                    f"导航已停止：{localization['message']}；恢复后请重新规划并确认")
             if not self.control.stopped:
                 self.control.set_mode('manual')
             state = self.control.snapshot()
         self.stop_state_pub.publish(Bool(data=state['stopped']))
+        if hasattr(self, 'joint_control'):
+            self.joint_control.tick()
         chassis_cmd = Twist()
         nav_cmd = Twist()
         if not state['stopped'] and not self.saving_map:
             if state['mode'] == 'manual':
                 chassis_cmd.linear.x, chassis_cmd.angular.z = self.control.manual_velocity()
             elif (state['mode'] in ('navigation', 'explore', 'follow')
-                  and not self.task_paused):
+                  and not self.task_paused and self.active_goal is not None):
                 with self.data_lock:
                     if time.monotonic() - self.nav_stamp <= float(
                             self.settings['nav_command_timeout']):
@@ -434,18 +543,37 @@ class RobotConsole(Node):
                         chassis_cmd = self.filtered_nav
         self.output.publish(nav_cmd)
         self.chassis_output.publish(chassis_cmd)
+        navigation = self.navigation_status.snapshot()
+        event = {key: navigation[key] for key in (
+            'phase', 'message', 'goal', 'error_code', 'started_at', 'finished_at', 'recoveries')}
+        if event != self.last_navigation_event:
+            self.last_navigation_event = event
+            self.navigation_event_pub.publish(String(data=json.dumps(navigation, ensure_ascii=False)))
 
     def stop_all(self):
         self.control.stop()
+        self.stop_state_pub.publish(Bool(data=True))
         self.cancel_motion()
+        if hasattr(self, 'joint_control'):
+            with self.data_lock:
+                self.joint_control.emergency()
 
     def cancel_motion(self):
         """停止网页任务、Nav2 和定距动作；软件锁由调用方决定。"""
+        with self.data_lock:
+            self._cancel_motion_locked()
+
+    def _cancel_motion_locked(self):
+        """取消后立即撤销速度许可，保留取消屏障直到服务确认及目标终态。"""
+        self.motion_generation += 1
+        self.cancel_building = True
+        if self.cancel_started is None:
+            self.cancel_started = time.monotonic()
         self.task = ''
         self.task_paused = False
         self.target_id = ''
         self.preview = None
-        self.navigation_status.cancel()
+        self.navigation_status.cancel('正在取消导航，已切断导航速度；等待 Nav2 确认', pending=True)
         self.output.publish(Twist())
         self.chassis_output.publish(Twist())
         with self.data_lock:
@@ -454,15 +582,63 @@ class RobotConsole(Node):
             self.filtered_nav_stamp = 0.0
             self.filtered_nav = Twist()
         if self.active_goal:
-            self.active_goal.cancel_goal_async()
+            self._cancel_navigation_handle(self.active_goal)
             self.active_goal = None
         if self.mission_stop_client.service_is_ready():
             self.mission_stop_client.call_async(Trigger.Request())
         for client in (self.nav_cancel_client, self.wheel_cancel_client):
             if client.service_is_ready():
-                client.call_async(CancelGoal.Request())
+                future = client.call_async(CancelGoal.Request())
+                self.cancel_requests.append(future)
+                future.add_done_callback(self._on_cancel_ack)
         if self.wheel_stop_client.service_is_ready():
             self.wheel_stop_client.call_async(Trigger.Request())
+        self.cancel_building = False
+        self._check_cancel_complete()
+
+    def _cancel_navigation_handle(self, handle, late=False):
+        """迟到的目标也必须取消并等待终态，不能在切回导航界面后重新放行。"""
+        self.canceling_goals.add(id(handle))
+        if self.cancel_started is None:
+            self.cancel_started = time.monotonic()
+        future = handle.cancel_goal_async()
+        self.cancel_requests.append(future)
+        future.add_done_callback(self._on_cancel_ack)
+        if late:
+            handle.get_result_async().add_done_callback(
+                lambda result: self.on_goal_result(result, handle, None))
+
+    def _on_cancel_ack(self, future):
+        with self.data_lock:
+            try:
+                response = future.result()
+                # UNKNOWN_GOAL_ID/GOAL_TERMINATED 表示已无可执行的对应目标。
+                if response.return_code not in (0, 2, 3):
+                    raise RuntimeError(f'Nav2 拒绝取消请求，返回码 {response.return_code}')
+            except Exception as exc:
+                self.navigation_status.fail(f'导航速度已切断，但取消未确认：{exc}；请使用全局停止并检查 Nav2')
+            self._check_cancel_complete()
+
+    def _check_cancel_complete(self):
+        self.cancel_requests = [future for future in self.cancel_requests if not future.done()]
+        if (not self.cancel_building and not self.cancel_requests and
+                not self.canceling_goals and self.pending_goal is None):
+            self.cancel_started = None
+            self.navigation_status.canceled()
+
+    def _on_goal_sent(self, future, token):
+        with self.data_lock:
+            if self.pending_goal is not future:
+                return  # navigate 已同步接管结果，避免迟到回调重复取消已结束的旧目标。
+            self.pending_goal = None
+            try:
+                handle = future.result()
+                if (handle.accepted and not self.navigation_status.is_current(token) and
+                        id(handle) not in self.canceling_goals):
+                    self._cancel_navigation_handle(handle, late=True)
+            except Exception:
+                pass  # 请求异常由 navigate 返回；此处仍须清除取消屏障。
+            self._check_cancel_complete()
 
     def _pose(self, x, y, yaw):
         if not all(math.isfinite(value) for value in (x, y, yaw)):
@@ -488,6 +664,8 @@ class RobotConsole(Node):
         return future.result()
 
     def plan(self, x, y, yaw):
+        with self.data_lock:
+            generation = self.motion_generation
         self.require_localized()
         target = {'x': x, 'y': y, 'yaw': yaw}
         self.preview = None
@@ -516,17 +694,22 @@ class RobotConsole(Node):
                 raise RuntimeError('Nav2 未找到路径，目标可能不可达')
             path = [{'x': item.pose.position.x, 'y': item.pose.position.y}
                     for item in result.path.poses]
-            self.preview = {'id': uuid.uuid4().hex, 'x': x, 'y': y,
-                            'yaw': yaw, 'path': path,
-                            'created': time.monotonic()}
-            self.navigation_status.planned(target, len(path))
-            return {key: value for key, value in self.preview.items()
-                    if key != 'created'}
+            with self.data_lock:
+                if generation != self.motion_generation:
+                    raise ValueError('路径规划期间已取消，请重新规划')
+                self.preview = {'id': uuid.uuid4().hex, 'x': x, 'y': y,
+                                'yaw': yaw, 'path': path,
+                                'created': time.monotonic()}
+                self.navigation_status.planned(target, len(path))
+                return {key: value for key, value in self.preview.items()
+                        if key != 'created'}
         except Exception as exc:
             self.navigation_status.fail(f'路径规划失败：{exc}')
             raise
 
     def navigate(self, preview_id):
+        with self.data_lock:
+            generation = self.motion_generation
         self.require_localized()
         preview = self.preview
         if (not preview or preview['id'] != preview_id or
@@ -536,33 +719,66 @@ class RobotConsole(Node):
         if not self.navigator.wait_for_server(timeout_sec=1):
             self.navigation_status.fail('Nav2 导航服务不可用')
             raise RuntimeError('Nav2 导航服务不可用')
-        if self.active_goal:
-            self.active_goal.cancel_goal_async()
-            self.active_goal = None
+        with self.data_lock:
+            if (self.pending_goal is not None or self.cancel_requests or self.canceling_goals):
+                raise ValueError('上一导航目标尚未结束，请先取消并等待 Nav2 确认')
+            if self.active_goal is not None:
+                self.navigation_status.cancel('正在结束旧目标，等待 Nav2 确认后提交新目标', pending=True)
+                self._cancel_navigation_handle(self.active_goal)
+                self.active_goal = None
+                self.nav_stamp = self.filtered_nav_stamp = 0.0
+                self.output.publish(Twist())
+                self.chassis_output.publish(Twist())
+        # HTTP 和任务工作线程可等待；ROS 回调线程继续处理取消响应及目标终态。
+        deadline = time.monotonic()+float(self.settings['navigation_cancel_timeout_seconds'])
+        while True:
+            with self.data_lock:
+                waiting = bool(self.cancel_requests or self.canceling_goals)
+            if not waiting:
+                break
+            if time.monotonic() >= deadline:
+                self.navigation_status.fail('旧目标取消确认超时，未提交新导航；导航速度保持切断')
+                raise TimeoutError('旧目标取消确认超时，未提交新导航')
+            time.sleep(0.02)
         goal = NavigateToPose.Goal()
         goal.pose = self._pose(preview['x'], preview['y'], preview['yaw'])
         token = uuid.uuid4().hex
-        self.navigation_status.start(token, {
-            'x': preview['x'], 'y': preview['y'], 'yaw': preview['yaw']})
-        try:
-            handle = self._wait(self.navigator.send_goal_async(
+        with self.data_lock:
+            if generation != self.motion_generation:
+                raise ValueError('导航提交期间已取消，请重新规划')
+            if self.navigation_status.goal_token is not None:
+                raise ValueError('已有导航目标正在提交或执行')
+            self.navigation_status.start(token, {
+                'x': preview['x'], 'y': preview['y'], 'yaw': preview['yaw']})
+            future = self.navigator.send_goal_async(
                 goal, feedback_callback=lambda message, token=token:
-                self.on_goal_feedback(token, message.feedback)))
+                self.on_goal_feedback(token, message.feedback))
+            self.pending_goal = future
+            future.add_done_callback(lambda result: self._on_goal_sent(result, token))
+        try:
+            handle = self._wait(future)
             if not handle.accepted:
                 raise RuntimeError('Nav2 拒绝导航目标')
-            try:
-                self.require_localized()
-            except ValueError:
-                handle.cancel_goal_async()
-                raise
+            with self.data_lock:
+                if self.pending_goal is future:
+                    self.pending_goal = None
+                if not self.navigation_status.is_current(token):
+                    if id(handle) not in self.canceling_goals:
+                        self._cancel_navigation_handle(handle, late=True)
+                    raise ValueError('导航在目标提交期间已取消，请重新规划')
+                try:
+                    self.require_localized()
+                except ValueError:
+                    self._cancel_navigation_handle(handle, late=True)
+                    raise
+                self.active_goal = handle
+                self.navigation_status.accepted(token)
+                handle.get_result_async().add_done_callback(
+                    lambda future, handle=handle, token=token:
+                    self.on_goal_result(future, handle, token))
         except Exception as exc:
             self.navigation_status.finish(token, -1, error_msg=str(exc))
             raise
-        self.active_goal = handle
-        self.navigation_status.accepted(token)
-        handle.get_result_async().add_done_callback(
-            lambda future, handle=handle, token=token:
-            self.on_goal_result(future, handle, token))
         self.preview = None
         return {'accepted': True}
 
@@ -579,6 +795,18 @@ class RobotConsole(Node):
             feedback.number_of_recoveries, current_yaw)
 
     def on_goal_result(self, future, handle, token):
+        with self.data_lock:
+            if id(handle) in self.canceling_goals:
+                try:
+                    future.result()
+                except Exception as exc:
+                    self.navigation_status.fail(f'取消后读取 Nav2 终态失败：{exc}；导航速度保持切断')
+                self.canceling_goals.discard(id(handle))
+                self._check_cancel_complete()
+                return
+            self._on_goal_result_locked(future, handle, token)
+
+    def _on_goal_result_locked(self, future, handle, token):
         try:
             response = future.result()
             status = response.status
@@ -700,6 +928,7 @@ class RobotConsole(Node):
             result = {'control': self.control.snapshot(),
                       'localization': self.localization_status(),
                       'mode_source': self.settings['mode'],
+                      'camera_source': self.settings.get('camera_source', 'stereo'),
                       'vision_enabled': self.vision_enabled,
                       'uptime_seconds': round(now - self.start_time),
                       'task': self.task, 'images': {}, 'map_ready': False,
@@ -711,11 +940,22 @@ class RobotConsole(Node):
             result['local_model_ready'] = bool(
                 self.llm_health and self.llm_health[0] and
                 now - self.llm_health[1] < 10)
+            if hasattr(self, 'joint_control'):
+                result['actuators'] = self.joint_control.status()
+            result['camera_raw'] = {
+                name: stream_status(self.raw_camera_seen.get(name), now,
+                    float(self.settings['image_fresh_timeout']),
+                    float(self.settings['image_dropout_timeout'])) if self.settings[f'camera_raw_{name}_topic']
+                    else {'fresh': False, 'state': 'unconfigured', 'age_seconds': None}
+                for name in ('color', 'depth')
+            } if hasattr(self, 'raw_camera_seen') else {}
             result['ros_nodes'] = [namespace.rstrip('/') + '/' + name
                                    for name, namespace in
                                    self.get_node_names_and_namespaces()]
-            for name, stamp in self.image_seen.items():
-                result['images'][name] = {'fresh': now - stamp < 2}
+            for name in ('left', 'right', 'depth'):
+                result['images'][name] = stream_status(
+                    self.image_seen.get(name), now, float(self.settings['image_fresh_timeout']),
+                    float(self.settings['image_dropout_timeout']))
             if self.map:
                 map_age = now - self.map[1]
                 result['map_ready'] = (self.settings['static_map'] or
@@ -766,8 +1006,18 @@ class RobotConsole(Node):
                     'outputs_enabled': hardware.outputs_enabled,
                     'watchdog_ok': hardware.watchdog_ok,
                     'manual_recovery_required': hardware.manual_recovery_required,
-                    'fault': hardware.fault}
+                    'fault': hardware.fault,
+                    'leg_current_ma': [self.json_number(v) for v in hardware.leg_current_ma],
+                    'wheel_current_ma': [self.json_number(v) for v in hardware.wheel_current_ma]}
             result['imu_fresh'] = bool(self.imu and now - self.imu[1] < 2)
+            if self.imu:
+                msg = self.imu[0]
+                values = [msg.orientation.x, msg.orientation.y, msg.orientation.z, msg.orientation.w,
+                          msg.angular_velocity.x, msg.angular_velocity.y, msg.angular_velocity.z]
+                result['imu_valid'] = bool(all(math.isfinite(v) for v in values) and
+                    sum(v*v for v in values[:4]) > 1e-8 and msg.orientation_covariance[0] >= 0)
+            else:
+                result['imu_valid'] = False
             result['ultrasonic'] = {
                 topic.rsplit('/', 1)[-1]: {
                     'received': now - sample[1] < 1,
@@ -966,6 +1216,67 @@ def create_app(robot, web_dir=None):
             return {'items': [item for item in robot.logs
                               if item['id'] > after and item['level'] >= level]}
 
+    @app.post('/api/joints')
+    def joints(body: JointBody):
+        try:
+            with robot.data_lock:
+                robot.joint_control.command(body)
+            return {'accepted': True}
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post('/api/joints/zero')
+    def zero_joints(body: JointZeroBody):
+        try:
+            with robot.data_lock:
+                robot.joint_control.zero(body)
+            return {'accepted': True, 'group': body.group}
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post('/api/joint-step')
+    def joint_step(body: JointStepBody):
+        try:
+            with robot.data_lock:
+                robot.joint_control.step(body)
+            return {'accepted': True}
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post('/api/joint-motion')
+    def joint_motion(body: JointMotionBody):
+        try:
+            with robot.data_lock:
+                robot.joint_control.motion(body)
+            return {'accepted': True}
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post('/api/head-lock/resume')
+    def resume_head_lock():
+        try:
+            with robot.data_lock:
+                future = robot.joint_control.resume_head_lock()
+            done = threading.Event()
+            future.add_done_callback(lambda _: done.set())
+            if not done.wait(float(robot.settings['balance_service_timeout'])):
+                raise HTTPException(504, '头部归中服务确认超时，请检查状态')
+            result = future.result()
+            if not result.success:
+                raise ValueError(result.message)
+            return {'success': True, 'message': result.message}
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
+    @app.post('/api/body-balance')
+    def body_balance(body: BalanceBody):
+        try:
+            with robot.data_lock:
+                robot.joint_control.set_balance(body)
+            return {'pending': True}
+        except ValueError as exc:
+            raise HTTPException(409, str(exc)) from exc
+
     @app.post('/api/heartbeat')
     def heartbeat():
         robot.control.heartbeat()
@@ -989,6 +1300,9 @@ def create_app(robot, web_dir=None):
         if robot.control.stopped:
             raise HTTPException(423, '软件停止锁尚未解除')
         robot.cancel_motion()
+        if hasattr(robot, 'joint_control'):
+            with robot.data_lock:
+                robot.joint_control.clear()
         try:
             if body.mode != 'manual':
                 robot.require_localized()
@@ -996,6 +1310,32 @@ def create_app(robot, web_dir=None):
         except ValueError as exc:
             raise HTTPException(422, str(exc)) from exc
         return robot.control.snapshot()
+
+    @app.websocket('/api/drive-stream')
+    async def drive_stream(websocket: WebSocket):
+        """驾驶独立长连接，只提交意图；断线立即清除本连接拥有的速度。"""
+        await websocket.accept()
+        token = object()
+        client_id = None
+        try:
+            while True:
+                body = DriveBody(**await websocket.receive_json())
+                if client_id is not None and body.client_id != client_id:
+                    raise ValueError('同一驾驶连接不能切换页面标识')
+                client_id = body.client_id
+                if robot.saving_map and (body.linear or body.angular):
+                    raise ValueError('地图和数据库正在保存，请等待完成后再遥控')
+                accepted = robot.control.stream_command(
+                    body.linear, body.angular, body.client_id, body.sequence, token)
+                await websocket.send_json({'ok': True, 'accepted': accepted, 'sequence': body.sequence,
+                                           'timeout_seconds': robot.control.command_timeout})
+        except WebSocketDisconnect:
+            pass
+        except (ValueError, TypeError) as exc:
+            await websocket.send_json({'ok': False, 'detail': str(exc)})
+            await websocket.close(code=1008)
+        finally:
+            robot.control.release_stream(token)
 
     @app.post('/api/drive')
     def drive(body: DriveBody):
@@ -1033,7 +1373,8 @@ def create_app(robot, web_dir=None):
         robot.cancel_motion()
         if not robot.control.stopped:
             robot.control.set_mode('manual')
-        return {'canceled': True}
+        phase = robot.navigation_status.snapshot()['phase']
+        return {'canceled': phase == 'canceled', 'phase': phase}
 
     @app.post('/api/save-map')
     def save_map():

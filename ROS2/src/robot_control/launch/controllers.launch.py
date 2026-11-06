@@ -46,11 +46,12 @@ def generate_launch_description():
         'device_candidates', 'serial_timeout_ms', 'inter_command_delay_ms',
         'discovery_retry_count', 'discovery_retry_delay_ms', 'encoder_query_delay_ms',
         'command_timeout_ms', 'servo_keepalive_period_ms',
-        'servo_command_timeout_ms', 'wheel_diameter', 'sonar_lpf_alpha',
+        'servo_command_timeout_ms', 'leg_io_rate', 'wheel_io_rate', 'servo_feedback_rate', 'feedback_timeout_ms', 'servo_watchdog_ms', 'telemetry_rate', 'wheel_diameter', 'sonar_lpf_alpha',
         'sonar_min_valid_mm', 'sonar_max_valid_mm']
     robot_description = {'robot_description': ParameterValue(
         Command([
             'xacro ', xacro_file,
+            ' camera_model:=', LaunchConfiguration('camera_model'),
             ' hardware_plugin:=', LaunchConfiguration('hardware_plugin'),
             ' servo_calibration_file:=',
             LaunchConfiguration('servo_calibration_file'),
@@ -66,6 +67,10 @@ def generate_launch_description():
         'lap_rr_position_controller', 'lap_rl_position_controller',
     ]
     actions = [
+        DeclareLaunchArgument(
+            'robot_description_topic', default_value='/robot_description',
+            description='控制管理器订阅的模型话题；局部重启可使用保留原模型的新参数描述'),
+        DeclareLaunchArgument('camera_model', default_value='stereo', description='与 robot_state_publisher 相同的相机模型选择 stereo 或 none'),
         DeclareLaunchArgument(
             'hardware_plugin', default_value='mock_components/GenericSystem',
             description='ros2_control SystemInterface 插件名称'),
@@ -97,7 +102,25 @@ def generate_launch_description():
             'command_timeout_ms', default_value='500',
             description='ROS 轮速命令心跳超时，单位毫秒'),
         DeclareLaunchArgument(
-            'servo_keepalive_period_ms', default_value='40',
+            'servo_watchdog_ms', default_value='100',
+            description='SE2 固件现有 U 刷新看门狗期限，单位毫秒；仅用于监测，不修改固件'),
+        DeclareLaunchArgument(
+            'telemetry_rate', default_value='10.0',
+            description='硬件状态与诊断独立发布频率，单位 Hz；不占控制管理器读写周期'),
+        DeclareLaunchArgument(
+            'leg_io_rate', default_value='10.0',
+            description='DMC0 腿板独立读写频率，单位 Hz；20 Hz 需先验收'),
+        DeclareLaunchArgument(
+            'wheel_io_rate', default_value='6.0',
+            description='DMC1 轮板独立读写频率，单位 Hz'),
+        DeclareLaunchArgument(
+            'servo_feedback_rate', default_value='6.0',
+            description='SE2 舵机与超声波反馈查询频率，单位 Hz'),
+        DeclareLaunchArgument(
+            'feedback_timeout_ms', default_value='500',
+            description='控制板真实反馈失效期限，单位毫秒'),
+        DeclareLaunchArgument(
+            'servo_keepalive_period_ms', default_value='20',
             description='SE2 舵机 U 指令独立刷新周期，单位毫秒'),
         DeclareLaunchArgument(
             'servo_command_timeout_ms', default_value='400',
@@ -134,6 +157,7 @@ def generate_launch_description():
             description='ros2_control 和控制器生成器的 ROS 日志级别'),
         Node(
             package='controller_manager', executable='ros2_control_node',
+            remappings=[('robot_description', LaunchConfiguration('robot_description_topic'))],
             parameters=[
                 robot_description,
                 LaunchConfiguration('manager_config_file'),

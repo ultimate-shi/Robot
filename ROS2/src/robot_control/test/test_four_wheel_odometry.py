@@ -1,8 +1,9 @@
-"""使用方法：pytest 运行本文件，验证四轮反馈运动学和异常降权。"""
+"""作用：验证四轮反馈运动学和异常降权边界；使用方法：pytest 运行本文件。"""
 
 import math
 
 import numpy as np
+import pytest
 
 from robot_control.four_wheel_odometry import FourWheelOdometry
 
@@ -45,7 +46,8 @@ def test_dynamic_wheel_positions_follow_original_leg_geometry():
     assert positions[3, 0] > -0.312 / 2.0
 
 
-def test_robust_solver_marks_single_wheel_outlier():
+@pytest.mark.parametrize('iterations', [5, 8])
+def test_robust_solver_marks_single_wheel_outlier(iterations):
     """单轮异常不应直接拖偏全部轮子，且应被硬残差标记。"""
     positions = FourWheelOdometry.wheel_positions(
         np.zeros(4), 0.312, 0.280, 0.060)
@@ -53,11 +55,23 @@ def test_robust_solver_marks_single_wheel_outlier():
     wheel_speed[0] = 1.0 / 0.055
     solution, residual, weight, suspected = FourWheelOdometry.robust_twist(
         np.zeros(4), wheel_speed, 0.055, positions,
-        0.05, 0.15, 8)
+        0.05, 0.15, iterations)
     assert suspected[0]
     assert weight[0] == 0.0
     assert np.count_nonzero(weight > 0.05) >= 3
     corrected, _, _, _ = FourWheelOdometry.robust_twist(
         np.zeros(4), wheel_speed, 0.055, positions,
-        0.05, 0.15, 8, initial_weight=weight)
+        0.05, 0.15, iterations, initial_weight=weight)
     assert math.isclose(corrected[0], 0.2, abs_tol=0.02)
+
+
+def test_consistent_wheels_cannot_observe_ground_slip():
+    """四轮一致空转与真实前进的轮侧观测相同，不得误称轮间残差能检测此滑移。"""
+    positions = FourWheelOdometry.wheel_positions(
+        np.zeros(4), 0.312, 0.280, 0.060)
+    solution, residual, weight, suspected = FourWheelOdometry.robust_twist(
+        np.zeros(4), np.full(4, 0.8/0.055), 0.055, positions, 0.05, 0.15, 5)
+    assert np.allclose(solution, [0.8, 0., 0.])
+    assert np.allclose(residual, 0.)
+    assert np.allclose(weight, 1.)
+    assert not np.any(suspected)

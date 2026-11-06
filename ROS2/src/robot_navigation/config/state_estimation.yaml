@@ -2,7 +2,11 @@
 ekf_filter_node:
   ros__parameters:
     frequency: 10.0  # 实机启动高负载时仍有约 80 ms 耗时；10 Hz 高于 Nav2 5 Hz 控制周期
-    sensor_timeout: 0.2  # 输入超过该时间未更新时只执行预测，单位 s
+    sensor_timeout: 0.2  # 全部测量停止更新后转为纯预测的等待时间；不是逐路断流看门狗，单位 s
+    smooth_lagged_data: true  # 迟到视觉回退到采集时刻校正，再回放轮速与 IMU，避免旧位姿拉偏当前状态
+    history_length: 2.0  # 保存历史状态与测量的秒数；须大于视觉保护节点 max_message_age 并留调度余量
+    predict_to_current_time: true  # 历史回放后预测到当前时刻，避免输出和 TF 停留在迟到图像时间
+    permit_corrected_publication: false  # 不重复发布已发布过的历史时刻，保持下游时间戳连续向前
     two_d_mode: false  # 保留底盘升降、俯仰、侧倾与三轴角速度；缺测维度由 EKF 预测且不视为可信测量
     publish_tf: true  # EKF 是 odom 到 base_link 的唯一 TF 发布者
     publish_acceleration: false  # 当前不输出未经可靠约束的线加速度状态
@@ -14,7 +18,7 @@ ekf_filter_node:
     transform_time_offset: 0.0  # 不人为前移 TF 时间戳
     transform_timeout: 0.02  # 单次 TF 等待最多 20 ms，避免占满 EKF 的 10 Hz 更新周期
 
-    odom0: /visual_odom  # RTAB stereo_odometry 的三维视觉位姿输出
+    odom0: /visual_odom  # RTAB RGB-D/双目里程计的三维视觉位姿输出
     odom0_config: [true, true, true,
                    true, true, true,
                    false, false, false,

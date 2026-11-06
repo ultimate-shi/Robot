@@ -1,0 +1,166 @@
+# 作用：独立决定历史查询索引的话题和精简方式，不修改原始 MCAP；使用方法：修改 enabled/mode/fields 后重启索引器。
+# 常用默认启用，按需和不建议默认关闭；mode: all 全部、changes 变化、sample 采样、rosout 日志、diagnostics 异常诊断。
+# fields 只决定变化比较字段，存储的事件正文仍保留完整状态（受 logging.yaml 文本长度限制）；heartbeat_seconds 为重复状态的保留间隔。
+categories:
+  常用:
+  - topic: /web_console/navigation_status
+    enabled: true
+    description: 网页导航目标、取消、恢复次数和失败原因事件
+    mode: changes
+    heartbeat_seconds: 60
+  - topic: /rosout
+    enabled: true
+    description: WARN/ERROR/FATAL 及关键节点 INFO；同节点同消息五秒内合并
+    mode: rosout
+    min_level: 30
+    repeat_seconds: 5
+    info_nodes:
+    - bt_navigator
+    - planner_server
+    - controller_server
+    - behavior_server
+    - localization_guard
+    - map_server_recovery
+    - web_console
+    - wheel_motion_server
+    - robot_log_manager
+  - topic: /localization/status
+    enabled: true
+    description: 只在状态、许可或输入健康变化时建索引
+    mode: changes
+    fields:
+    - state
+    - ready
+    - input_ready
+    heartbeat_seconds: 60
+  - topic: /localization/ready
+    enabled: true
+    description: 定位许可变化
+    mode: changes
+    heartbeat_seconds: 60
+  - topic: /hardware/chassis_state
+    enabled: true
+    description: 只索引连接/锁定/心跳/故障变化，电流保留在 MCAP
+    mode: changes
+    fields:
+    - dmc0_connected
+    - dmc1_connected
+    - se2_connected
+    - outputs_enabled
+    - watchdog_ok
+    - manual_recovery_required
+    - fault
+    heartbeat_seconds: 60
+  - topic: /diagnostics
+    enabled: true
+    description: 仅异常诊断及恢复事件；重复异常每分钟保留一次
+    mode: diagnostics
+    heartbeat_seconds: 60
+  - topic: /nav_controller/status
+    enabled: true
+    description: 只索引导航门控状态及原因变化
+    mode: changes
+    fields:
+    - state
+    - reason
+    heartbeat_seconds: 60
+  - topic: /obstacle_avoidance/status
+    enabled: true
+    description: 只索引安全告警和脱困状态变化，连续测距不进入索引键
+    mode: changes
+    fields:
+    - warnings
+    - escape_active
+    heartbeat_seconds: 60
+  - regex: /mission/(status|state)
+    enabled: true
+    description: 任务阶段及结果变化
+    mode: changes
+    heartbeat_seconds: 60
+  - topic: /mapping/map_server_recovery/status
+    enabled: true
+    description: 地图激活及恢复事件
+    mode: changes
+    heartbeat_seconds: 60
+  - regex: /(web_console/stop_latched|wheel_motion/active)
+    enabled: true
+    description: 软件锁及定距租约变化
+    mode: changes
+    heartbeat_seconds: 60
+  - regex: /(navigate_to_pose|navigate_through_poses|compute_path_to_pose|follow_path|spin|backup|wait|execute_wheel_motion)/_action/status
+    enabled: true
+    description: 动作目标接受/执行/取消/结束的状态变化
+    mode: changes
+    fields:
+    - status_list
+    heartbeat_seconds: 60
+  - regex: /(navigate_to_pose|navigate_through_poses|compute_path_to_pose|follow_path|spin|backup|wait|execute_wheel_motion)/_action/feedback
+    enabled: true
+    description: 导航距离、朝向和恢复次数，最多每秒一条
+    mode: sample
+    interval_seconds: 1
+  - regex: /.*/_service_event
+    enabled: true
+    description: 仅已启用 introspection 的服务请求/结果
+    mode: all
+  按需:
+  - regex: /(odom|wheel/odom|visual_odom)
+    enabled: false
+    description: 需要网页查看位姿/协方差时开启，最多每秒一条
+    mode: sample
+    interval_seconds: 1
+  - topic: /rtabmap/localization_pose
+    enabled: false
+    description: 需要检索成功匹配位姿时开启
+    mode: sample
+    interval_seconds: 1
+  - regex: /cmd_vel_(nav_raw|nav_smoothed|nav|console|nav_safe|safe)
+    enabled: false
+    description: 需要网页比较各级速度时开启
+    mode: sample
+    interval_seconds: 1
+  - topic: /info
+    enabled: false
+    description: 视觉匹配专项诊断；一般直接回放 MCAP
+    mode: sample
+    interval_seconds: 2
+  - topic: /joint_states
+    enabled: false
+    description: 关节反馈专项诊断
+    mode: sample
+    interval_seconds: 2
+  - regex: /ultrasonic/.*
+    enabled: false
+    description: 测距专项诊断
+    mode: sample
+    interval_seconds: 2
+  不建议:
+  - regex: /tf(_static)?
+    enabled: false
+    description: TF 全文开销大，仅在 MCAP 回放
+    mode: sample
+    interval_seconds: 5
+  - topic: /scan
+    enabled: false
+    description: 扫描数组仅在 MCAP 回放
+    mode: sample
+    interval_seconds: 5
+  - topic: /bond
+    enabled: false
+    description: 心跳不进入历史查询
+    mode: changes
+  - topic: /hardware/serial_tx
+    enabled: false
+    description: 串口逐条流水不进入历史查询
+    mode: sample
+    interval_seconds: 5
+  - regex: /sensors/imu/.*
+    enabled: false
+    description: 连续 IMU 数值不进入历史查询
+    mode: sample
+    interval_seconds: 5
+  - regex: /.*(image.*|points.*|cloud.*|costmap.*|disparity.*|mapGraph|mapData).*
+    enabled: false
+    description: 图像/点云/地图大消息不逐条建立索引
+    mode: sample
+    interval_seconds: 5

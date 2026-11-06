@@ -1,8 +1,11 @@
-# 使用方法：由 state_estimation.launch.py 加载；平面零方差提升到下限，三维未知方差标为高不确定度。
+# 作用：保护视觉时间戳、位姿及协方差；使用方法：由 state_estimation.launch.py 加载。
 odometry_covariance_guard:
   ros__parameters:
     input_topic: /visual_odom_raw  # 原始双目视觉里程计输入
     output_topic: /visual_odom  # 供 EKF 融合的视觉里程计输出
+    max_message_age: 1.5  # 超过此年龄丢弃，单位 s；必须小于 EKF history_length，保留原采集时间戳
+    future_tolerance: 0.1  # 允许时钟/调度误差形成的最大未来时间，单位 s
+    quaternion_norm_tolerance: 0.01  # 四元数模平方与 1 的最大误差，拒绝无效姿态
     x_variance_floor: 0.02  # x 位姿方差下限，单位 m²
     y_variance_floor: 0.02  # y 位姿方差下限，单位 m²
     z_variance_floor: 0.1  # z 位姿方差下限，单位 m²

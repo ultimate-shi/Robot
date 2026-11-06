@@ -19,6 +19,9 @@ def generate_launch_description():
             'config_file', default_value=config,
             description='姿态平衡、FL/FR/RL/RR 分腿角度限位及过流保护参数 YAML 路径'),
         DeclareLaunchArgument(
+            'require_hardware_timing', default_value='false',
+            description='实机要求 DMC0 真实采样年龄，防止重复关节缓存掩盖反馈中断'),
+        DeclareLaunchArgument(
             'wheelbase', default_value='0.312',
             description='前后轮轴距，单位米'),
         DeclareLaunchArgument(
@@ -33,6 +36,8 @@ def generate_launch_description():
         Node(
             package='robot_control', executable='body_balance_node',
             name='body_balance', parameters=[LaunchConfiguration('config_file'), {
+                'require_hardware_timing': ParameterValue(
+                    LaunchConfiguration('require_hardware_timing'), value_type=bool),
                 'wheelbase': ParameterValue(
                     LaunchConfiguration('wheelbase'), value_type=float),
                 'track': ParameterValue(

@@ -1,4 +1,4 @@
-"""使用方法：pytest 运行本文件，检查静止建图与动态清空所需的 RTAB-Map 参数。"""
+"""作用：验证静止观察及有界工作内存配置；使用方法：pytest 运行本文件。"""
 
 from pathlib import Path
 
@@ -13,7 +13,12 @@ def test_mapping_accepts_observations_while_robot_is_stationary():
 
     assert parameters['RGBD/LinearUpdate'] == '0.0'
     assert parameters['RGBD/AngularUpdate'] == '0.0'
-    assert parameters['Mem/RehearsalSimilarity'] == '1.0'
+    assert 0.0 < float(parameters['Mem/RehearsalSimilarity']) < 1.0
+    assert parameters['Mem/RehearsalIdUpdatedToNewOne'] == 'true'
+    assert parameters['Mem/NotLinkedNodesKept'] == 'false'
+    assert 0 < int(parameters['Rtabmap/MemoryThr']) <= 200
+    assert parameters['Mem/LoadVisualLocalFeaturesOnInit'] == 'false'
+    assert parameters['map_cache_loaded_on_init'] is False
     assert parameters['map_always_update'] is True
     assert 0.0 < float(parameters['Rtabmap/DetectionRate']) <= 1.0
 

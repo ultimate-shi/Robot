@@ -1,4 +1,5 @@
 """
+作用：默认四轮独立转向，将安全速度转换为各轮转角及轮速。
 使用方法：由 robot_control/control.launch.py 启动底盘运动学节点。
 本节点由 robot.launch.py 以 executable='chassis_controller_node' 启动，节点名为 chassis_controller。
 它是当前仿真底盘主控制节点，接收安全速度并输出 ros2_control 控制命令。
@@ -109,7 +110,7 @@ class ChassisController3D(Node):
         self.declare_parameter("wheelbase", 0.312)
         self.declare_parameter("track", 0.280)
         self.declare_parameter("radius", 0.055)
-        self.declare_parameter("motion_mode", "crab")
+        self.declare_parameter("motion_mode", "four_ws")
         self.declare_parameter("steering_limit", 1.57)
         self.declare_parameter("ackermann_min_turning_speed", 0.04)
         self.declare_parameter("publish_odometry", True)

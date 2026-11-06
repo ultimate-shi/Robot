@@ -2,6 +2,8 @@
 
 import math
 import time
+from pathlib import Path
+import yaml
 
 from robot_interfaces.srv import SetBodyBalance
 from sensor_msgs.msg import JointState
@@ -12,6 +14,18 @@ from robot_control.body_balance import (
 def make_balance():
     """仅构造限位计算所需状态，不启动 ROS 节点。"""
     balance = object.__new__(BodyBalance)
+    defaults = yaml.safe_load((Path(__file__).parents[1] / 'config/body_balance.yaml').read_text())['body_balance']['ros__parameters']
+    for name, value in defaults.items():
+        setattr(balance, name, value)
+    balance.hardware_available = True
+    balance.position_target_sent = False
+    balance.last_position_imu_time = None
+    balance.last_control_time = None
+    balance.feedback_interrupted = True
+    balance.command_velocity_deg_s = [0.0]*4
+    balance.settled = False
+    balance.last_joint_time = time.monotonic()
+    balance.joint_feedback_timeout = 0.5
     balance.leg_length = 0.060
     balance.leg_min_deg = DEFAULT_LEG_MIN_DEG
     balance.leg_max_deg = DEFAULT_LEG_MAX_DEG
@@ -181,3 +195,28 @@ def test_four_imu_tilt_directions_move_the_expected_sides():
         assert all(degree * sign * direction > 0.0
                    for degree, sign, direction in zip(
                        balance.last_command_deg, height_signs, expected))
+
+
+def test_stale_joint_feedback_prevents_new_balance_targets():
+    balance = make_balance()
+    balance.enabled = True
+    balance.leg_current = None
+    balance.leg_angle_deg = [0.0]*4
+    balance.last_joint_time -= 2
+    balance._publish_status = lambda: None
+    balance._publish_commands = lambda _: (_ for _ in ()).throw(AssertionError('反馈过期仍发命令'))
+    balance._control()
+    assert balance.state == 'joint_stale'
+
+
+def test_stop_disables_balance_and_release_does_not_enable():
+    from types import SimpleNamespace
+    balance = make_balance()
+    balance.enabled = True
+    calls = []
+    balance._hold_current_angles = lambda: calls.append(True)
+    balance._stop_callback(SimpleNamespace(data=True))
+    assert not balance.enabled
+    assert calls == [True]
+    balance._stop_callback(SimpleNamespace(data=False))
+    assert not balance.enabled

@@ -18,6 +18,7 @@ setup(
     description='机器人 RTAB-Map、Nav2、目标停靠和路径预演', license='TODO: License declaration',
     entry_points={'console_scripts': [
         'mapping_snapshot_manager = robot_navigation.mapping.snapshot_manager:main',
+        'mapping_recover = robot_navigation.mapping.recovery:main',
         'publish_ply = robot_navigation.mapping.ply_publisher:main',
         'goal_manager = robot_navigation.goal_manager:main',
         'mission_planner = robot_navigation.mission_planner:main',
@@ -25,6 +26,7 @@ setup(
         'odometry_covariance_guard_node = robot_navigation.odometry_covariance_guard:main',
         'magnetic_map_initializer = robot_navigation.magnetic_map_initializer:main',
         'localization_guard = robot_navigation.localization_guard:main',
+        'global_localization = robot_navigation.global_localization:main',
         'map_server_recovery = robot_navigation.map_server_recovery:main',
     ]},
 )

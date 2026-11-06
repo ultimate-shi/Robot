@@ -19,7 +19,7 @@ def test_image_encoding_only_for_recent_viewer(monkeypatch):
     monkeypatch.setattr('robot_web.console.cv2.imencode',
                         lambda *_args, **_kwargs: (True, SimpleNamespace(
                             tobytes=lambda: b'jpeg')))
-    message = SimpleNamespace(header=SimpleNamespace(
+    message = SimpleNamespace(width=1, height=1, data=b"rgb", header=SimpleNamespace(
         stamp=SimpleNamespace(sec=1, nanosec=2)))
 
     console.on_image('left', message)
@@ -30,3 +30,10 @@ def test_image_encoding_only_for_recent_viewer(monkeypatch):
     console.on_image('left', message)
     assert len(conversions) == 1
     assert console.images['left'][0] == b'jpeg'
+
+
+def test_empty_image_does_not_refresh_stream_health():
+    console = RobotConsole.__new__(RobotConsole)
+    console.image_seen = {}
+    console.on_image('depth', SimpleNamespace(width=0, height=1, data=b''))
+    assert not console.image_seen

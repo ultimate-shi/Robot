@@ -1,0 +1,11 @@
+# 作用：Astra Pro 替换头部双目的安装 TF；用法：astra_mount.launch.py 自动加载，外部发布相同 TF 时禁用。
+# 按用户确认沿用旧头部双目中心和高度：stereo_camera.xacro 的 lens_y=-0.0165、lens_z=0.0468。
+# astra_link（驱动深度参考点）放在旧双目两光心的中点；不沿用旧双目基线，彩色光心偏移由驱动提供。
+# 头部 +X 向左、-Y 向前、+Z 向上；astra_link +X 向前、+Y 向左、+Z 向上，故 yaw=-pi/2。
+# xyz 单位米，rpy 单位弧度；此为用户确认的模型安装值，后续实测偏差可在这里校正。
+mount:
+  enabled: true
+  parent_frame: head_pitch_link
+  child_frame: astra_link
+  xyz: [0.0, -0.0165, 0.0468]
+  rpy: [0.0, 0.0, -1.5707963267948966]

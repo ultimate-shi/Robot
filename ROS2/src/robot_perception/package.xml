@@ -13,6 +13,7 @@
   <exec_depend>cv_bridge</exec_depend><exec_depend>python3-numpy</exec_depend><exec_depend>python3-scipy</exec_depend>
   <exec_depend>python3-yaml</exec_depend><exec_depend>usb_cam</exec_depend><exec_depend>image_proc</exec_depend>
   <exec_depend>stereo_image_proc</exec_depend><exec_depend>image_transport</exec_depend>
+  <exec_depend>depth_image_proc</exec_depend><exec_depend>rtabmap_sync</exec_depend><exec_depend>rtabmap_util</exec_depend>
   <exec_depend>compressed_image_transport</exec_depend><exec_depend>robot_stereo_components</exec_depend>
   <exec_depend>robot_description</exec_depend>
   <exec_depend>foxglove_bridge</exec_depend><exec_depend>pointcloud_to_laserscan</exec_depend>

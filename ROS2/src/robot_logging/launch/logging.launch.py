@@ -1,4 +1,4 @@
-"""使用方法：ros2 launch robot_logging logging.launch.py mode:=real|virtual。"""
+"""作用：启动分类话题录制与独立精简索引；使用方法：ros2 launch robot_logging logging.launch.py mode:=real|virtual。"""
 
 import os
 
@@ -19,7 +19,7 @@ def generate_launch_description():
             description='日志会话的运行模式：real 或 virtual'),
         DeclareLaunchArgument(
             'config_file', default_value=default_config,
-            description='日志路径、磁盘配额、切片和网页参数文件'),
+            description='日志路径、配额、切片及两个话题策略文件路径'),
         DeclareLaunchArgument(
             'mcap_config_file', default_value=default_mcap,
             description='MCAP 分块压缩参数文件'),

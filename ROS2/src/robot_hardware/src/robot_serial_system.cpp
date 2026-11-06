@@ -2,12 +2,12 @@
 // SE2 头部/转向舵机及超声波板。由 controller_manager 根据 robot_hardware_plugins.xml 加载，
 // 不作为独立节点运行；串口路径、超时和标定文件由 hardware.xacro 中的硬件参数传入。
 // 调用顺序：on_init 读取配置和标定 → on_configure 注册 ROS 接口 → on_activate 发现控制板；
-// 激活后 controller_manager 按 update_rate 周期调用 read 读取反馈、write 下发命令，
+// 激活后三个独占线程分别与各板通信；controller_manager 的 read/write 只交换快照，
 // 停用时调用 on_deactivate。定距动作、手动恢复和心跳则由 on_configure 注册的 ROS 回调处理。
 // 协议分工：DMC0 使用 R 查询/设置四腿；DMC1 使用 I 查询编码器、D 查询轮位及设置 PWM、
 // T 执行四轮定距；SE2 使用 f 读取六路舵机 ADC 与八路超声波、
 // U 下发六路舵机 PWM。ROS 关节命令是目标值，实际串口输出由每轮反馈和标定计算。
-// 每次串口写入同时发布 /hardware/serial_tx，供 MCAP 记录最终板端指令。
+// 每次串口写入记录真实发送时刻并入有界队列，由状态回调发布 /hardware/serial_tx；日志背压不阻塞保活。
 #include "robot_hardware/robot_serial_system.hpp"
 #include "robot_hardware/servo_settling.hpp"
 
@@ -100,13 +100,16 @@ class SerialPort
 public:
   using TraceCallback = std::function<void(
       const std::string &, const std::string &, const std::string &,
-      std::size_t, const std::string &, std::int64_t)>;
+      std::size_t, const std::string &, std::int64_t, double)>;
 
   SerialPort(std::string path, int timeout_ms, int inter_command_delay_ms)
   : path_(std::move(path)), timeout_ms_(timeout_ms), delay_ms_(inter_command_delay_ms) {}
 
   ~SerialPort() {close_port();}
 
+  using SendObserver = std::function<void(const std::string &, const std::string &,
+      std::chrono::steady_clock::time_point)>;
+  void set_send_observer(SendObserver observer) {send_observer_ = std::move(observer);}
   void set_trace(TraceCallback trace) {trace_ = std::move(trace);}
   void set_board(std::string board) {board_ = std::move(board);}
 
@@ -164,6 +167,7 @@ public:
   {
     std::lock_guard<std::mutex> lock(mutex_);
     if (fd_ < 0) return false;
+    const auto began = std::chrono::steady_clock::now();
     const auto earliest = last_transaction_ + std::chrono::milliseconds(delay_ms_);
     if (std::chrono::steady_clock::now() < earliest) {
       std::this_thread::sleep_until(earliest);
@@ -176,7 +180,8 @@ public:
     std::size_t remaining = command.size();
     std::size_t bytes_written = 0;
     const auto report = [&](const std::string & result) {
-        if (trace_) trace_(board_, path_, command, bytes_written, result, sent_at_ns);
+        if (trace_) trace_(board_, path_, command, bytes_written, result, sent_at_ns,
+          std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now()-began).count());
       };
     while (remaining > 0) {
       const ssize_t written = ::write(fd_, cursor, remaining);
@@ -192,6 +197,8 @@ public:
       report("drain_failed");
       return false;
     }
+    // tcdrain 后整行已写出；固件保活依赖发送/接收时刻，与回包和 ROS 日志发布时间无关。
+    if (send_observer_) send_observer_(board_, command, std::chrono::steady_clock::now());
     response.clear();
     std::string line;
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(timeout_ms_);
@@ -207,7 +214,7 @@ public:
       line.push_back(byte);
       if (byte == '\n') {
         if (line.size() > 1 &&
-          (std::isalpha(static_cast<unsigned char>(line.front())) || line.front() == '$'))
+          (std::isalpha(static_cast<unsigned char>(line.front())) || line.front() == '$' || line.front() == '!'))
         {
           response = std::move(line);
           last_transaction_ = std::chrono::steady_clock::now();
@@ -230,6 +237,7 @@ private:
   std::string path_;
   std::string board_{"UNIDENTIFIED"};
   TraceCallback trace_;
+  SendObserver send_observer_;
   int timeout_ms_{500};
   int delay_ms_{3};
   int fd_{-1};
@@ -272,7 +280,8 @@ bool stop_wheel_axes(SerialPort * port, int duration_ms)
 
 RobotSerialSystem::~RobotSerialSystem()
 {
-  stop_servo_keepalive();
+  if (telemetry_timer_) telemetry_timer_->cancel();
+  stop_board_workers();
 }
 
 // controller_manager 创建插件后首先调用；解析 URDF 硬件参数、建立关节索引、加载六路舵机
@@ -289,6 +298,9 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_init(
   state_velocity_.assign(info_.joints.size(), 0.0);
   command_position_.assign(info_.joints.size(), 0.0);
   command_velocity_.assign(info_.joints.size(), 0.0);
+  io_state_position_ = io_state_velocity_ = state_position_;
+  io_command_position_ = io_command_velocity_ = state_position_;
+  cached_position_ = cached_velocity_ = latest_position_ = latest_velocity_ = state_position_;
   for (std::size_t index = 0; index < info_.joints.size(); ++index) {
     joint_index_[info_.joints[index].name] = index;
   }
@@ -300,6 +312,27 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_init(
     const auto & parameters = info_.hardware_parameters;
     device_candidates_ = split(parameters.at("device_candidates"), ',');
     serial_timeout_ms_ = std::stoi(parameters.at("serial_timeout_ms"));
+    const auto option = [&](const std::string & name, double fallback) {
+        auto it = parameters.find(name);
+        return it == parameters.end() ? fallback : std::stod(it->second);
+      };
+    servo_watchdog_ms_ = static_cast<int>(option("servo_watchdog_ms", 100.0));
+    telemetry_rate_ = option("telemetry_rate", 10.0);
+    if (!std::isfinite(telemetry_rate_) || telemetry_rate_ < 5.0 || telemetry_rate_ > 20.0) {
+      throw std::invalid_argument("状态发布频率必须位于 5～20 Hz");
+    }
+    leg_io_rate_ = option("leg_io_rate", 10.0);
+    wheel_io_rate_ = option("wheel_io_rate", 6.0);
+    servo_feedback_rate_ = option("servo_feedback_rate", 6.0);
+    const double feedback_timeout = option("feedback_timeout_ms", 500.0);
+    for (double value : {leg_io_rate_, wheel_io_rate_, servo_feedback_rate_, feedback_timeout}) {
+      if (!std::isfinite(value) || value <= 0) throw std::invalid_argument("异步通信参数必须为有限正数");
+    }
+    if (leg_io_rate_ > 20 || wheel_io_rate_ > 20 || servo_feedback_rate_ > 10 ||
+      feedback_timeout < 200 || feedback_timeout > 1000) {
+      throw std::invalid_argument("异步通信频率或反馈期限超出验证范围");
+    }
+    feedback_timeout_ms_ = static_cast<int>(feedback_timeout);
     inter_command_delay_ms_ = std::stoi(parameters.at("inter_command_delay_ms"));
     discovery_retry_count_ = std::stoi(parameters.at("discovery_retry_count"));
     discovery_retry_delay_ms_ = std::stoi(parameters.at("discovery_retry_delay_ms"));
@@ -312,6 +345,7 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_init(
     sonar_min_valid_mm_ = std::stoi(parameters.at("sonar_min_valid_mm"));
     sonar_max_valid_mm_ = std::stoi(parameters.at("sonar_max_valid_mm"));
     if (command_timeout_ms_ < 1 || command_timeout_ms_ > 1000 ||
+      servo_watchdog_ms_ <= 2 * servo_keepalive_period_ms_ ||
       servo_keepalive_period_ms_ < 20 || servo_keepalive_period_ms_ > 60 ||
       servo_command_timeout_ms_ < 2 * servo_keepalive_period_ms_ ||
       servo_command_timeout_ms_ >= command_timeout_ms_ ||
@@ -342,6 +376,9 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
   const rclcpp_lifecycle::State &)
 {
   auto node = get_node();
+  command_callbacks_ = node->create_callback_group(rclcpp::CallbackGroupType::Reentrant);
+  rclcpp::SubscriptionOptions command_options;
+  command_options.callback_group = command_callbacks_;
   state_pub_ = node->create_publisher<robot_interfaces::msg::ChassisState>(
     "/hardware/chassis_state", rclcpp::SystemDefaultsQoS());
   serial_tx_pub_ = node->create_publisher<robot_interfaces::msg::SerialCommand>(
@@ -352,13 +389,15 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
     sonar_pubs_[index] = node->create_publisher<sensor_msgs::msg::Range>(
       kSonarTopics[index], rclcpp::SensorDataQoS());
   }
+  // ROS 发布可能受订阅者背压影响，必须放在执行器回调，不占 read/write 控制周期。
+  telemetry_timer_ = node->create_wall_timer(std::chrono::duration<double>(1.0 / telemetry_rate_),
+    [this] {publish_telemetry(get_node()->now());});
   // 轮速保护节点定期发布心跳；write 发现心跳过期会清零轮速，并停止活动的 T 动作。
   heartbeat_sub_ = node->create_subscription<std_msgs::msg::Empty>(
     "/hardware/command_heartbeat", rclcpp::SystemDefaultsQoS(),
     [this](const std_msgs::msg::Empty::SharedPtr) {
-      std::lock_guard<std::mutex> lock(encoder_motion_mutex_);
-      last_heartbeat_ = std::chrono::steady_clock::now();
-    });
+      heartbeat_ns_.store(std::chrono::steady_clock::now().time_since_epoch().count());
+    }, command_options);
   wheel_motion_sub_ = node->create_subscription<std_msgs::msg::Bool>(
     "/wheel_motion/active", rclcpp::SystemDefaultsQoS(),
     [this](const std_msgs::msg::Bool::SharedPtr message) {
@@ -377,6 +416,7 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
         last_wheel_motion_lease_ = std::chrono::steady_clock::now();
         stop = !message->data && encoder_motion_active_;
       }
+      std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
       if (stop && !stop_encoder_motion()) {
         latch_fault("定距动作结束后 DMC1 停车失败");
       }
@@ -387,22 +427,25 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
     [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
       std::shared_ptr<std_srvs::srv::Trigger::Response> response)
     {
+      std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
       response->success = stop_encoder_motion();
       response->message = response->success ? "DMC1 定距动作已停止" : "DMC1 停车失败，硬件已锁定";
       if (!response->success) latch_fault("DMC1 定距动作取消停车失败");
-    });
+    }, rclcpp::ServicesQoS(), command_callbacks_);
   // 故障锁定后的人工恢复入口；不在普通控制周期中自动重连控制板。
   recovery_service_ = node->create_service<std_srvs::srv::Trigger>(
     "/hardware/recover",
     [this](const std::shared_ptr<std_srvs::srv::Trigger::Request>,
       std::shared_ptr<std_srvs::srv::Trigger::Response> response)
     {
+      std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
       if (!manual_recovery_required_) {
         response->success = true;
         response->message = "硬件未锁定";
         return;
       }
       // 故障锁定后显式调用才重新发现三块板；发现失败保持锁定，不自动恢复输出。
+      stop_board_workers();
       if (!discover_controllers()) {
         response->success = false;
         response->message = "控制板仍未全部连接，保持锁定";
@@ -410,9 +453,9 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
       }
       manual_recovery_required_ = false;
       outputs_enabled_ = true;
-      fault_.clear();
-      last_heartbeat_ = std::chrono::steady_clock::now();
-      start_servo_keepalive();
+      {std::lock_guard<std::mutex> lock(cache_mutex_); fault_.clear();}
+      heartbeat_ns_.store(std::chrono::steady_clock::now().time_since_epoch().count());
+      start_board_workers();
       response->success = true;
       response->message = "三块控制板已重新识别，输出已恢复";
     });
@@ -424,64 +467,89 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
       const std::shared_ptr<robot_interfaces::srv::ExecuteEncoderMotion::Request> request,
       std::shared_ptr<robot_interfaces::srv::ExecuteEncoderMotion::Response> response)
     {
-      if (!outputs_enabled_ || manual_recovery_required_ || !dmc1_) {
-        response->success = false;
-        response->message = "硬件未使能";
-        return;
-      }
-      // ExecuteWheelMotion Action 经此服务提交一次四轮相对位移；要求运行租约和心跳均有效。
-      // T 是 DMC1 的绝对编码器目标，执行期间周期 write_wheels 不再发送 D 覆盖它。
-      std::unique_lock<std::mutex> lock(encoder_motion_mutex_);
-      const auto now = std::chrono::steady_clock::now();
-      if (encoder_motion_active_ || encoder_motion_cancelled_ || !wheel_motion_lease_active_ ||
-        !wheel_motion_lease_seen_ ||
-        now - last_wheel_motion_lease_ > std::chrono::milliseconds(command_timeout_ms_) ||
-        now - last_heartbeat_ > std::chrono::milliseconds(command_timeout_ms_))
+      auto result = std::make_shared<robot_interfaces::srv::ExecuteEncoderMotion::Response>();
+      std::future<bool> future;
       {
+        std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+        future = board_workers_[1].submit([this, request, response = result]() -> bool {
+          return execute_encoder_target(request->distance_m, response->message);
+        });
+      }
+      if (future.wait_for(std::chrono::milliseconds(serial_timeout_ms_ * 8)) != std::future_status::ready) {
+        report_async_fault("T 指令服务等待超时，丢弃待执行目标并停车");
         response->success = false;
-        response->message = "定距动作或命令心跳已失效，拒绝 T 指令";
+        response->message = "T 指令等待超时，硬件已锁定";
         return;
       }
-      std::ostringstream command;
-      command << "T " << std::uppercase << std::hex;
-      for (std::size_t index = 0; index < 4; ++index) {
-        const double revolutions = request->distance_m[axis_to_wheel_[index]] /
-          (kPi * wheel_diameter_);
-        const auto & wheel = wheels_[axis_to_wheel_[index]];
-        const double raw_delta = revolutions * encoder_cpr_[index] * wheel.encoder_sign;
-        if (!std::isfinite(raw_delta) ||
-          std::abs(raw_delta) > static_cast<double>(std::numeric_limits<std::int32_t>::max()))
-        {
-          response->success = false;
-          response->message = "定距目标无效或超出编码器范围";
-          return;
-        }
-        const auto delta = static_cast<std::int32_t>(std::llround(raw_delta));
-        const auto target = static_cast<std::uint32_t>(
-          static_cast<std::uint32_t>(encoder_count_[index]) +
-          static_cast<std::int32_t>(delta));
-        encoder_motion_target_[index] = target;
-        command << target << ' ';
-      }
-      command << '\n';
-      std::string serial_response;
-      response->success = dmc1_->transact(command.str(), serial_response);
-      encoder_motion_active_ = response->success;
-      if (!response->success) {
-        // 响应丢失时控制板仍可能已接受 T，必须逐轴发 D0 停车。
-        encoder_motion_cancelled_ = true;
-        wheel_motion_lease_active_ = false;
-        for (const auto & name : kWheelJoints) command_velocity_[joint(name)] = 0.0;
-        const bool stopped = stop_wheel_axes(dmc1_.get(), command_timeout_ms_);
-        lock.unlock();
-        if (!stopped) latch_fault("T 指令结果不明且 DMC1 停车失败");
-        response->message = stopped ? "T 指令失败，DMC1 已停车" :
-          "T 指令结果不明且停车失败，硬件已锁定";
-        return;
-      }
-      response->message = "DMC1 已接受 T 绝对编码器目标";
-    });
+      response->success = future.get();
+      response->message = result->message.empty() ? "定距请求已取消或硬件未运行" : result->message;
+    }, rclcpp::ServicesQoS(), command_callbacks_);
   return hardware_interface::CallbackReturn::SUCCESS;
+}
+
+// 仅在轮板独占线程执行，服务回调只等待结果，取消请求可撤销尚未执行的 T。
+bool RobotSerialSystem::execute_encoder_target(
+  const std::array<double, 4> & distance_m, std::string & message)
+{
+  bool success = false;
+  if (!outputs_enabled_ || manual_recovery_required_ || !dmc1_) {
+    success = false;
+    message = "硬件未使能";
+    return false;
+  }
+  // ExecuteWheelMotion Action 经此服务提交一次四轮相对位移；要求运行租约和心跳均有效。
+  // T 是 DMC1 的绝对编码器目标，执行期间周期 write_wheels 不再发送 D 覆盖它。
+  std::unique_lock<std::mutex> lock(encoder_motion_mutex_);
+  const auto now = std::chrono::steady_clock::now();
+  if (encoder_motion_active_ || encoder_motion_cancelled_ || !wheel_motion_lease_active_ ||
+    !wheel_motion_lease_seen_ ||
+    now - last_wheel_motion_lease_ > std::chrono::milliseconds(command_timeout_ms_) ||
+    now - heartbeat_time() > std::chrono::milliseconds(command_timeout_ms_))
+  {
+    success = false;
+    message = "定距动作或命令心跳已失效，拒绝 T 指令";
+    return false;
+  }
+  std::ostringstream command;
+  command << "T " << std::uppercase << std::hex;
+  for (std::size_t index = 0; index < 4; ++index) {
+    const double revolutions = distance_m[axis_to_wheel_[index]] /
+      (kPi * wheel_diameter_);
+    const auto & wheel = wheels_[axis_to_wheel_[index]];
+    const double raw_delta = revolutions * encoder_cpr_[index] * wheel.encoder_sign;
+    if (!std::isfinite(raw_delta) ||
+      std::abs(raw_delta) > static_cast<double>(std::numeric_limits<std::int32_t>::max()))
+    {
+      success = false;
+      message = "定距目标无效或超出编码器范围";
+      return false;
+    }
+    const auto delta = static_cast<std::int32_t>(std::llround(raw_delta));
+    const auto target = static_cast<std::uint32_t>(
+      static_cast<std::uint32_t>(encoder_count_[index]) +
+      static_cast<std::int32_t>(delta));
+    encoder_motion_target_[index] = target;
+    command << target << ' ';
+  }
+  command << '\n';
+  std::string serial_response;
+  if (async_fault_ || board_workers_[1].urgent_pending()) {message = "定距请求已撤销"; return false;}
+  success = dmc1_->transact(command.str(), serial_response);
+  encoder_motion_active_ = success;
+  if (!success) {
+    // 响应丢失时控制板仍可能已接受 T，必须逐轴发 D0 停车。
+    encoder_motion_cancelled_ = true;
+    wheel_motion_lease_active_ = false;
+    for (const auto & name : kWheelJoints) io_command_velocity_[joint(name)] = 0.0;
+    const bool stopped = stop_wheel_axes(dmc1_.get(), command_timeout_ms_);
+    lock.unlock();
+    report_async_fault(stopped ? "T 指令响应失败，已停车并锁定" : "T 指令结果不明且 DMC1 停车失败");
+    message = stopped ? "T 指令失败，DMC1 已停车" :
+      "T 指令结果不明且停车失败，硬件已锁定";
+    return false;
+  }
+  message = "DMC1 已接受 T 绝对编码器目标";
+  return success;
 }
 
 // controller_manager 激活硬件时调用；扫描串口并核验 I/S/R/f 协议，再开放输出。
@@ -489,15 +557,17 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_configure(
 hardware_interface::CallbackReturn RobotSerialSystem::on_activate(
   const rclcpp_lifecycle::State &)
 {
+  std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
+  stop_board_workers();
   if (!discover_controllers()) {
     latch_fault("DMC0、DMC1 或 SE2 初始化失败");
     return hardware_interface::CallbackReturn::ERROR;
   }
   outputs_enabled_ = true;
   manual_recovery_required_ = false;
-  fault_.clear();
-  last_heartbeat_ = std::chrono::steady_clock::now();
-  last_write_ = last_heartbeat_;
+  {std::lock_guard<std::mutex> lock(cache_mutex_); fault_.clear();}
+  heartbeat_ns_.store(std::chrono::steady_clock::now().time_since_epoch().count());
+  last_write_ = heartbeat_time();
   {
     std::lock_guard<std::mutex> lock(encoder_motion_mutex_);
     encoder_motion_active_ = false;
@@ -506,9 +576,11 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_activate(
     wheel_motion_lease_seen_ = false;
     wheel_motion_rearm_ready_ = false;
   }
-  command_position_ = state_position_;
+  std::copy(io_state_position_.begin(), io_state_position_.end(), state_position_.begin());
+  std::copy(io_state_velocity_.begin(), io_state_velocity_.end(), state_velocity_.begin());
+  std::copy(state_position_.begin(), state_position_.end(), command_position_.begin());
   std::fill(command_velocity_.begin(), command_velocity_.end(), 0.0);
-  start_servo_keepalive();
+  start_board_workers();
   RCLCPP_INFO(rclcpp::get_logger("RobotSerialSystem"), "三块底盘控制板已激活");
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -517,8 +589,9 @@ hardware_interface::CallbackReturn RobotSerialSystem::on_activate(
 hardware_interface::CallbackReturn RobotSerialSystem::on_deactivate(
   const rclcpp_lifecycle::State &)
 {
-  stop_servo_keepalive();
+  std::lock_guard<std::mutex> lifecycle_lock(lifecycle_mutex_);
   outputs_enabled_ = false;
+  stop_board_workers();
   (void)stop_outputs();
   return hardware_interface::CallbackReturn::SUCCESS;
 }
@@ -555,80 +628,100 @@ std::vector<hardware_interface::CommandInterface> RobotSerialSystem::export_comm
   return interfaces;
 }
 
-// 激活后的每个 controller_manager 控制周期调用；依次读取 DMC1 轮、DMC0 腿和 SE2 舵机/
-// 超声波，再发布硬件状态。任一查询失败即锁定故障并返回 ERROR，阻止继续正常控制。
+// 控制周期只交换反馈快照，故障处置只通知线程，不在实时周期等待串口或 join。
 hardware_interface::return_type RobotSerialSystem::read(
-  const rclcpp::Time & time, const rclcpp::Duration & period)
+  const rclcpp::Time &, const rclcpp::Duration &)
 {
-  if (servo_keepalive_failed_.load()) {
-    latch_fault("SE2 舵机命令刷新失败");
-    publish_telemetry(time);
-    return hardware_interface::return_type::ERROR;
+  bool stale = false;
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    std::copy(cached_position_.begin(), cached_position_.end(), state_position_.begin());
+    std::copy(cached_velocity_.begin(), cached_velocity_.end(), state_velocity_.begin());
+    const auto now = std::chrono::steady_clock::now();
+    for (const auto & sample : feedback_at_) {
+      stale = stale || now-sample > std::chrono::milliseconds(feedback_timeout_ms_);
+    }
   }
-  if (!outputs_enabled_ || manual_recovery_required_) {
-    publish_telemetry(time);
-    return hardware_interface::return_type::ERROR;
+  if (async_active_ && stale && !async_fault_) report_async_fault("控制板真实反馈过期");
+  return outputs_enabled_ && !async_fault_ ? hardware_interface::return_type::OK :
+    hardware_interface::return_type::ERROR;
+}
+
+// 最新目标覆盖旧目标，没有普通命令队列；序号与接收时间独立于真实反馈时间。
+hardware_interface::return_type RobotSerialSystem::write(
+  const rclcpp::Time &, const rclcpp::Duration &)
+{
+  if (!outputs_enabled_ || async_fault_) return hardware_interface::return_type::ERROR;
+  if (rearm_commands_.exchange(false)) {
+    std::copy(state_position_.begin(), state_position_.end(), command_position_.begin());
+    std::fill(command_velocity_.begin(), command_velocity_.end(), 0.0);
   }
-  const bool ok = read_wheels() && read_legs() &&
-    read_servos_and_sonar(std::clamp(period.seconds(), 0.001, 0.1));
-  if (!ok) {
-    latch_fault("控制板状态查询超时或响应格式错误");
-    publish_telemetry(time);
-    return hardware_interface::return_type::ERROR;
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    latest_position_ = command_position_;
+    latest_velocity_ = command_velocity_;
+    latest_command_at_ = std::chrono::steady_clock::now();
+    ++command_sequence_;
   }
-  publish_telemetry(time);
   return hardware_interface::return_type::OK;
 }
 
-// 激活后的每个控制周期调用；检查轮速心跳和 T 动作租约，再依次写 DMC1、DMC0、SE2。
-// 心跳过期时把轮速目标置零；定距动作租约失效时主动停车。串口写入失败会锁定硬件。
-hardware_interface::return_type RobotSerialSystem::write(
-  const rclcpp::Time &, const rclcpp::Duration & period)
+// 所有事务共用单调耗时统计与 SE2 保活监测；测试也使用相同路径。
+void RobotSerialSystem::attach_trace(SerialPort & port)
 {
-  if (servo_keepalive_failed_.load()) {
-    latch_fault("SE2 舵机命令刷新失败");
-    return hardware_interface::return_type::ERROR;
-  }
-  if (!outputs_enabled_ || manual_recovery_required_) {
-    return hardware_interface::return_type::ERROR;
-  }
-  const auto now = std::chrono::steady_clock::now();
-  bool heartbeat_expired = false;
-  bool lease_expired = false;
-  bool encoder_motion_active = false;
-  {
-    std::lock_guard<std::mutex> lock(encoder_motion_mutex_);
-    heartbeat_expired = now - last_heartbeat_ > std::chrono::milliseconds(command_timeout_ms_);
-    encoder_motion_active = encoder_motion_active_;
-    lease_expired = encoder_motion_active &&
-      (!wheel_motion_lease_active_ ||
-      now - last_wheel_motion_lease_ > std::chrono::milliseconds(command_timeout_ms_));
-  }
-  if (heartbeat_expired || lease_expired) {
-    for (const auto & name : kWheelJoints) command_velocity_[joint(name)] = 0.0;
-    if (lease_expired || (heartbeat_expired && encoder_motion_active)) {
-      if (!stop_encoder_motion()) {
-        latch_fault("定距动作失去心跳后 DMC1 停车失败");
-        return hardware_interface::return_type::ERROR;
-      }
+  port.set_send_observer([this](const std::string & board, const std::string & command,
+      std::chrono::steady_clock::time_point sent) {
+      if (board == "SE2" && command.rfind("U ", 0) == 0) record_servo_send(sent);
+    });
+  port.set_trace([this](
+          const std::string & board, const std::string & device,
+          const std::string & command, std::size_t bytes_written,
+          const std::string & result, std::int64_t sent_at_ns, double elapsed_ms)
+        {
+          const int index = board == "DMC0" ? 0 : board == "DMC1" ? 1 : board == "SE2" ? 2 : -1;
+          if (index >= 0) transaction_timing_[index].add(elapsed_ms, result != "response_ok");
+          robot_interfaces::msg::SerialCommand trace;
+          trace.header.stamp.sec = static_cast<std::int32_t>(sent_at_ns / 1000000000LL);
+          trace.header.stamp.nanosec = static_cast<std::uint32_t>(sent_at_ns % 1000000000LL);
+          trace.board = board;
+          trace.device = device;
+          trace.command = command;
+          trace.bytes_written = static_cast<std::uint32_t>(bytes_written);
+          trace.result = result;
+          std::lock_guard<std::mutex> lock(trace_mutex_);
+          if (trace_queue_.size() >= trace_queue_capacity_) {
+            trace_queue_.pop_front();
+            ++trace_dropped_;
+          }
+          trace_queue_.push_back(std::move(trace));
+        });
+}
+
+// 只比较串口整行真正写出后的单调时刻，不让 ACK 抖动误报为发送中断。
+void RobotSerialSystem::record_servo_send(std::chrono::steady_clock::time_point sent)
+{
+  if (last_u_sent_.time_since_epoch().count() && async_active_) {
+    const double gap = std::chrono::duration<double, std::milli>(sent-last_u_sent_).count();
+    servo_gap_timing_.add(gap);
+    if (gap >= servo_watchdog_ms_ && outputs_enabled_) {
+      ++servo_watchdog_overruns_;
+      report_async_fault("SE2 U 实际发送间隔超过固件看门狗期限");
     }
   }
-  const double dt = std::clamp(period.seconds(), 0.001, 0.1);
-  if (!write_wheels() || !write_legs() || !write_servos(dt)) {
-    latch_fault("控制板写入失败");
-    return hardware_interface::return_type::ERROR;
-  }
-  last_write_ = now;
-  return hardware_interface::return_type::OK;
+  last_u_sent_ = sent;
 }
 
 // on_activate 和 /hardware/recover 调用；按设备身份发现 DMC0、DMC1、SE2，不能仅靠端口号推断。
 // 三块板齐全后查询 I/S/R/f 验证协议及初始反馈；失败关闭串口并按配置次数重试。
 bool RobotSerialSystem::discover_controllers()
 {
+  for (auto & value : connected_) value = false;
   dmc0_.reset();
   dmc1_.reset();
   se2_.reset();
+  encoder_initialized_.fill(false);
+  servo_initialized_.fill(false);
+  sonar_initialized_.fill(false);
   for (int attempt = 1; attempt <= discovery_retry_count_; ++attempt) {
     if (attempt > 1) {
       std::this_thread::sleep_for(std::chrono::milliseconds(discovery_retry_delay_ms_));
@@ -642,21 +735,7 @@ bool RobotSerialSystem::discover_controllers()
       }
       auto port = std::make_unique<SerialPort>(path, serial_timeout_ms_, inter_command_delay_ms_);
       if (!port->open_port()) continue;
-      port->set_trace([publisher = serial_tx_pub_](
-          const std::string & board, const std::string & device,
-          const std::string & command, std::size_t bytes_written,
-          const std::string & result, std::int64_t sent_at_ns)
-        {
-          robot_interfaces::msg::SerialCommand trace;
-          trace.header.stamp.sec = static_cast<std::int32_t>(sent_at_ns / 1000000000LL);
-          trace.header.stamp.nanosec = static_cast<std::uint32_t>(sent_at_ns % 1000000000LL);
-          trace.board = board;
-          trace.device = device;
-          trace.command = command;
-          trace.bytes_written = static_cast<std::uint32_t>(bytes_written);
-          trace.result = result;
-          publisher->publish(trace);
-        });
+      attach_trace(*port);
       std::string response;
       if (!port->transact("$info\n", response)) continue;
       std::stringstream parser(response);
@@ -672,15 +751,18 @@ bool RobotSerialSystem::discover_controllers()
         if (first_id / 4 == 0 && !dmc0_) {
           port->set_board("DMC0");
           dmc0_ = std::move(port);
+          connected_[0] = true;
           RCLCPP_INFO(rclcpp::get_logger("RobotSerialSystem"), "识别 DMC0: %s", path.c_str());
         } else if (first_id / 4 == 1 && !dmc1_) {
           port->set_board("DMC1");
           dmc1_ = std::move(port);
+          connected_[1] = true;
           RCLCPP_INFO(rclcpp::get_logger("RobotSerialSystem"), "识别 DMC1: %s", path.c_str());
         }
       } else if (model == "SE2" && !se2_) {
         port->set_board("SE2");
         se2_ = std::move(port);
+        connected_[2] = true;
         RCLCPP_INFO(rclcpp::get_logger("RobotSerialSystem"), "识别 SE2: %s", path.c_str());
       }
     }
@@ -690,12 +772,14 @@ bool RobotSerialSystem::discover_controllers()
       if (query_encoder_parameters() && read_wheels() && read_legs() &&
         read_servos_and_sonar(0.025))
       {
+        for (std::size_t board = 0; board < 3; ++board) cache_feedback(board);
         RCLCPP_INFO(rclcpp::get_logger("RobotSerialSystem"), "三块控制板协议校验通过");
         return true;
       }
       RCLCPP_WARN(
         rclcpp::get_logger("RobotSerialSystem"),
         "控制板身份已识别但协议校验失败，将关闭串口并重新发现");
+      for (auto & value : connected_) value = false;
       dmc0_.reset();
       dmc1_.reset();
       se2_.reset();
@@ -882,15 +966,15 @@ bool RobotSerialSystem::read_wheels()
       const std::int32_t delta = static_cast<std::int32_t>(encoder - previous);
       const double radians = static_cast<double>(delta) * wheel.encoder_sign *
         2.0 * kPi / encoder_cpr_[index];
-      state_position_[joint(kWheelJoints[wheel_index])] += radians;
-      state_velocity_[joint(kWheelJoints[wheel_index])] = elapsed > 0.0 ?
+      io_state_position_[joint(kWheelJoints[wheel_index])] += radians;
+      io_state_velocity_[joint(kWheelJoints[wheel_index])] = elapsed > 0.0 ?
         radians / elapsed : 0.0;
     } else {
-      state_velocity_[joint(kWheelJoints[wheel_index])] = 0.0;
+      io_state_velocity_[joint(kWheelJoints[wheel_index])] = 0.0;
     }
     encoder_count_[index] = encoder;
     encoder_initialized_[index] = true;
-    wheel_current_[wheel_index] = current;
+    io_wheel_current_[wheel_index] = current;
   }
   last_wheel_feedback_ = sampled_at;
   if (encoder_motion_active_) {
@@ -930,9 +1014,9 @@ bool RobotSerialSystem::read_legs()
     int current = 0;
     parser >> fixed_angle >> speed_deg_s >> current;
     if (!parser) return false;
-    state_position_[joint(kLegJoints[index])] = sign[index] * fixed_angle / 100.0 * kDegToRad;
-    state_velocity_[joint(kLegJoints[index])] = sign[index] * speed_deg_s * kDegToRad;
-    leg_current_[index] = current;
+    io_state_position_[joint(kLegJoints[index])] = sign[index] * fixed_angle / 100.0 * kDegToRad;
+    io_state_velocity_[joint(kLegJoints[index])] = sign[index] * speed_deg_s * kDegToRad;
+    io_leg_current_[index] = current;
   }
   return true;
 }
@@ -954,26 +1038,26 @@ bool RobotSerialSystem::read_servos_and_sonar(double)
   if (!parser) return false;
   for (std::size_t index = 0; index < servos_.size(); ++index) {
     const double radians = adc_to_radians(index, adc[index]);
-    if (index < 2) state_position_[joint(kHeadJoints[index])] = radians;
-    else state_position_[joint(kSteerJoints[index - 2])] = radians;
+    if (index < 2) io_state_position_[joint(kHeadJoints[index])] = radians;
+    else io_state_position_[joint(kSteerJoints[index - 2])] = radians;
   }
-  for (std::size_t index = 0; index < sonar_m_.size(); ++index) {
+  for (std::size_t index = 0; index < io_sonar_m_.size(); ++index) {
     if (ranges_mm[index] < sonar_min_valid_mm_ ||
       ranges_mm[index] > sonar_max_valid_mm_)
     {
       // SE2 无回波或探头振铃时可能给出 0~20mm；不得把它当成真实近距离障碍。
-      sonar_valid_[index] = false;
+      io_sonar_valid_[index] = false;
       sonar_initialized_[index] = false;
       continue;
     }
     const double raw = ranges_mm[index] / 1000.0;
     if (!sonar_initialized_[index]) {
-      sonar_m_[index] = raw;
+      io_sonar_m_[index] = raw;
       sonar_initialized_[index] = true;
     } else {
-      sonar_m_[index] = sonar_alpha_ * raw + (1.0 - sonar_alpha_) * sonar_m_[index];
+      io_sonar_m_[index] = sonar_alpha_ * raw + (1.0 - sonar_alpha_) * io_sonar_m_[index];
     }
-    sonar_valid_[index] = true;
+    io_sonar_valid_[index] = true;
   }
   return true;
 }
@@ -989,12 +1073,13 @@ bool RobotSerialSystem::write_wheels()
   for (std::size_t index = 0; index < 4; ++index) {
     const std::size_t wheel_index = axis_to_wheel_[index];
     const auto & wheel = wheels_[wheel_index];
-    if (!std::isfinite(command_velocity_[joint(kWheelJoints[wheel_index])])) return false;
+    if (!std::isfinite(io_command_velocity_[joint(kWheelJoints[wheel_index])])) return false;
   }
   for (std::size_t index = 0; index < 4; ++index) {
+    if (async_fault_ || !outputs_enabled_ || board_workers_[1].urgent_pending()) return true;
     const std::size_t wheel_index = axis_to_wheel_[index];
     auto & wheel = wheels_[wheel_index];
-    const double angular_velocity = command_velocity_[joint(kWheelJoints[wheel_index])];
+    const double angular_velocity = io_command_velocity_[joint(kWheelJoints[wheel_index])];
     if (!std::isfinite(angular_velocity)) return false;
     if (angular_velocity == 0.0) {
       if (!command_pwm_axis(dmc1_.get(), index, 0, command_timeout_ms_)) return false;
@@ -1013,7 +1098,7 @@ bool RobotSerialSystem::write_wheels()
       const double low_pwm = point ? pwms[point - 1] : 0.0;
       const double desired_pwm = low_pwm + (target - low_speed) *
         (pwms[point] - low_pwm) / (speeds[point] - low_speed);
-      const double measured = target_sign * state_velocity_[joint(kWheelJoints[wheel_index])];
+      const double measured = target_sign * io_state_velocity_[joint(kWheelJoints[wheel_index])];
       const double correction = std::clamp(wheel.feedback_gain * (target - measured),
         -wheel.max_pwm_correction, wheel.max_pwm_correction);
       const int pwm = static_cast<int>(std::lround(std::clamp(
@@ -1026,25 +1111,36 @@ bool RobotSerialSystem::write_wheels()
   return true;
 }
 
-// write 每周期调用；把四腿位置目标限制在已验证的 ±30° 内，换成百分之一度后发送 DMC0 R。
-// 这里负责关节目标下发；真实角度在下一轮 read_legs 才更新。
-bool RobotSerialSystem::write_legs()
+// DMC0 线程调用；只下发变化的百分之一度目标，未变化通道用协议 32767 跳过。
+// 到位后重复 R 会重新启动板端定位，故保持期只查询反馈；停止/退出可强制提交实测位置。
+bool RobotSerialSystem::write_legs(bool force, bool * sent)
 {
+  if (sent) *sent = false;
   // 使用方法：DMC0 实测在约 ±30° 停住，先以保守的软件限位拦截更远目标。
   const std::array<double, 4> minimum = {-30.0, -30.0, -30.0, -30.0};
   const std::array<double, 4> maximum = {30.0, 30.0, 30.0, 30.0};
   const std::array<double, 4> sign = {-1.0, 1.0, -1.0, 1.0};
-  std::ostringstream command;
-  command << "R ";
+  std::array<long, 4> target;
   for (std::size_t index = 0; index < 4; ++index) {
     const double degree = std::clamp(
-      command_position_[joint(kLegJoints[index])] * kRadToDeg,
+      io_command_position_[joint(kLegJoints[index])] * kRadToDeg,
       minimum[index], maximum[index]);
-    command << std::lround(sign[index] * degree * 100.0) << ' ';
+    target[index] = std::lround(sign[index] * degree * 100.0);
+  }
+  if (!force && last_leg_target_valid_ && target == last_leg_target_) return true;
+  std::ostringstream command;
+  command << "R ";
+  for (std::size_t index = 0; index < target.size(); ++index) {
+    command << ((!force && last_leg_target_valid_ && target[index] == last_leg_target_[index]) ?
+      32767L : target[index]) << ' ';
   }
   command << '\n';
   std::string response;
-  return dmc0_ && dmc0_->transact(command.str(), response);
+  if (!dmc0_ || !dmc0_->transact(command.str(), response)) return false;
+  last_leg_target_ = target;
+  last_leg_target_valid_ = true;
+  if (sent) *sent = true;
+  return true;
 }
 
 // write 每周期调用；读取头部两轴和四个转向轴的位置目标，按 f 查询得到的 ADC 反馈计算 PWM。
@@ -1064,91 +1160,223 @@ bool RobotSerialSystem::write_servos(double dt)
     };
   for (std::size_t index = 0; index < 2; ++index) {
     set_target(
-      index, command_position_[joint(kHeadJoints[index])] * kRadToDeg);
+      index, io_command_position_[joint(kHeadJoints[index])] * kRadToDeg);
   }
   for (std::size_t index = 0; index < 4; ++index) {
     set_target(
       index + 2,
-      command_position_[joint(kSteerJoints[index])] * kRadToDeg);
+      io_command_position_[joint(kSteerJoints[index])] * kRadToDeg);
   }
   std::array<int, 6> command_pwm{};
   for (std::size_t index = 0; index < servos_.size(); ++index) {
     command_pwm[index] = servo_pwm(index, dt);
   }
-  {
-    std::lock_guard<std::mutex> lock(servo_command_mutex_);
-    servo_command_pwm_ = command_pwm;
-    last_servo_command_ = std::chrono::steady_clock::now();
-  }
-  servo_command_cv_.notify_one();
+  servo_command_pwm_ = command_pwm;
+  last_servo_command_ = std::chrono::steady_clock::now();
   return true;
 }
 
-// 激活和人工恢复后启动独立刷新；不依赖慢速的 DMC1/DMC0 控制周期维持 SE2 的 100ms 看门狗。
-void RobotSerialSystem::start_servo_keepalive()
+// 单调心跳原子读取，实时 read 不等待可能正在执行串口事务的动作锁。
+std::chrono::steady_clock::time_point RobotSerialSystem::heartbeat_time() const
 {
-  stop_servo_keepalive();
-  {
-    std::lock_guard<std::mutex> lock(servo_command_mutex_);
-    servo_command_pwm_.fill(kServoNeutral);
-    last_servo_command_ = std::chrono::steady_clock::now();
-    servo_keepalive_running_ = true;
-  }
-  servo_keepalive_failed_.store(false);
-  servo_keepalive_thread_ = std::thread(&RobotSerialSystem::servo_keepalive_loop, this);
+  return std::chrono::steady_clock::time_point(
+    std::chrono::steady_clock::duration(heartbeat_ns_.load()));
 }
 
-// 停用或故障时先结束后台串口事务，再由 stop_outputs 发中性值，防止旧 PWM 覆盖停车。
-void RobotSerialSystem::stop_servo_keepalive()
+// 每个控制板只更新自己的字段；原始反馈时间只在成功查询后推进。
+void RobotSerialSystem::cache_feedback(std::size_t board)
 {
-  {
-    std::lock_guard<std::mutex> lock(servo_command_mutex_);
-    servo_keepalive_running_ = false;
+  std::lock_guard<std::mutex> lock(cache_mutex_);
+  const auto copy = [&](const auto & names) {
+      for (const auto & name : names) {
+        const auto i = joint(name);
+        cached_position_[i] = io_state_position_[i];
+        cached_velocity_[i] = io_state_velocity_[i];
+      }
+    };
+  if (board == 0) {copy(kLegJoints); leg_current_ = io_leg_current_;}
+  if (board == 1) {copy(kWheelJoints); wheel_current_ = io_wheel_current_;}
+  if (board == 2) {
+    copy(kSteerJoints); copy(kHeadJoints);
+    sonar_m_ = io_sonar_m_; sonar_valid_ = io_sonar_valid_;
   }
-  servo_command_cv_.notify_one();
-  if (servo_keepalive_thread_.joinable()) servo_keepalive_thread_.join();
+  feedback_at_[board] = std::chrono::steady_clock::now();
+  ++feedback_sequence_[board];
 }
 
-// 按配置周期发送缓存的六路 PWM；上游计算超过期限则发中性值，不能无限续期旧目标。
-void RobotSerialSystem::servo_keepalive_loop()
+// 回调和通信线程只发出停止请求；每个线程负责本板最终安全输出，绝不 join 自己。
+void RobotSerialSystem::report_async_fault(const std::string & reason)
 {
-  auto next = std::chrono::steady_clock::now();
-  while (true) {
-    std::array<int, 6> command_pwm;
-    {
-      std::unique_lock<std::mutex> lock(servo_command_mutex_);
-      if (servo_command_cv_.wait_until(lock, next, [this] {return !servo_keepalive_running_;})) {
-        return;
-      }
-      if (!servo_keepalive_running_) return;
-      command_pwm = servo_command_pwm_;
-      if (std::chrono::steady_clock::now() - last_servo_command_ >
-        std::chrono::milliseconds(servo_command_timeout_ms_))
-      {
-        command_pwm.fill(kServoNeutral);
-      }
-    }
-    {
-      std::lock_guard<std::mutex> lock(encoder_motion_mutex_);
-      if (std::chrono::steady_clock::now() - last_heartbeat_ >
-        std::chrono::milliseconds(command_timeout_ms_))
-      {
-        command_pwm.fill(kServoNeutral);
-      }
-    }
-    std::ostringstream command;
-    command << "U ";
-    for (const int pwm : command_pwm) command << pwm << ' ';
-    command << '\n';
-    std::string response;
-    if (!se2_ || !se2_->transact(command.str(), response)) {
-      servo_keepalive_failed_.store(true);
-      return;
-    }
-    next += std::chrono::milliseconds(servo_keepalive_period_ms_);
-    const auto now = std::chrono::steady_clock::now();
-    if (next < now) next = now + std::chrono::milliseconds(servo_keepalive_period_ms_);
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    if (!async_fault_.exchange(true)) fault_ = reason;
   }
+  outputs_enabled_ = false;
+  manual_recovery_required_ = true;
+  for (auto & worker : board_workers_) worker.request_stop();
+}
+
+void RobotSerialSystem::stop_board_workers()
+{
+  for (auto & worker : board_workers_) worker.request_stop();
+  for (auto & worker : board_workers_) worker.stop();
+  async_active_ = false;
+}
+
+// 激活/人工恢复只从实测位置启动，普通目标缓存为空，不续发上次运动。
+void RobotSerialSystem::start_board_workers()
+{
+  stop_board_workers();
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    latest_position_ = io_state_position_;
+    latest_velocity_.assign(latest_velocity_.size(), 0.0);
+    latest_command_at_ = std::chrono::steady_clock::now();
+    ++command_sequence_;
+  }
+  rearm_commands_ = true;
+  last_leg_target_valid_ = false;
+  leg_timeout_hold_ = false;
+  last_u_sent_ = {};
+  async_fault_ = false;
+  async_active_ = true;
+  next_servo_feedback_ = last_servo_tick_ = std::chrono::steady_clock::now();
+  const std::array<double, 3> rates = {
+    leg_io_rate_, wheel_io_rate_, 1000.0 / servo_keepalive_period_ms_};
+  for (std::size_t board = 0; board < 3; ++board) {
+    board_workers_[board].start(rates[board], [this, board] {return board_cycle(board);},
+      [this, board] {
+        // 不操作其他板的串口，退出时仍保持唯一所有者。
+        bool ok = true;
+        if (board == 0 && dmc0_) {
+          bool fresh;
+          {
+            std::lock_guard<std::mutex> lock(cache_mutex_);
+            fresh = std::chrono::steady_clock::now()-feedback_at_[0] <=
+              std::chrono::milliseconds(feedback_timeout_ms_);
+          }
+          if (fresh) {
+            for (const auto & name : kLegJoints) {
+              io_command_position_[joint(name)] = io_state_position_[joint(name)];
+            }
+            ok = write_legs(true);
+          }
+        }
+        if (board == 1) ok = stop_encoder_motion();
+        if (board == 2 && se2_) {
+          std::string response;
+          ok = se2_->transact("U 1500 1500 1500 1500 1500 1500 \n", response);
+        }
+        if (!ok) report_async_fault("控制板停止输出确认失败");
+      });
+  }
+}
+
+// 每块板的读、写、动作服务都在同一个线程内；缓存锁不跨串口事务。
+bool RobotSerialSystem::board_cycle(std::size_t board)
+{
+  if (async_fault_ || !outputs_enabled_) return false;
+  const auto began = std::chrono::steady_clock::now();
+  std::chrono::steady_clock::time_point received;
+  uint64_t sequence;
+  const auto refresh_target = [&] {
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    received = latest_command_at_;
+    sequence = command_sequence_;
+    const auto copy = [&](const auto & names) {
+        for (const auto & name : names) {
+          const auto i = joint(name);
+          io_command_position_[i] = latest_position_[i];
+          io_command_velocity_[i] = latest_velocity_[i];
+        }
+      };
+    if (board == 0) copy(kLegJoints);
+    if (board == 1) copy(kWheelJoints);
+    if (board == 2) {copy(kHeadJoints); copy(kSteerJoints);}
+  };
+  refresh_target();
+  const auto expired = [&] {return std::chrono::steady_clock::now()-received >
+      std::chrono::milliseconds(command_timeout_ms_);};
+  bool ok = true;
+  bool output_sent = true;
+  if (board == 0) {
+    output_sent = false;
+    ok = read_legs();
+    if (ok) {
+      cache_feedback(board);
+      refresh_target();
+      if (expired()) {
+        for (const auto & name : kLegJoints) io_command_position_[joint(name)] = io_state_position_[joint(name)];
+        // 超时只提交一次实测保持，后续查询不能持续追逐反馈微动。
+        if (!leg_timeout_hold_ && !async_fault_ && outputs_enabled_) {
+          ok = write_legs(true, &output_sent);
+          if (ok) leg_timeout_hold_ = true;
+        }
+      } else {
+        leg_timeout_hold_ = false;
+        if (!async_fault_ && outputs_enabled_) ok = write_legs(false, &output_sent);
+      }
+    }
+  } else if (board == 1) {
+    ok = read_wheels();
+    if (ok) {
+      cache_feedback(board);
+      refresh_target();
+      bool stop = expired() || began-heartbeat_time() > std::chrono::milliseconds(command_timeout_ms_);
+      {
+        std::lock_guard<std::mutex> lock(encoder_motion_mutex_);
+        stop = stop || (encoder_motion_active_ && (!wheel_motion_lease_active_ ||
+          began-last_wheel_motion_lease_ > std::chrono::milliseconds(command_timeout_ms_)));
+      }
+      if (stop || async_fault_) ok = stop_encoder_motion();
+      else ok = write_wheels();
+    }
+  } else {
+    // 先刷新 U，f 查询结束后立即补发；f 不能与 U 竞争串口。
+    const auto send = [&](bool recompute) {
+        refresh_target();
+        if (std::chrono::steady_clock::now()-received > std::chrono::milliseconds(servo_command_timeout_ms_) || !outputs_enabled_ || began-heartbeat_time() > std::chrono::milliseconds(command_timeout_ms_) || async_fault_) {
+          std::string response;
+          return se2_->transact("U 1500 1500 1500 1500 1500 1500 \n", response);
+        }
+        if (recompute) {
+          const auto now = std::chrono::steady_clock::now();
+          const double dt = std::chrono::duration<double>(now-last_servo_tick_).count();
+          if (!write_servos(std::clamp(dt, 0.001, 0.1))) return false;
+          last_servo_tick_ = now;
+        }
+        std::ostringstream command;
+        command << "U ";
+        for (const int pwm : servo_command_pwm_) command << pwm << ' ';
+        command << '\n';
+        std::string response;
+        return se2_->transact(command.str(), response);
+      };
+    ok = send(false);
+    if (ok && began >= next_servo_feedback_) {
+      ok = read_servos_and_sonar(1.0 / servo_feedback_rate_);
+      if (ok) {cache_feedback(board); ok = send(true);}
+      const auto interval = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::chrono::duration<double>(1.0 / servo_feedback_rate_));
+      next_servo_feedback_ += interval;
+      if (next_servo_feedback_ < std::chrono::steady_clock::now()) {
+        next_servo_feedback_ = std::chrono::steady_clock::now() + interval;
+      }
+    }
+  }
+  const auto finished = std::chrono::steady_clock::now();
+  const double elapsed = std::chrono::duration<double, std::milli>(finished-began).count();
+  const double period_ms = board == 0 ? 1000.0 / leg_io_rate_ :
+    board == 1 ? 1000.0 / wheel_io_rate_ : servo_keepalive_period_ms_;
+  cycle_timing_[board].add(elapsed, !ok);
+  if (elapsed > period_ms) ++overruns_[board];
+  if (!ok) {report_async_fault("控制板查询或下发失败：" + std::to_string(board)); return false;}
+  if (output_sent) {
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    sent_at_[board] = finished;
+    sent_sequence_[board] = sequence;
+  }
+  return !async_fault_;
 }
 
 // on_deactivate 和 latch_fault 调用；先停止 DMC1 定距/轮速，再给 SE2 六路发 1500 中性 PWM。
@@ -1165,11 +1393,19 @@ bool RobotSerialSystem::stop_outputs()
 // 撤销动作租约、清零 ROS 轮速目标，并逐轴发送 D 零占空比，防止 T 在服务结束后继续运动。
 bool RobotSerialSystem::stop_encoder_motion()
 {
+  if (async_active_ && !board_workers_[1].owns_thread()) {
+    auto future = board_workers_[1].submit([this] {return stop_encoder_motion();}, true);
+    if (future.wait_for(std::chrono::milliseconds(serial_timeout_ms_ * 8)) != std::future_status::ready) {
+      report_async_fault("轮板停车确认超时");
+      return false;
+    }
+    return future.get();
+  }
   std::lock_guard<std::mutex> lock(encoder_motion_mutex_);
   // 与 T 提交互斥；先逐轴停车，再释放软件的 T 运行状态。
   encoder_motion_cancelled_ = true;
   wheel_motion_lease_active_ = false;
-  for (const auto & name : kWheelJoints) command_velocity_[joint(name)] = 0.0;
+  for (const auto & name : kWheelJoints) io_command_velocity_[joint(name)] = 0.0;
   const bool stopped = stop_wheel_axes(dmc1_.get(), command_timeout_ms_);
   encoder_motion_active_ = false;
   return stopped;
@@ -1179,48 +1415,67 @@ bool RobotSerialSystem::stop_encoder_motion()
 // 错误保持锁定，只有显式调用 /hardware/recover 且重新发现三块板成功才恢复。
 void RobotSerialSystem::latch_fault(const std::string & reason)
 {
-  stop_servo_keepalive();
-  fault_ = reason;
+  if (async_active_) {report_async_fault(reason); return;}
+  stop_board_workers();
+  {std::lock_guard<std::mutex> lock(cache_mutex_); fault_ = reason;}
   outputs_enabled_ = false;
   manual_recovery_required_ = true;
   (void)stop_outputs();
   // write 故障后 controller_manager 可能立刻停用 read；立即发布锁定原因供网页保留。
-  if (state_pub_) publish_telemetry(get_node()->now());
+  // 独立状态定时器继续发布故障，read 已停用也不会丢失锁定原因。
   RCLCPP_ERROR(rclcpp::get_logger("RobotSerialSystem"), "%s；已锁定，需调用 /hardware/recover", reason.c_str());
 }
 
-// read 每周期调用，包含读失败路径；发布 /hardware/chassis_state、有效的 /ultrasonic/*
+// 独立 ROS 定时器调用，控制周期不等待发布；发布 /hardware/chassis_state、有效的 /ultrasonic/*
 // 和 /diagnostics。无效测距不发布，供下游按最后一次有效测距的超时判断数据缺失。
 void RobotSerialSystem::publish_telemetry(const rclcpp::Time & stamp)
 {
+  std::array<double, 4> wheel_current, leg_current;
+  std::array<double, 8> sonar;
+  std::array<bool, 8> sonar_valid;
+  std::array<std::chrono::steady_clock::time_point, 3> feedback, sent;
+  std::array<uint64_t, 3> feedback_seq, sent_seq;
+  std::string fault;
+  {
+    std::lock_guard<std::mutex> lock(cache_mutex_);
+    wheel_current = wheel_current_; leg_current = leg_current_;
+    sonar = sonar_m_; sonar_valid = sonar_valid_;
+    feedback = feedback_at_; sent = sent_at_;
+    feedback_seq = feedback_sequence_; sent_seq = sent_sequence_;
+    fault = fault_;
+  }
   robot_interfaces::msg::ChassisState state;
   state.header.stamp = stamp;
   state.header.frame_id = "base_link";
-  state.dmc0_connected = static_cast<bool>(dmc0_);
-  state.dmc1_connected = static_cast<bool>(dmc1_);
-  state.se2_connected = static_cast<bool>(se2_);
+  state.dmc0_connected = connected_[0];
+  state.dmc1_connected = connected_[1];
+  state.se2_connected = connected_[2];
   state.outputs_enabled = outputs_enabled_;
-  state.watchdog_ok = std::chrono::steady_clock::now() - last_heartbeat_ <=
+  state.watchdog_ok = std::chrono::steady_clock::now() - heartbeat_time() <=
     std::chrono::milliseconds(command_timeout_ms_);
   state.manual_recovery_required = manual_recovery_required_;
-  state.fault = fault_;
-  state.wheel_current_ma = wheel_current_;
-  state.leg_current_ma = leg_current_;
+  state.fault = fault;
+  state.wheel_current_ma = wheel_current;
+  state.leg_current_ma = leg_current;
   state_pub_->publish(state);
 
   for (std::size_t index = 0; index < sonar_pubs_.size(); ++index) {
     // SE2 偶发返回 0 时丢弃该帧；持续无回波则让安全层和 Scan 转换器自然超时。
-    if (!outputs_enabled_ || !sonar_valid_[index]) continue;
+    if (!outputs_enabled_ || !sonar_valid[index] || feedback_seq[2] == last_sonar_published_sequence_) continue;
     sensor_msgs::msg::Range range;
-    range.header.stamp = stamp;
+    const auto age = std::chrono::steady_clock::now()-feedback[2];
+    range.header.stamp = rclcpp::Time(stamp) - rclcpp::Duration(
+      std::chrono::duration_cast<std::chrono::nanoseconds>(age));
     range.header.frame_id = kSonarFrames[index];
     range.radiation_type = sensor_msgs::msg::Range::ULTRASOUND;
     range.field_of_view = 30.0 * kDegToRad;
     range.min_range = sonar_min_valid_mm_ / 1000.0;
     range.max_range = sonar_max_valid_mm_ / 1000.0;
-    range.range = sonar_m_[index];
+    range.range = sonar[index];
     sonar_pubs_[index]->publish(range);
   }
+
+  last_sonar_published_sequence_ = feedback_seq[2];
 
   diagnostic_msgs::msg::DiagnosticArray diagnostics;
   diagnostics.header.stamp = stamp;
@@ -1228,11 +1483,50 @@ void RobotSerialSystem::publish_telemetry(const rclcpp::Time & stamp)
   item.name = "robot_hardware/serial_boards";
   item.hardware_id = "DMC0+DMC1+SE2";
   item.level = !outputs_enabled_ ? diagnostic_msgs::msg::DiagnosticStatus::ERROR :
-    (fault_.empty() ? diagnostic_msgs::msg::DiagnosticStatus::OK :
+    (fault.empty() ? diagnostic_msgs::msg::DiagnosticStatus::OK :
     diagnostic_msgs::msg::DiagnosticStatus::WARN);
-  item.message = fault_.empty() ? "三块控制板正常" : fault_;
+  item.message = fault.empty() ? "三块控制板正常" : fault;
   diagnostics.status.push_back(item);
+  const std::array<std::string, 3> names = {"DMC0", "DMC1", "SE2"};
+  const auto now = std::chrono::steady_clock::now();
+  for (std::size_t board = 0; board < 3; ++board) {
+    diagnostic_msgs::msg::DiagnosticStatus timing;
+    timing.name = "robot_hardware/timing/" + names[board];
+    timing.hardware_id = names[board];
+    const auto age = std::chrono::duration<double, std::milli>(now-feedback[board]).count();
+    timing.level = age > feedback_timeout_ms_ ? timing.ERROR : timing.OK;
+    timing.message = timing.level == timing.OK ? "真实反馈有效" : "真实反馈过期";
+    const auto add = [&](const std::string & key, auto value) {
+        diagnostic_msgs::msg::KeyValue entry;
+        entry.key = key; entry.value = std::to_string(value); timing.values.push_back(entry);
+      };
+    add("feedback_age_ms", age);
+    add("command_sent_age_ms", sent[board].time_since_epoch().count() == 0 ? -1.0 :
+      std::chrono::duration<double, std::milli>(now-sent[board]).count());
+    add("feedback_sequence", feedback_seq[board]); add("sent_sequence", sent_seq[board]);
+    add("cycle_overruns", overruns_[board].load());
+    add("serial_trace_dropped", trace_dropped_.load());
+    if (board == 2) {
+      const auto gap = servo_gap_timing_.summary();
+      add("u_gap_p99_ms", gap.p99); add("u_gap_max_ms", gap.maximum);
+      add("watchdog_overruns", servo_watchdog_overruns_.load());
+    }
+    for (bool cycle : {false, true}) {
+      const auto stats = cycle ? cycle_timing_[board].summary() : transaction_timing_[board].summary();
+      const std::string prefix = cycle ? "cycle_" : "transaction_";
+      add(prefix+"p50_ms", stats.p50); add(prefix+"p95_ms", stats.p95);
+      add(prefix+"p99_ms", stats.p99); add(prefix+"max_ms", stats.maximum);
+      add(prefix+"count", stats.count); add(prefix+"failures", stats.failures);
+    }
+    diagnostics.status.push_back(timing);
+  }
   diagnostics_pub_->publish(diagnostics);
+  std::deque<robot_interfaces::msg::SerialCommand> traces;
+  {
+    std::lock_guard<std::mutex> lock(trace_mutex_);
+    traces.swap(trace_queue_);
+  }
+  for (const auto & trace : traces) serial_tx_pub_->publish(trace);
 }
 
 // write_servos 对每个 SE2 通道调用；根据目标角和最近一次 f 反馈计算板端 PWM。

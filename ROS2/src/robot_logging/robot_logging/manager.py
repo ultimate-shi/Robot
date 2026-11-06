@@ -1,4 +1,4 @@
-"""使用方法：ros2 run robot_logging log_manager --ros-args -p config_file:=... -p mode:=real。"""
+"""作用：按独立话题白名单录制日常与异常 MCAP；使用方法：ros2 run robot_logging log_manager --ros-args -p config_file:=... -p mode:=real。"""
 
 import os
 import signal
@@ -14,6 +14,7 @@ from robot_logging.storage import (
     directory_bytes, ensure_layout, finish_session, load_config,
     new_session, prune, recover_abandoned, space_ok,
 )
+from robot_logging.topic_policy import TopicPolicy
 
 
 class LogManager(Node):
@@ -25,6 +26,8 @@ class LogManager(Node):
         self.declare_parameter('mcap_config_file', '')
         self.declare_parameter('mode', 'virtual')
         self.config = load_config(self.get_parameter('config_file').value)
+        self.recording_policy = (TopicPolicy(self.config['recording_topics_file'])
+                                 if 'recording_topics_file' in self.config else None)
         if self.config.get('require_mount', False) and not os.path.ismount(self.config['root']):
             raise RuntimeError(f"日志目录没有挂载到容器：{self.config['root']}")
         self.mcap_config = str(self.get_parameter('mcap_config_file').value)
@@ -49,7 +52,7 @@ class LogManager(Node):
     def _command(self, path, full):
         config = self.config
         command = [
-            'ros2', 'bag', 'record', '-s', 'mcap', '--all',
+            'ros2', 'bag', 'record', '-s', 'mcap',
             '-o', str(path / 'bag'),
             '--storage-config-file', self.mcap_config,
             '--max-bag-size', str(config['segment_bytes']),
@@ -57,7 +60,15 @@ class LogManager(Node):
             '--disable-keyboard-controls',
             '--include-hidden-topics',
         ]
-        if not full:
+        if self.recording_policy is not None:
+            if full and self.recording_policy.config.get('incident_record_all', True):
+                command += ['--all']
+            else:
+                command += ['--regex', self.recording_policy.regex]
+        else:
+            command += ['--all']
+        if not full and self.recording_policy is None:
+            # 兼容仍在使用旧外部参数文件的启动方式。
             command += ['--exclude-topic-types', *config['routine_excluded_types']]
             if config['routine_excluded_regex']:
                 command += ['--exclude-regex', config['routine_excluded_regex']]
@@ -66,7 +77,7 @@ class LogManager(Node):
     def _start(self, kind, reason=''):
         reserve = (int(self.config['incident_max_bytes']) if kind == 'incidents'
                    else int(self.config['segment_bytes']))
-        prune(self.config, self._active_paths())
+        prune(self.config, self._active_paths(), required_bytes=reserve)
         if not space_ok(self.config, reserve):
             self.get_logger().error('日志磁盘配额或系统空闲空间不足，拒绝启动录制')
             return False

@@ -1,0 +1,68 @@
+# 作用：Astra Pro 原生彩色/深度与 C++ RGB-D 配准处理参数；用法：astra_camera.launch.py，设备内参/外参由驱动读取。
+/astra/camera:
+  ros__parameters:
+    camera_name: astra
+    camera_link_frame_id: astra_link
+    color_frame_id: astra_color_frame
+    color_optical_frame_id: astra_color_optical_frame
+    depth_frame_id: astra_depth_frame
+    depth_optical_frame_id: astra_depth_optical_frame
+    ir_frame_id: astra_ir_frame
+    ir_optical_frame_id: astra_ir_optical_frame
+    use_uvc_camera: true
+    uvc_vendor_id: 11205  # 0x2bc5，实机 Astra Pro HD Camera
+    uvc_product_id: 1281  # 0x0501
+    uvc_camera_format: mjpeg
+    color_width: 640
+    color_height: 480
+    color_fps: 30
+    depth_width: 640
+    depth_height: 480
+    depth_fps: 30
+    enable_color: true
+    enable_depth: true
+    enable_ir: false
+    enable_point_cloud: false  # 统一从已配准且限速的 RGB-D 生成点云
+    enable_colored_point_cloud: false
+    depth_registration: false  # 原生深度保留真实内参；由标准 C++ 节点按工厂 TF 软件配准
+    color_depth_synchronization: false  # UVC 彩色不假定硬同步，后级显式限制时间差
+    publish_tf: true
+    tf_publish_rate: 0.0
+    oni_log_level: error
+    oni_log_to_console: false
+    oni_log_to_file: false
+    depth_scale: 1
+rgbd_sync:
+  ros__parameters:
+    approx_sync: true
+    approx_sync_max_interval: 0.05
+    topic_queue_size: 2
+    sync_queue_size: 5
+    qos: 1
+    qos_camera_info: 1
+rgbd_throttle_cpp:
+  ros__parameters:
+    max_rate: 8.0
+    max_age: 1.5
+    max_rgb_depth_skew: 0.05
+    min_depth: 0.6
+    max_depth: 4.0
+astra_cloud:
+  ros__parameters:
+    approx_sync: true
+    approx_sync_max_interval: 0.05
+    topic_queue_size: 2
+    sync_queue_size: 5
+    qos: 1
+    decimation: 2
+    min_depth: 0.6
+    max_depth: 4.0
+    voxel_size: 0.0
+depth_rectify:
+  ros__parameters:
+    interpolation: 0  # 深度最近邻，避免物体边缘插值出虚假距离
+depth_register:
+  ros__parameters:
+    queue_size: 5
+    fill_upsampling_holes: false
+    use_rgb_timestamp: false

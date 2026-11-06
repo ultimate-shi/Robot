@@ -5,8 +5,11 @@ from http.client import HTTPConnection, HTTPException
 import json
 from pathlib import Path
 import socket
+from urllib.parse import urlsplit
+from websockets.legacy.client import unix_connect
+from websockets.exceptions import WebSocketException
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, RedirectResponse, Response
 import uvicorn
 
@@ -94,6 +97,41 @@ def create_app(config_file=None):
     @app.get('/robot')
     async def robot_redirect():
         return RedirectResponse('/robot/')
+
+    @app.websocket('/robot/api/drive-stream')
+    async def drive_stream(websocket: WebSocket):
+        """9100 同源驾驶流独立转发，地图、图像与日志 HTTP 请求不占此连接。"""
+        origin = websocket.headers.get('origin')
+        if origin and urlsplit(origin).netloc != websocket.headers.get('host'):
+            await websocket.close(code=1008)
+            return
+        await websocket.accept()
+        tasks = []
+        try:
+            async with unix_connect(
+                    str(config['console_socket']), uri='ws://localhost/api/drive-stream',
+                    open_timeout=config['console_request_timeout_seconds'],
+                    close_timeout=config['health_timeout_seconds'], ping_interval=None,
+                    max_size=8192) as upstream:
+                async def receive_browser():
+                    while True:
+                        await upstream.send(await websocket.receive_text())
+                async def receive_robot():
+                    async for message in upstream:
+                        await websocket.send_text(message)
+                tasks = [asyncio.create_task(receive_browser()), asyncio.create_task(receive_robot())]
+                await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+        except (OSError, TimeoutError, WebSocketDisconnect, WebSocketException):
+            pass
+        finally:
+            for task in tasks:
+                task.cancel()
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                await websocket.close()
+            except RuntimeError:
+                pass
 
     @app.api_route('/robot/{path:path}', methods=['GET', 'POST'])
     async def robot_console(path: str, request: Request):

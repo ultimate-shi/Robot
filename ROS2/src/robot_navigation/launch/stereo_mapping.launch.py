@@ -1,4 +1,4 @@
-"""使用方法：ros2 launch robot_navigation stereo_mapping.launch.py 组合真实双目在线建图链。"""
+"""作用：组合真实双目建图及异常恢复；使用方法：stereo_mapping.launch.py，mapping_database_path 指定持久库。"""
 
 import os
 
@@ -88,6 +88,8 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'preview_directory', default_value='/tmp/robot_preview',
             description='临时地图快照的保存目录'),
+        DeclareLaunchArgument('mapping_database_path', default_value='/workspace/mapping/rtabmap.db',
+            description='持久建图数据库，默认保留原库，新建地图请换文件名'),
         DeclareLaunchArgument(
             'save_directory', default_value='/workspace/maps',
             description='长期地图快照的根保存目录'),
@@ -158,10 +160,14 @@ def generate_launch_description():
             }.items()),
         scoped_include(
             source('robot_navigation', 'rtabmap_mapping.launch.py'),
-            launch_arguments={'log_level': log_level}.items()),
+            launch_arguments={'log_level': log_level,
+                              'database_path': LaunchConfiguration('mapping_database_path'),
+                              'save_directory': LaunchConfiguration('save_directory'),
+                              'preview_directory': LaunchConfiguration('preview_directory')}.items()),
         scoped_include(
             source('robot_navigation', 'mapping_snapshot.launch.py'),
             launch_arguments={
+                'database_path': LaunchConfiguration('mapping_database_path'),
                 'preview_directory': LaunchConfiguration('preview_directory'),
                 'save_directory': LaunchConfiguration('save_directory'),
                 'log_level': log_level,

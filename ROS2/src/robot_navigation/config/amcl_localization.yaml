@@ -1,0 +1,31 @@
+# 作用：双目/深度虚拟扫描 AMCL 配置；使用方法：map_localization.launch.py，统一融合节点独占地图 TF。
+amcl:
+  ros__parameters:
+    use_sim_time: false
+    global_frame_id: map
+    odom_frame_id: odom
+    base_frame_id: base_link
+    scan_topic: /localization/scan
+    tf_broadcast: false
+    robot_model_type: nav2_amcl::OmniMotionModel
+    min_particles: 500
+    max_particles: 1500
+    laser_model_type: likelihood_field
+    laser_max_range: 4.0
+    laser_min_range: 0.25
+    max_beams: 60
+    laser_likelihood_max_dist: 2.0
+    sigma_hit: 0.20
+    z_hit: 0.95
+    z_rand: 0.05
+    alpha1: 0.2
+    alpha2: 0.2
+    alpha3: 0.2
+    alpha4: 0.2
+    alpha5: 0.2
+    update_min_d: 0.01
+    update_min_a: 0.02
+    transform_tolerance: 0.1
+    resample_interval: 1
+    set_initial_pose: false  # 人工初始估计或视觉确认后播种，不能以固定原点假装定位成功
+    always_reset_initial_pose: true

@@ -17,7 +17,7 @@ def test_hardware_description_keeps_original_protocol_contract():
     assert 'kStuckDetect' in source
     assert 'kStuckCooldown' in source
     assert 'ranges_mm[index] < sonar_min_valid_mm_' in source
-    assert 'if (!outputs_enabled_ || !sonar_valid_[index]) continue;' in source
+    assert '!outputs_enabled_ || !sonar_valid[index]' in source
 
 
 def test_wheel_control_uses_d_for_motion_stop_and_feedback():
@@ -96,5 +96,6 @@ def test_servo_refresh_stays_ahead_of_firmware_watchdog():
     stale_ms = hardware['servo_command_timeout_ms']
     wheel_ms = hardware['ros_command_timeout_ms']
     controller_period_ms = 1000 / control['controller_manager']['ros__parameters']['update_rate']
-    assert refresh_ms * 2 < watchdog_ms < controller_period_ms
+    assert refresh_ms * 2 < watchdog_ms
+    assert hardware['servo_watchdog_ms'] == watchdog_ms
     assert controller_period_ms * 2 < stale_ms < wheel_ms

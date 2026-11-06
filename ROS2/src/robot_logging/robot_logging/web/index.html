@@ -1,4 +1,4 @@
-<!-- 使用方法：启动 9100 网页入口后访问 http://127.0.0.1:9100/log/ 查询历史 MCAP 日志。 -->
+<!-- 作用：查询精简历史事件与下载原始 MCAP；使用方法：启动 9100 网页入口后访问 http://127.0.0.1:9100/log/ 查询历史 MCAP 日志。 -->
 <!doctype html>
 <html lang="zh-CN">
 <head>
@@ -44,7 +44,7 @@
   </style>
 </head>
 <body>
-  <header><h1>机器人日志</h1><p>查询已完成的录制；大消息请下载 MCAP，在 Foxglove 中回放。</p></header>
+  <header><h1>机器人日志</h1><p>查询已关闭分片中的关键事件；连续传感器数据保留在 MCAP，状态可能经去重或采样。</p></header>
   <main>
     <section class="panel filter-panel">
       <form id="filters">

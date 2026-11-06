@@ -1,4 +1,4 @@
-# 使用方法：执行 bash scripts/docker/build_jazzy_image.sh 构建 RK3588 的 ROS 2 Jazzy 环境。
+# 作用：提供 RK3588 的 ROS 2 Jazzy 感知、定位和导航环境；使用方法：执行 bash scripts/docker/build_jazzy_image.sh 构建。
 FROM ros:jazzy-ros-base-noble
 
 # Debian 12 ARM64 主机通过 Ubuntu 24.04 容器使用官方 Jazzy 二进制包。
@@ -26,6 +26,7 @@ RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" \
         python3-serial \
         python3-scipy \
         python3-yaml \
+        python3-websockets \
         ros-jazzy-controller-manager \
         ros-jazzy-camera-calibration \
         ros-jazzy-camera-info-manager \
@@ -33,12 +34,14 @@ RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" \
         ros-jazzy-cv-bridge \
         ros-jazzy-foxglove-bridge \
         ros-jazzy-image-proc \
+        ros-jazzy-depth-image-proc \
         ros-jazzy-image-transport \
         ros-jazzy-image-view \
         ros-jazzy-imu-filter-madgwick \
         ros-jazzy-joint-state-broadcaster \
         ros-jazzy-joint-state-publisher \
         ros-jazzy-nav2-behaviors \
+        ros-jazzy-nav2-amcl \
         ros-jazzy-nav2-bt-navigator \
         ros-jazzy-nav2-collision-monitor \
         ros-jazzy-nav2-controller \
@@ -59,6 +62,7 @@ RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" \
         ros-jazzy-rtabmap-odom \
         ros-jazzy-rtabmap-slam \
         ros-jazzy-rtabmap-util \
+        ros-jazzy-rtabmap-sync \
         ros-jazzy-ros2controlcli \
         ros-jazzy-stereo-image-proc \
         ros-jazzy-usb-cam \
@@ -71,3 +75,7 @@ RUN sed -i "s|http://ports.ubuntu.com/ubuntu-ports|${UBUNTU_MIRROR}|g" \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
+COPY scripts/docker/install_astra_driver.sh /tmp/install_astra_driver.sh
+RUN bash /tmp/install_astra_driver.sh && rm /tmp/install_astra_driver.sh
+COPY scripts/docker/robot_entrypoint.sh /robot_entrypoint.sh
+ENTRYPOINT ["bash", "/robot_entrypoint.sh"]

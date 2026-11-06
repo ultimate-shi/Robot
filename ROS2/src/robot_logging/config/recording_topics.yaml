@@ -1,0 +1,103 @@
+# 作用：决定日常 MCAP 录制话题；使用方法：修改 enabled 后重启录制器，regex 按完整话题名匹配。
+# 三类均可逐项启用；未列出或未启用的话题不进入日常录制。异常录制默认也使用同一白名单；专项采集原始图像时可将 incident_record_all 设为 true，注意带宽和处理负载。
+incident_record_all: false
+categories:
+  常用:
+  - topic: /web_console/navigation_status
+    enabled: true
+    description: 网页导航目标、取消、恢复次数和失败原因事件
+  - topic: /rosout
+    enabled: true
+    description: ROS 输出，保留导航与硬件的原始错误
+  - regex: /tf(_static)?
+    enabled: true
+    description: 地图、里程计和底盘坐标变换
+  - regex: /(odom|wheel/odom|visual_odom)
+    enabled: true
+    description: 融合、轮侧及视觉里程计，检查漂移和断流
+  - topic: /joint_states
+    enabled: true
+    description: 实测轮速与转向反馈
+  - topic: /sensors/imu/data
+    enabled: true
+    description: 最终 IMU 姿态和角速度
+  - topic: /hardware/chassis_state
+    enabled: true
+    description: 控制板连接、输出锁定、故障及电流
+  - topic: /diagnostics
+    enabled: true
+    description: EKF 与硬件诊断
+  - regex: /cmd_vel_(nav_raw|nav_smoothed|nav|console|nav_safe|safe)
+    enabled: true
+    description: 速度指令从 Nav2 到最终底盘的完整过滤链
+  - regex: /localization/(status|ready)
+    enabled: true
+    description: 定位状态、失效原因和导航许可
+  - topic: /rtabmap/localization_pose
+    enabled: true
+    description: 成功视觉地图匹配及协方差
+  - topic: /info
+    enabled: true
+    description: RTAB-Map 帧处理、地图匹配诊断
+  - topic: /nav_controller/status
+    enabled: true
+    description: Nav2 速度门控状态
+  - topic: /obstacle_avoidance/status
+    enabled: true
+    description: 避障触发原因及测距
+  - regex: /ultrasonic/(front_left|front_center|front_right|rear_left|rear_center|rear_right|left|right)
+    enabled: true
+    description: 八路原始测距，排查安全拦截
+  - regex: /mission/(status|state|navigation_goal|preview_goal)
+    enabled: true
+    description: 任务状态及目标
+  - topic: /mapping/map_server_recovery/status
+    enabled: true
+    description: 静态地图生命周期恢复
+  - topic: /web_console/stop_latched
+    enabled: true
+    description: 软件停止锁
+  - topic: /wheel_motion/active
+    enabled: true
+    description: 定距运动租约
+  - regex: /(navigate_to_pose|navigate_through_poses|compute_path_to_pose|follow_path|spin|backup|wait|execute_wheel_motion)/_action/(status|feedback)
+    enabled: true
+    description: 导航及底盘动作状态与反馈，包括隐藏话题
+  - regex: /.*/_service_event
+    enabled: true
+    description: 已启用服务 introspection 时记录请求和结果
+  按需:
+  - topic: /scan
+    enabled: false
+    description: 激光扫描/超声波融合扫描，障碍几何专项排查
+  - regex: /(plan|local_plan|mission/preview_path)
+    enabled: false
+    description: 全局与局部路径，规划专项排查
+  - topic: /hardware/serial_tx
+    enabled: false
+    description: 串口逐条命令，控制板协议专项排查
+  - regex: /sensors/imu/(raw_unfiltered|data_raw|vendor_data|vendor_rpy|mag_raw_counts)
+    enabled: false
+    description: IMU 原始及中间数据，校准专项排查
+  - regex: /(wheel_controller|steering_controller|head_controller|lap_.*_position_controller)/commands
+    enabled: false
+    description: 控制器内部命令，执行器专项排查
+  不建议:
+  - topic: /bond
+    enabled: false
+    description: 高频生命周期心跳，日常状态和错误日志已覆盖
+  - regex: /controller_manager/(statistics|introspection_data)/.*
+    enabled: false
+    description: 控制器内部统计数据
+  - regex: /.*(image.*|points.*|cloud.*|disparity.*)
+    enabled: false
+    description: 高带宽视觉原始数据，日常不录制
+  - regex: /.*(costmap|map_updates|mapData|mapGraph|cloud_map).*
+    enabled: false
+    description: 地图、代价地图及图优化原始数据，costmap 拼写已修正
+  - regex: /(odom_sensor_data/(raw|compressed)|odom_rgbd_image|labels)
+    enabled: false
+    description: 含嵌入图像或大数组的 RTAB-Map 中间消息
+  - regex: /.*/transition_event
+    enabled: false
+    description: 控制器反复生命周期消息，通常由 rosout 覆盖

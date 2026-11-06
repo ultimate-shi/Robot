@@ -2,6 +2,12 @@
 hardware:
   device_candidates: [/dev/ttyACM0, /dev/ttyACM1, /dev/ttyACM2, /dev/ttyACM3, /dev/ttyACM4, /dev/ttyACM5, /dev/ttyACM6, /dev/ttyACM7, /dev/ttyACM8]
   baud_rate: 115200
+  telemetry_rate: 10.0  # 独立回调发布状态与诊断，不阻塞控制周期
+  leg_io_rate: 10.0  # DMC0 腿板独立读写频率，单位 Hz；20 Hz 需先验收
+  wheel_io_rate: 6.0  # DMC1 轮板独立读写频率，单位 Hz
+  servo_feedback_rate: 6.0  # SE2 舵机与超声波反馈查询频率，单位 Hz
+  servo_watchdog_ms: 100  # 监测 SE2 现有固件期限，不向固件写入
+  feedback_timeout_ms: 500  # 控制板真实反馈失效期限，单位毫秒
   serial_timeout_ms: 500
   inter_command_delay_ms: 3
   # DMC1 每次读取一个 I 参数后会重新枚举，至少需要四次重连和一次最终连接。
@@ -10,7 +16,7 @@ hardware:
   # 与已验收 hw_ctrl/load_wheel_config() 一致，I4..I7 查询之间给 MCU 留出处理时间。
   encoder_query_delay_ms: 20
   ros_command_timeout_ms: 500
-  servo_keepalive_period_ms: 40  # 独立 SE2 U 刷新周期，须短于固件 100ms 回中期限
+  servo_keepalive_period_ms: 20  # 给查询与调度留余量；固件仍为 100ms，看门狗统计真实发送间隔
   servo_command_timeout_ms: 400  # 上游舵机 PWM 超过此年龄只刷新中性值，单位 ms；早于轮驱动 500ms 看门狗
   # 固件验收目标；当前串口协议没有运行时写入该值的指令。
   required_mcu_watchdog_ms: 300

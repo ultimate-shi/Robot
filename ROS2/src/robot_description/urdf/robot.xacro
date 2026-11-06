@@ -4,6 +4,7 @@
 
   <!-- mode 只决定 ros2_control 插件；模型、关节和控制接口保持完全一致。 -->
   <xacro:arg name="hardware_plugin" default="mock_components/GenericSystem"/>
+  <xacro:arg name="camera_model" default="stereo"/>
   <xacro:arg name="servo_calibration_file" default=""/>
   <xacro:arg name="wheel_calibration_file" default=""/>
   <xacro:arg name="device_candidates" default="/dev/ttyACM0,/dev/ttyACM1,/dev/ttyACM2"/>
@@ -13,7 +14,13 @@
   <xacro:arg name="discovery_retry_delay_ms" default="700"/>
   <xacro:arg name="encoder_query_delay_ms" default="20"/>
   <xacro:arg name="command_timeout_ms" default="500"/>
-  <xacro:arg name="servo_keepalive_period_ms" default="40"/>
+  <xacro:arg name="leg_io_rate" default="10.0"/>
+  <xacro:arg name="wheel_io_rate" default="6.0"/>
+  <xacro:arg name="servo_feedback_rate" default="6.0"/>
+  <xacro:arg name="telemetry_rate" default="10.0"/>
+  <xacro:arg name="servo_watchdog_ms" default="100"/>
+  <xacro:arg name="feedback_timeout_ms" default="500"/>
+  <xacro:arg name="servo_keepalive_period_ms" default="20"/>
   <xacro:arg name="servo_command_timeout_ms" default="400"/>
   <xacro:arg name="wheel_diameter" default="0.110"/>
   <xacro:arg name="sonar_lpf_alpha" default="0.2"/>
@@ -285,10 +292,13 @@
     双目摄像头安装在头部上半部分内部；两个 OBJ 共享局部装配原点，
     相机镜头中心与面罩的左右孔重合。
   -->
-  <xacro:stereo_camera parent_link="head_pitch_link"
+  <xacro:if value="${'$(arg camera_model)' == 'stereo'}">
+    <xacro:stereo_camera parent_link="head_pitch_link"
                        xyz="0 0 0"
                        rpy="0 0 0"
                        baseline="0.061145213"/>
+  </xacro:if>
+  <!-- Astra 的内部光心 TF 由真实驱动发布；头部到机身参考系的连接由实测安装配置提供。 -->
 
   <xacro:hardware hardware_plugin="$(arg hardware_plugin)"
                   servo_calibration_file="$(arg servo_calibration_file)"
@@ -302,6 +312,12 @@
                   command_timeout_ms="$(arg command_timeout_ms)"
                   servo_keepalive_period_ms="$(arg servo_keepalive_period_ms)"
                   servo_command_timeout_ms="$(arg servo_command_timeout_ms)"
+                  leg_io_rate="$(arg leg_io_rate)"
+                  wheel_io_rate="$(arg wheel_io_rate)"
+                  servo_feedback_rate="$(arg servo_feedback_rate)"
+                  feedback_timeout_ms="$(arg feedback_timeout_ms)"
+                  servo_watchdog_ms="$(arg servo_watchdog_ms)"
+                  telemetry_rate="$(arg telemetry_rate)"
                   wheel_diameter="$(arg wheel_diameter)"
                   sonar_lpf_alpha="$(arg sonar_lpf_alpha)"
                   sonar_min_valid_mm="$(arg sonar_min_valid_mm)"

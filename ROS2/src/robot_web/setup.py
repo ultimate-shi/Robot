@@ -16,7 +16,7 @@ setup(
         (os.path.join('share', package_name, 'launch'), glob('launch/*.py')),
         (os.path.join('share', package_name, 'web'), glob('web/*')),
     ],
-    install_requires=['setuptools', 'PyYAML', 'fastapi', 'uvicorn'],
+    install_requires=['setuptools', 'PyYAML', 'fastapi', 'uvicorn', 'websockets>=10.4,<13'],
     zip_safe=False,
     maintainer='shijiahao', maintainer_email='shijiahao@todo.todo',
     description='统一机器人网页、控制台和 API 入口', license='TODO: License declaration',

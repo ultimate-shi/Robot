@@ -1,4 +1,4 @@
-"""使用方法：ros2 launch robot_perception semantic_detection.launch.py 启动语义目标识别与定位。"""
+"""作用：从可配置彩色/对齐深度进行语义定位；用法：semantic_detection.launch.py，整车按相机来源覆盖话题。"""
 
 import os
 
@@ -14,6 +14,9 @@ def generate_launch_description():
         get_package_share_directory('robot_perception'),
         'config', 'semantic_detection.yaml')
     return LaunchDescription([
+        DeclareLaunchArgument('image_topic', default_value='/stereo/right/image_rect', description='已校正彩色图像话题'),
+        DeclareLaunchArgument('depth_topic', default_value='/stereo/depth/right/image', description='已对齐彩色图的深度话题'),
+        DeclareLaunchArgument('camera_info_topic', default_value='/stereo/right/camera_info', description='彩色校正图的内参话题'),
         DeclareLaunchArgument(
             'config_file', default_value=default_config,
             description='语义识别和目标定位参数 YAML 文件路径'),
@@ -39,6 +42,9 @@ def generate_launch_description():
             package='robot_perception', executable='semantic_perception',
             parameters=[LaunchConfiguration('config_file'), {
                 'inference_url': LaunchConfiguration('inference_url'),
+                'image_topic': LaunchConfiguration('image_topic'),
+                'depth_topic': LaunchConfiguration('depth_topic'),
+                'camera_info_topic': LaunchConfiguration('camera_info_topic'),
                 'detection_mode': LaunchConfiguration('detection_mode'),
                 'start_segmentation': LaunchConfiguration('start_segmentation'),
                 'enable_semantic_navigation': LaunchConfiguration(

@@ -1,6 +1,7 @@
 <?xml version="1.0"?>
 <?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
+  <!-- 作用：声明双目和 RGB-D C++ 组件依赖；用法：colcon 构建，由相机 launch 启动。 -->
   <name>robot_stereo_components</name>
   <version>0.0.0</version>
   <description>机器人双目大图高带宽 C++ 处理节点</description>
@@ -12,6 +13,8 @@
   <depend>rclcpp</depend>
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
+  <depend>cv_bridge</depend>
+  <depend>rtabmap_msgs</depend>
 
   <export>
     <build_type>ament_cmake</build_type>

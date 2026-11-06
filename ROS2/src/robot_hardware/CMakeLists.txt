@@ -38,6 +38,13 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_gtest(test_servo_settling test/test_servo_settling.cpp)
   target_include_directories(test_servo_settling PRIVATE include)
+  ament_add_gtest(test_async_serial test/test_async_serial.cpp TIMEOUT 30)
+  target_compile_features(test_async_serial PUBLIC cxx_std_17)
+  target_include_directories(test_async_serial PRIVATE include)
+  ament_target_dependencies(test_async_serial
+    diagnostic_msgs hardware_interface pluginlib rclcpp rclcpp_lifecycle
+    robot_interfaces sensor_msgs std_msgs std_srvs yaml_cpp_vendor)
+  target_link_libraries(test_async_serial yaml-cpp util)
   ament_add_pytest_test(test_protocol test/test_protocol.py)
 endif()
 

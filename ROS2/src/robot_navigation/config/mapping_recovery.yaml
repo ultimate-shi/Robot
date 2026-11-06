@@ -1,0 +1,15 @@
+# 作用：配置异常退出后的离线地图恢复；用法：mapping_recovery.launch.py 或 mapping_recover --config 加载。
+mapping_recovery:
+  ros__parameters:
+    database_path: /workspace/mapping/rtabmap.db  # 持久活跃库；旧现场可显式指定 /tmp/robot_rtabmap_mapping.db
+    save_directory: /workspace/maps
+    preview_directory: /tmp/robot_preview
+    snapshot_timezone: Asia/Shanghai
+    export_executable: rtabmap-export
+    export_timeout: 180.0  # 仅离线导出等待上限；网页总等待应更长
+    minimum_free_bytes: 268435456  # 除完整数据库副本外预留 256 MiB 导出空间
+    export_cloud: false  # 默认先保住二维地图与定位库；可复用匹配缓存点云，缺失时明确标记
+    cloud_decimation: 8  # 显式启用三维重建时，降低深度采样密度
+    cloud_voxel_size: 0.05  # 三维恢复点云体素边长，单位米
+    cloud_pose_radius: 0.2  # 三维重建合并邻近观察位置，单位米
+    cloud_pose_angle: 15.0  # 邻近观察姿态合并阈值，单位度

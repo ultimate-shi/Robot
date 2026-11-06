@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""使用方法：由 state_estimation.launch.py 启动，约束视觉位姿协方差后发布 /visual_odom。"""
+"""作用：拒绝过时/无效视觉并保护协方差；使用方法：由 state_estimation.launch.py 启动，发布 /visual_odom。"""
 
 import math
 
@@ -14,6 +14,24 @@ POSE_VARIANCE_INDICES = {'x': 0, 'y': 7, 'z': 14,
 DEFAULT_VARIANCE_FLOORS = {'x': 0.02, 'y': 0.02, 'z': 0.1,
                            'roll': 0.1, 'pitch': 0.1, 'yaw': 0.03}
 LEGACY_PLANAR_AXES = frozenset(('x', 'y', 'yaw'))
+
+
+def invalid_visual_reason(message, now_ns, max_age, future_tolerance,
+                          quaternion_norm_tolerance=0.01):
+    """检查真实采集时间与有限单位姿态；不把迟到消息重打为当前时间。"""
+    stamp = message.header.stamp
+    stamp_ns = stamp.sec * 1_000_000_000 + stamp.nanosec
+    age = (now_ns - stamp_ns) / 1e9
+    if stamp_ns <= 0 or not -future_tolerance <= age <= max_age:
+        return '视觉时间戳无效、超龄或超前'
+    pose = message.pose.pose
+    q = pose.orientation
+    values = (pose.position.x, pose.position.y, pose.position.z, q.x, q.y, q.z, q.w)
+    if not all(math.isfinite(value) for value in values):
+        return '视觉位姿含非有限数'
+    if abs(sum(value * value for value in (q.x, q.y, q.z, q.w)) - 1.0) > quaternion_norm_tolerance:
+        return '视觉姿态四元数无效'
+    return ''
 
 
 def protect_pose_covariance(covariance, floors, invalid_variance):
@@ -40,6 +58,19 @@ class OdometryCovarianceGuard(Node):
         for axis, default in DEFAULT_VARIANCE_FLOORS.items():
             self.declare_parameter(f'{axis}_variance_floor', default)
         self.declare_parameter('invalid_variance', 1e6)
+        self.declare_parameter('max_message_age', 1.5)
+        self.declare_parameter('future_tolerance', 0.1)
+        self.declare_parameter('quaternion_norm_tolerance', 0.01)
+        self.max_message_age = float(self.get_parameter('max_message_age').value)
+        self.future_tolerance = float(self.get_parameter('future_tolerance').value)
+        self.quaternion_norm_tolerance = float(
+            self.get_parameter('quaternion_norm_tolerance').value)
+        if (not math.isfinite(self.max_message_age) or self.max_message_age <= 0.0 or
+                not math.isfinite(self.future_tolerance) or self.future_tolerance < 0.0):
+            raise ValueError('视觉最大年龄须为有限正数，未来容差须为有限非负数')
+        if (not math.isfinite(self.quaternion_norm_tolerance) or
+                not 0.0 < self.quaternion_norm_tolerance < 1.0):
+            raise ValueError('四元数模平方容差必须在 0 与 1 之间')
         self.variance_floors = {
             axis: float(self.get_parameter(f'{axis}_variance_floor').value)
             for axis in POSE_VARIANCE_INDICES}
@@ -57,6 +88,12 @@ class OdometryCovarianceGuard(Node):
             self._callback, 20)
 
     def _callback(self, message):
+        reason = invalid_visual_reason(
+            message, self.get_clock().now().nanoseconds,
+            self.max_message_age, self.future_tolerance, self.quaternion_norm_tolerance)
+        if reason:
+            self.get_logger().warning(reason, throttle_duration_sec=5.0)
+            return
         invalid_axes = protect_pose_covariance(
             message.pose.covariance, self.variance_floors, self.invalid_variance)
         if invalid_axes:

@@ -80,3 +80,52 @@ def test_near_goal_turn_counts_as_progress_and_failure_explains_heading():
     assert not status.snapshot()['appears_stalled']
     assert status.finish('goal', 6)
     assert '朝向未达标' in status.snapshot()['message']
+
+
+def test_failure_uses_only_current_nav2_errors_and_preserves_action_detail():
+    status = NavigationStatus()
+    status.diagnostic('controller_server', 40, '旧目标错误')
+    status.start('first', {'yaw': 0})
+    status.diagnostic('usb_cam', 40, '不相关错误')
+    status.diagnostic('controller_server', 40, 'Failed to make progress')
+    status.finish('first', 6)
+    assert 'Failed to make progress' in status.snapshot()['message']
+    assert '旧目标' not in status.snapshot()['message']
+    assert '不相关' not in status.snapshot()['message']
+    status.start('second', {'yaw': 0})
+    status.finish('second', 6, 0, '机器人超出地图范围')
+    assert status.snapshot()['message'] == '机器人超出地图范围'
+    status.start('third', {'yaw': 0})
+    status.finish('third', 6)
+    assert '未返回具体错误信息' in status.snapshot()['message']
+
+
+def test_bt_child_timeout_warn_is_reason_for_status_six_and_late_log_updates():
+    clock = Clock()
+    status = NavigationStatus(clock, diagnostic_grace_seconds=2)
+    status.start('goal', {'yaw': 0})
+    status.finish('goal', 6)
+    assert '未返回具体错误信息' in status.snapshot()['message']
+    clock.value += 0.1
+    status.diagnostic('bt_navigator_navigate_to_pose_rclcpp_node', 30,
+                      'Timed out while waiting for action server to acknowledge goal request for compute_path_to_pose')
+    assert '重新规划请求确认超时' in status.snapshot()['message']
+    status.diagnostic('bt_navigator_navigate_to_pose_rclcpp_node', 40,
+                      'Failed to get result for follow_path in node halt!')
+    status.diagnostic('bt_navigator', 40, 'Goal failed')
+    assert '重新规划请求确认超时' in status.snapshot()['message']
+    assert len(status.snapshot()['failure_details']) == 2
+    before = status.snapshot()['message']
+    clock.value += 3
+    status.diagnostic('planner_server', 40, '后来其他任务的错误')
+    assert status.snapshot()['message'] == before
+
+
+def test_old_diagnostics_and_explicit_action_errors_are_not_replaced():
+    status = NavigationStatus()
+    status.start('new', {'yaw': 0})
+    status.diagnostic('controller_server', 40, '旧任务错误', stamp=0)
+    assert not status.diagnostics
+    status.finish('new', 6, 208, '目标无法到达')
+    status.diagnostic('controller_server', 30, 'RegulatedPurePursuitController detected collision ahead!')
+    assert status.snapshot()['message'] == '目标无法到达'

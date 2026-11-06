@@ -1,4 +1,4 @@
-"""使用方法：采集器和索引器调用本模块维护会话目录与磁盘配额。"""
+"""作用：维护日志会话与存储配额；使用方法：采集器和索引器读取 logging.yaml 后调用。"""
 
 import json
 import os
@@ -24,6 +24,10 @@ def load_config(path):
     if not root.is_absolute() or str(root) in ('/', '/var', '/var/lib'):
         raise ValueError('日志根目录必须是独立的绝对路径')
     config['root'] = root
+    for key in ('recording_topics_file', 'index_topics_file'):
+        if key in config:
+            policy_path = Path(config[key])
+            config[key] = (Path(path).resolve().parent / policy_path).resolve()
     return config
 
 
@@ -99,7 +103,7 @@ def space_ok(config, required_bytes=0):
             and shutil.disk_usage(root).free - required_bytes >= int(config['min_free_bytes']))
 
 
-def prune(config, active=()):
+def prune(config, active=(), required_bytes=0):
     """先清过期会话，再按时间清最旧完整会话；绝不删除活动会话。"""
     root = config['root']
     active = {Path(path).resolve() for path in active}
@@ -111,7 +115,7 @@ def prune(config, active=()):
         key=lambda path: path.stat().st_mtime)
     for path in available:
         expired = now - path.stat().st_mtime > int(config['retention_days']) * 86400
-        if expired or not space_ok(config):
+        if expired or not space_ok(config, required_bytes):
             shutil.rmtree(path)
             removed.append(path)
     return removed

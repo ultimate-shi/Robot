@@ -1,0 +1,45 @@
+# 作用：联合地图定位质量、冲突与失效保护；使用方法：由 map_localization.launch.py 加载，所有时间单位为秒。
+global_localization:
+  ros__parameters:
+    visual_topic: /rtabmap/localization_pose
+    amcl_topic: /amcl_pose
+    scan_topic: /localization/scan
+    map_topic: /map
+    odom_topic: /odom
+    info_topic: /info
+    output_topic: /localization/fused_pose
+    map_frame: map
+    odom_frame: odom
+    base_frame: base_link
+    pose_max_age: 1.5
+    source_timeout: 3.0
+    tf_timeout: 0.02
+    odom_timeout: 1.0
+    history_tolerance: 0.15
+    scan_pose_tolerance: 0.15
+    max_xy_variance: 0.25
+    max_yaw_variance: 0.12
+    position_variance_floor: 0.005
+    yaw_variance_floor: 0.01
+    unobserved_variance: 1000000.0  # 二维全局定位未观测的 z/roll/pitch 不得以零方差发布
+    required_matches: 3
+    confirm_distance: 0.25
+    confirm_angle: 0.174533
+    conflict_distance: 0.5
+    conflict_angle: 0.349066
+    scan_min_beams: 30
+    scan_min_span: 0.523599
+    scan_min_score: 0.55
+    scan_match_distance: 0.20
+    map_occupied_threshold: 65
+    localization_timeout: 60.0
+    tracking_timeout: 120.0
+    tracking_max_distance: 5.0
+    tracking_max_angle: 6.28
+    input_dropout_timeout: 20.0
+    update_rate: 10.0
+    nomotion_update_interval: 1.0  # 秒；停车时请求下一帧 AMCL 更新的最短间隔
+    relocalization_hold: 1.0  # 秒；大幅修正后持续撤销许可，确保网页控制循环取消旧任务
+    initial_seed_retry: 5.0  # 秒；AMCL 尚无合格定位时重试私有播种，兼容地图服务较晚启动
+    initial_pose_xy_variance: 0.25
+    initial_pose_yaw_variance: 0.12

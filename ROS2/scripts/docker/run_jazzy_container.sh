@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 运行时机：只需要 ROS 2 Jazzy 容器环境、不希望自动构建或启动 launch 时执行。
+# 作用：启动 Jazzy 环境，保留双目 video0 映射并增加 Astra USB 访问；用法：bash scripts/docker/run_jazzy_container.sh，不自动启动机器人。
 # 典型命令：bash scripts/docker/run_jazzy_container.sh。
 # 脚本会在后台启动容器；之后使用 docker exec -it robot-jazzy bash 进入。
 
@@ -33,6 +33,22 @@ if docker container inspect "${CONTAINER_NAME}" >/dev/null 2>&1; then
     if ! docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' "${CONTAINER_NAME}" | grep -qx "${LOG_ROOT}"; then
       echo "当前容器未挂载 ${LOG_ROOT}；请停止容器并用本脚本重建，日志采集才能写入宿主机。" >&2
     fi
+    # 双目走 V4L2，Astra 深度和彩色走 OpenNI/libuvc USB；两者映射互不替换。
+    if docker inspect --format '{{range .Mounts}}{{println .Destination}}{{end}}' "${CONTAINER_NAME}" | grep -qx '/dev/bus/usb' &&
+       docker inspect --format '{{range .HostConfig.DeviceCgroupRules}}{{println .}}{{end}}' "${CONTAINER_NAME}" | grep -qx 'c 189:\* rmw'; then
+      echo "Astra 深度/彩色：已挂载 /dev/bus/usb 并开放 USB 设备权限。"
+    else
+      echo "当前容器缺少 Astra USB 映射或权限；Docker 不能动态追加，请停止后用本脚本重建。" >&2
+    fi
+    if [[ -e /dev/stereo_camera ]]; then
+      if docker inspect --format '{{range .HostConfig.Devices}}{{println .PathOnHost .PathInContainer}}{{end}}' "${CONTAINER_NAME}" | grep -qx '/dev/stereo_camera /dev/video0'; then
+        echo "双目相机：保留 /dev/stereo_camera -> 容器 /dev/video0。"
+      else
+        echo "已发现双目相机，但当前容器未映射到 /dev/video0；请停止后用本脚本重建以追加映射。" >&2
+      fi
+    else
+      echo "提示：宿主机当前未发现 /dev/stereo_camera；接入原双目并建立设备别名后重建容器即可保留 /dev/video0。"
+    fi
     for index in {0..8}; do
       device="/dev/ttyACM${index}"
       if [[ -e "${device}" ]]; then
@@ -62,8 +78,14 @@ fi
 
 # 只启动环境时也要在创建阶段映射相机；Docker 无法给运行中的容器追加设备。
 CAMERA_DEVICE_ARGS=()
+if [[ -d /dev/bus/usb ]]; then
+  CAMERA_DEVICE_ARGS+=(--device-cgroup-rule 'c 189:* rmw' --mount type=bind,source=/dev/bus/usb,target=/dev/bus/usb)
+  echo "Astra 深度/彩色：/dev/bus/usb -> 容器 /dev/bus/usb（OpenNI/libuvc，不占用双目 /dev/video0）"
+else
+  echo "提示：未找到 /dev/bus/usb，本次容器无法访问 Astra 深度和彩色设备。" >&2
+fi
 if [[ -e /dev/stereo_camera ]]; then
-  CAMERA_DEVICE_ARGS=(--device /dev/stereo_camera:/dev/video0)
+  CAMERA_DEVICE_ARGS+=(--device /dev/stereo_camera:/dev/video0)
   echo "双目相机：/dev/stereo_camera ($(readlink -f /dev/stereo_camera)) -> 容器 /dev/video0"
 else
   echo "提示：未找到 /dev/stereo_camera，本次容器不映射真实双目相机。" >&2
@@ -149,6 +171,7 @@ docker run --rm --detach --interactive --tty \
       "" \
       "# 自动加载 ROS 2 Jazzy 与 robot 工作区。" \
       "source /opt/ros/jazzy/setup.bash" \
+      "if [[ -f /opt/robot/astra_ws/install/setup.bash ]]; then source /opt/robot/astra_ws/install/setup.bash; fi" \
       "if [[ -f /workspace/install/setup.bash ]]; then" \
       "  source /workspace/install/setup.bash" \
       "fi" \
@@ -157,8 +180,11 @@ docker run --rm --detach --interactive --tty \
     exec bash
   ' >/dev/null
 
-if [[ ${#CAMERA_DEVICE_ARGS[@]} -gt 0 ]]; then
-  echo "容器相机设备：/dev/video0"
+if [[ -e /dev/stereo_camera ]]; then
+  echo "容器双目设备：/dev/video0"
+fi
+if [[ -d /dev/bus/usb ]]; then
+  echo "容器 Astra 深度/彩色设备：/dev/bus/usb"
 fi
 if [[ ${#IMU_DEVICE_ARGS[@]} -gt 0 ]]; then
   echo "容器 IMU 设备：/dev/gy95t"

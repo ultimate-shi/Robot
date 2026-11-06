@@ -64,3 +64,30 @@ def test_mode_switch_and_command_timeout_never_replay_speed():
     state.command(0.04, 0.0, 'page-a', 3)
     clock.value = 0.36
     assert state.manual_velocity() == (0.0, 0.0)
+
+
+def test_stream_disconnect_stops_and_old_http_cannot_replay():
+    state = ControlState()
+    token = object()
+    state.command(0.04, 0.0, 'page', 1)
+    assert state.stream_command(0.04, 0.0, 'page', 3, token)
+    assert not state.command(0.0, 0.0, 'page', 2)
+    assert state.manual_velocity() == (0.04, 0.0)
+    assert state.stream_command(0.0, 0.0, 'page', 4, token)
+    assert not state.command(0.04, 0.0, 'page', 1)
+    state.release_stream(token)
+    assert state.manual_velocity() == (0.0, 0.0)
+
+
+def test_stream_retains_deadman_and_does_not_stop_new_owner():
+    clock = Clock()
+    state = ControlState(clock=clock)
+    old, new = object(), object()
+    state.stream_command(0.05, 0, 'old', 1, old)
+    clock.value = 0.36
+    assert state.manual_velocity() == (0.0, 0.0)
+    state.stream_command(0.05, 0, 'new', 1, new)
+    state.release_stream(old)
+    assert state.manual_velocity() == (0.05, 0)
+    state.release_stream(new)
+    assert state.manual_velocity() == (0.0, 0.0)

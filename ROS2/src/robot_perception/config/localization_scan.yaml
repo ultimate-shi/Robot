@@ -1,0 +1,22 @@
+# 作用：定位专用点云投影参数；使用方法：localization_scan.launch.py，来源由 launch 选择，避障参数不受影响。
+localization_scan:
+  ros__parameters:
+    output_topic: /localization/scan
+    status_topic: /localization/scan_status
+    target_frame: base_link
+    odom_frame: odom
+    scan_frame: localization_scan
+    min_height: 0.05  # 相对 base_link 的障碍高度，单位米
+    max_height: 0.80
+    min_range: 0.25
+    max_range: 4.0
+    horizontal_fov_deg: 120.0  # 上限视场；没有深度的方向始终为 NaN，不伪造自由空间
+    angle_increment: 0.00872664626  # 弧度，约 0.5 度
+    voxel_size: 0.05
+    min_points_per_voxel: 3
+    min_neighbor_voxels: 1
+    max_input_rate: 4.0
+    max_message_age: 1.5  # 秒；保留采集时间戳，禁止旧帧重打时间
+    tf_timeout: 0.02  # 秒；只用采集时刻 TF
+    max_tilt: 0.174533  # 弧度，约 10 度；超过后不用于二维地图定位
+    mount_tolerance: 0.005  # 米；AMCL 缓存扫描安装位置，归中后的光心移动超限须停用并重启定位

@@ -6,12 +6,15 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#include "robot_hardware/board_worker.hpp"
 
 #include "diagnostic_msgs/msg/diagnostic_array.hpp"
 #include "hardware_interface/system_interface.hpp"
@@ -88,7 +91,10 @@ public:
     const rclcpp::Time & time, const rclcpp::Duration & period) override;
 
 private:
+  friend struct SerialSystemTest;
   bool discover_controllers();
+  void attach_trace(SerialPort & port);
+  void record_servo_send(std::chrono::steady_clock::time_point sent);
   bool load_calibration(const std::string & path);
   bool load_wheel_calibration(const std::string & path);
   bool query_encoder_parameters();
@@ -96,19 +102,50 @@ private:
   bool read_legs();
   bool read_servos_and_sonar(double dt);
   bool write_wheels();
-  bool write_legs();
+  bool write_legs(bool force = false, bool * sent = nullptr);
   bool write_servos(double dt);
-  void start_servo_keepalive();
-  void stop_servo_keepalive();
-  void servo_keepalive_loop();
+  void start_board_workers();
+  void stop_board_workers();
+  bool board_cycle(std::size_t board);
+  void cache_feedback(std::size_t board);
+  void report_async_fault(const std::string & reason);
+  std::chrono::steady_clock::time_point heartbeat_time() const;
   bool stop_outputs();
   bool stop_encoder_motion();
+  bool execute_encoder_target(const std::array<double, 4> & distance_m, std::string & message);
   void latch_fault(const std::string & reason);
   void publish_telemetry(const rclcpp::Time & stamp);
   int servo_pwm(std::size_t index, double dt);
   double adc_to_radians(std::size_t index, int adc);
   std::size_t joint(const std::string & name) const;
 
+  // ROS 接口与串口计算区隔离；缓存锁内只交换数据，不做任何串口操作。
+  std::vector<double> io_state_position_, io_state_velocity_;
+  std::vector<double> io_command_position_, io_command_velocity_;
+  std::vector<double> cached_position_, cached_velocity_, latest_position_, latest_velocity_;
+  std::array<double, 4> io_wheel_current_{}, io_leg_current_{};
+  std::array<double, 8> io_sonar_m_{};
+  std::array<bool, 8> io_sonar_valid_{};
+  std::mutex cache_mutex_;
+  std::mutex lifecycle_mutex_;
+  std::array<BoardWorker, 3> board_workers_;
+  std::array<std::atomic<bool>, 3> connected_{};
+  std::array<TimingWindow, 3> transaction_timing_, cycle_timing_;
+  std::array<std::atomic<uint64_t>, 3> overruns_{};
+  std::array<std::chrono::steady_clock::time_point, 3> feedback_at_{}, sent_at_{};
+  std::array<uint64_t, 3> feedback_sequence_{}, sent_sequence_{};
+  std::chrono::steady_clock::time_point latest_command_at_{};
+  uint64_t command_sequence_{0};
+  // 仅 DMC0 所有者线程读写；按实际协议整数去重，激活/人工恢复时清空。
+  std::array<long, 4> last_leg_target_{};
+  bool last_leg_target_valid_{false}, leg_timeout_hold_{false};
+  std::atomic<bool> async_active_{false}, async_fault_{false};
+  std::atomic<int64_t> heartbeat_ns_{0};
+  double leg_io_rate_{10.0}, wheel_io_rate_{6.0}, servo_feedback_rate_{6.0};
+  int feedback_timeout_ms_{500};
+  double telemetry_rate_{10.0};
+  rclcpp::TimerBase::SharedPtr telemetry_timer_;
+  std::chrono::steady_clock::time_point next_servo_feedback_{}, last_servo_tick_{};
   std::vector<double> state_position_;
   std::vector<double> state_velocity_;
   std::vector<double> command_position_;
@@ -146,25 +183,31 @@ private:
   int discovery_retry_delay_ms_{700};
   int encoder_query_delay_ms_{20};
   int command_timeout_ms_{500};
-  int servo_keepalive_period_ms_{40};
+  int servo_keepalive_period_ms_{20};
   int servo_command_timeout_ms_{400};
   double wheel_diameter_{0.110};
   double sonar_alpha_{0.2};
   int sonar_min_valid_mm_{30};
   int sonar_max_valid_mm_{4000};
-  bool outputs_enabled_{false};
-  bool manual_recovery_required_{false};
+  std::atomic<bool> outputs_enabled_{false};
+  std::atomic<bool> manual_recovery_required_{false};
   std::string fault_;
-  std::chrono::steady_clock::time_point last_heartbeat_{};
   std::chrono::steady_clock::time_point last_write_{};
-  std::mutex servo_command_mutex_;
-  std::condition_variable servo_command_cv_;
-  std::thread servo_keepalive_thread_;
-  bool servo_keepalive_running_{false};
   std::array<int, 6> servo_command_pwm_{{1500, 1500, 1500, 1500, 1500, 1500}};
   std::chrono::steady_clock::time_point last_servo_command_{};
-  std::atomic<bool> servo_keepalive_failed_{false};
+  std::chrono::steady_clock::time_point last_u_sent_{};
+  TimingWindow servo_gap_timing_;
+  // 串口线程只入队；可靠 ROS 发布的等待不能占用 U 的刷新窗口。
+  std::mutex trace_mutex_;
+  std::deque<robot_interfaces::msg::SerialCommand> trace_queue_;
+  std::atomic<uint64_t> trace_dropped_{0};
+  std::size_t trace_queue_capacity_{1024};
+  std::atomic<uint64_t> servo_watchdog_overruns_{0};
+  int servo_watchdog_ms_{100};
+  uint64_t last_sonar_published_sequence_{0};
+  std::atomic<bool> rearm_commands_{true};
 
+  rclcpp::CallbackGroup::SharedPtr command_callbacks_;
   rclcpp::Publisher<robot_interfaces::msg::ChassisState>::SharedPtr state_pub_;
   rclcpp::Publisher<robot_interfaces::msg::SerialCommand>::SharedPtr serial_tx_pub_;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr diagnostics_pub_;

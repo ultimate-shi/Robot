@@ -1,6 +1,16 @@
 <!-- 作用：说明 ROS 2 工作区现状与运行方法；使用方法：先进入 ROS2/，再从本文件选择模式构建和启动。 -->
 # Robot ROS 2 Workspace
 
+网页手动驾驶默认使用四轮独立转向：前进/后退按线速度行驶，左转/右转按角速度转向；同时按住行驶与转向方向可边行驶边转弯，单独按转向则原地旋转。支持方向键组合、页面多指按钮及两者混用，松开一个方向后继续执行仍按住的方向。
+
+实机底盘已增加三控制板独立通信、真实反馈年龄诊断和自动平衡防过冲控制；控制管理器以 20 Hz 交换缓存，腿板默认 10 Hz、轮板 6 Hz，SE2 默认每 20 ms 刷新并按真实发送间隔监测，串口日志异步发布；实际提速需按分阶段验收确认。参数、基线采集与回退方法见 [通信与平衡优化](docs/balance_optimization.md)。
+驾驶输入已增加独立持续连接，并以驾驶确认单独判断连接状态，避免状态查询超时清空按键；自动平衡中档改为依据实际腿角和 IMU 直接发送完整到位位置，并抑制微小目标重复下发，保持区采用 1° 进入、1.5° 退出的滞回；腿板按通道去重，未变化的到位目标不重复启动。参数和验收边界见 [通信与平衡优化](docs/balance_optimization.md)。
+
+
+当前实机默认 **Astra Pro 全 RGB-D**：彩色、深度、视觉里程计、建图/重定位、AMCL 点云及语义均使用 Astra。旧双目通过 `camera_source:=stereo` 保留兼容；本页双目专项说明仅适用于该回退模式。安装中心与高度沿用原头部 xacro，安装 TF 默认启用；驱动、坐标和验收见 [Astra Pro 接入](docs/astra_pro.md)。
+
+Docker 同时支持保留原双目 `/dev/stereo_camera → /dev/video0` 映射，并新增 Astra `/dev/bus/usb` 访问；双目需在创建容器前接入。
+
 本目录是机器人小车的 ROS 2 Jazzy 工作区，用于维护实机与虚拟机器人的统一模型、双目视觉、
 SLAM、Nav2 路径规划、局部避障和底盘控制。
 
@@ -43,6 +53,10 @@ Robot/ROS2/
 
 ## 机器人网页控制台
 
+手动控制新增“车身姿态”和“头部”面板：四腿竖向滑块及精确输入显示板端角度（±15° 对应 R 字段 ±1500），手动提交直接设置角度目标；滑块向上仍代表伸展，左前/右后上滑角度减小，右前/左后上滑角度增大；自动平衡开关、低/中/高档和中档姿态目标位于车身姿态面板。键盘默认开启：方向键驾驶，W/S 前后倾、A/D 左右倾、Q/E 整体降低/升高（按钮和键盘每步最大 5°，按住每 0.3 秒重复），J/L 左右转头、I/K 抬头/低头，空格停止当前手动运动。倾斜只伸展对侧腿，整体升降保留高度差，按先到限位的腿共同限幅；允许驾驶同时调腿。平衡开启时禁止手动大腿，建图/定位锁定期间禁止手动头部。“四腿回零”仅一次提交四条大腿的 0° 目标；“头部回零”仅一次提交水平/俯仰两关节的 0° 目标，两组互不回零。
+所有页签共用侧栏“紧急停止”：停止驾驶、平衡及手动关节，解除后不恢复旧动作；建图/定位头部归中须另点“恢复建图/定位头部归中”。状态页显示六个关节及其他轮子/转向关节反馈、四腿/四轮电流、平衡与限位，并分别显示 Astra 原始彩色、原始深度和处理后深度；状态有效性结合反馈时效及硬件故障，不用节点存在代替设备正常。新功能尚待架空与接地实机验收。
+
+
 构建后重启宿主机 `robot-web.service` 以启用 `/robot/` 路由；整车
 `robot_main/robot.launch.py` 会通过 `robot_web/web_console.launch.py` 启动容器内的控制台 ROS 节点。
 控制台在整车启动的第一阶段上线，状态页单独列出每个关节控制器、DMC0/DMC1/SE2、相机、IMU 和八路超声波。加载已有地图时，若未收到 `/map`，控制台会向地图服务重试请求，并显示当前等待原因。
@@ -52,12 +66,13 @@ Robot/ROS2/
 宿主机网页网关经工作区忽略目录 `.runtime/robot-console.sock` 与该节点通信，
 不开放第二个网页端口。控制台路径为 `/robot/`、`/robot/status`、`/robot/console`；
 原 `/log/` 保留独立的历史日志查询与 MCAP 下载。
-导航模式的“当前模式控制区”通过 `/robot/api/navigation-status` 每 0.5 秒读取 Nav2 反馈，显示剩余距离、剩余朝向、预计时间、恢复次数和最终结果；安全告警与导航进度分别显示。地图点击目标默认保持选点时的机器人朝向；Nav2 使用同时检查位移和转角的进度检查器，避免目标附近原地转向被误判为无进展。
+地图下方始终显示 Nav2 最新距离、目标朝向差、恢复次数与最终结果，切到手动模式仍可查看失败原因。取消立即撤销导航速度许可，等待 Nav2 目标终态后才显示取消完成；提交期间迟到的目标也会取消，切换模式不会恢复旧目标。失败优先显示 Action 原始错误，空结果补充本次 Nav2 错误日志；没有具体信息时明确标注未知原因。
+网页画面区分正常、短时延迟和持续断流（默认 2 秒/20 秒）；画面显示状态不直接决定导航许可。导航失败收集 Nav2 主/子节点的具体 WARN/ERROR，并允许结果后 2 秒内补全迟到原因，首次失败不会被后续定位告警覆盖。Nav2 的 default_server_timeout 按毫秒配置为 2000；异常录制默认也遵守精简白名单，原始图像专项采集须显式开启 incident_record_all。
 
 网页手动控制不依赖连接心跳，也不设网页速度上限；多个页面同时操作时，
 以最后到达的速度命令为准。任何页面均可按全局停止；显式停止后须点击
 “解除软件停止”才可再次运动。手动控制可按住页面方向按钮，或开启键盘后使用
-`W/A/S/D`、方向键和空格停车；松键、失焦及运动命令超时会停车。
+方向键驾驶、空格停车；方向全部松开、失焦及运动命令超时会停车，W/A/S/D 用于车身姿态。
 直行默认线速度为 0.06 m/s，低/中/高预设分别为 0.06/0.08/0.1 m/s；右后轮使用已标定 D7 曲线，低速档按架空双向跟速结果选定。
 页面断开后旧速度不会重放，重新打开可继续手动操作。
 当前代码启动时软件停止锁初值为未锁定；需停车锁定时在网页上显式按“停止”。网页的停止是 ROS 软件锁存停车，
@@ -82,8 +97,8 @@ Nav2 `/cmd_vel_nav` → 控制台 `/cmd_vel_console` → 避障 `/cmd_vel_nav_sa
 ## MCAP 日志查询
 
 `robot_main/robot.launch.py` 默认以 `start_logging:=true` 启动 `robot_logging` 的日常 MCAP
-录制器、异常监测器和索引器。日常录制小消息、`/rosout` 和已发布的服务事件；图像、点云、
-视差图、Theora 视频包、地图和控制器完整统计等大消息只在异常片段中完整录制。
+录制器、异常监测器和索引器。日常按独立话题白名单录制导航、定位与硬件排障信息；图像、点云、
+地图和高频中间数据默认关闭，异常片段默认短时全量录制。
 ROS 日志达到 ERROR/FATAL 时自动触发，
 也可手动调用：
 
@@ -95,7 +110,9 @@ ros2 service call /logging/trigger_incident std_srvs/srv/Trigger '{}'
 每个 MCAP 文件在 256 MB 或 15 分钟先到时切片，整车每次启动生成独立会话目录。
 根目录为宿主机和容器共同可见的 `/var/lib/robot-logs/`，其中 `routine/`、
 `incidents/` 和 `index/` 分别保存日常录制、异常录制及 SQLite 查询索引。
-默认总占用上限 5 GB、系统最少留空 5 GB、最长保留 7 天；空间不足时先删除最旧的已完成
+日常录制与历史索引分别由 `robot_logging/config/recording_topics.yaml` 和 `index_topics.yaml` 控制，均按常用、按需、不建议分类并逐项开关。默认录制保留导航、定位和硬件排障信息，索引只保存关键日志、状态变化及每秒导航反馈；索引满后滚动淘汰旧查询行，原始 MCAP 仍按录制保留期和总配额管理。网页导航目标及失败原因通过 `/web_console/navigation_status` 纳入日志。
+
+默认总占用上限 10 GB、系统最少留空 3 GB、最长保留 7 天；空间不足时先删除最旧的已完成
 会话，仍不足则拒绝新增录制。当前车载盘容量不能保证所有消息留满 7 天。
 
 首次使用先重建 Jazzy 镜像并用 `scripts/docker/run_jazzy_container.sh` 重建容器，以便安装
@@ -137,7 +154,7 @@ MCAP 录制不会自动生成未发布的服务事件。参数集中在
 - `/mission/state`：类型化任务状态；旧 `/mission/status` JSON 暂时兼容。
 - `/perception/terrain_state`：感知到控制的类型化地形约束。
 - `/hardware/chassis_state`：三块控制板、看门狗、输出锁定和电流状态。
-- `/hardware/serial_tx`：`SerialCommand` 记录 DMC0/DMC1/SE2 每次实际写入的原始指令、字节数与事务结果；默认进入 MCAP，可在 `/log/` 按话题查询。
+- `/hardware/serial_tx`：`SerialCommand` 记录 DMC0/DMC1/SE2 每次实际写入的原始指令、字节数与事务结果；默认不录制；串口协议专项排查时在录制配置“按需”分类启用，索引仍由独立配置决定。
 - `/wheel/odometry_status`：逐轮残差、权重、疑似故障和动态协方差状态。
 - `/execute_wheel_motion`：先转向后执行四轮定距的 `ExecuteWheelMotion` Action。
 - 手工串口终端：`python3 scripts/serial/line_serial_terminal.py /dev/ttyACM0` 在本地编辑完整命令，按回车后整行发送并显示响应；使用前须停止其他串口进程。
@@ -217,6 +234,8 @@ splitter_backend:=python
 
 ### localization：定位层
 
+实机已有地图入口默认 `localization_backend:=fused`，使用 RTAB-Map 视觉匹配与点云投影的 AMCL 联合定位；统一节点独占 `map -> odom`，局部 `/odom` 仍由原 EKF 维护。当前默认 `camera_source:=astra`，`localization_cloud_source:=auto` 跟随相机，也可显式覆盖 `localization_cloud_topic`、`localization_sensor_frame`，无需修改视觉链路。两路冲突优先通过质量检查的视觉结果，单路可接管；支持 `visual` 回退及不需要数据库的 `amcl` 模式。配置、启动和测试详见 [联合定位](docs/joint_localization.md)。
+
 真实建图由 `rtabmap_odom/stereo_odometry` 输出 `/visual_odom_raw`，经过协方差下限保护后
 得到 `/visual_odom`，再由
 `robot_localization` 三维 EKF 统一输出 `/odom` 和 `odom -> base_link`。当前融合 GY95T 的
@@ -224,7 +243,12 @@ roll/pitch 与三轴角速度、四轮实际反馈生成的平面 `/wheel/odom` 
 `/odom.twist` 包含三轴线速度与三轴角速度估计；IMU 不直接测量线速度，垂直位置与速度依赖
 视觉三维位姿质量，视觉失效时不可把预测值当作可靠高度。
 虚拟模式没有独立三维传感输入，统一入口仍以二维 EKF 运行，避免把未观测的高度和倾角当作估计结果。
-RTAB-Map 继续负责 `map -> odom`，视觉里程计不再单独发布冲突 TF。
+在线建图/原视觉定位由 RTAB-Map 负责 `map -> odom`；已有地图联合/AMCL 模式由全局融合节点负责，视觉里程计不发布冲突 TF。
+
+EKF 保留 2 秒测量历史，对迟到视觉回退校正并回放轮速/IMU，再预测到当前时刻。
+视觉保护默认丢弃超过 1.5 秒、超前超过 0.1 秒及位姿无效的消息，保留原采集时间戳。
+`sensor_timeout` 不负责逐路断流告警或自动清零速度；四轮一致打滑也不能靠轮间残差识别。
+短时中断与延迟补偿的隔离验证、现有限制和复现命令见 [里程计融合检查](docs/odometry_fusion_audit.md)。
 
 本次传感器融合功能按 ROS Package 分工如下：
 
@@ -259,11 +283,32 @@ ros2 service call /mapping/save_snapshot std_srvs/srv/Trigger '{}'
 `/workspace/maps/map_YYYYMMDD_HHMMSS_ffffff/`，包含 `map.{yaml,pgm,ply,json,db}`。
 保存时暂停 RTAB-Map 更新、读取最终栅格并请求数据库备份，将内存中的图节点与视觉特征先写盘；
 成功后原子公开整个目录，失败不留下半成品。网页保存期间停车并暂停接收运动任务。临时预览不包含定位数据库。
-网页保存按钮在等待期间禁用，独立网关默认等待 120 秒；大数据库可能需要一分钟。网关参数位于
+网页保存按钮在等待期间禁用，独立网关默认等待 330 秒、控制台 300 秒，包含异常退出后的恢复导出。网关参数位于
 `robot_web/config/web.yaml` 的 `console_save_timeout_seconds`（应大于控制台的 `snapshot_timeout`）。
 响应超时返回 504 并提示后台可能仍在保存；只有 Socket 不存在或拒绝连接才提示“控制台未启动”，连接中断单独提示。
 修改网关代码或配置后可仅执行 `systemctl --user restart robot-web.service` 加载，无需重启建图或底盘；
-不要因网页超时直接重启整车，新建图入口会清理活跃临时数据库。
+不要因网页超时直接重启整车，先检查保存是否仍在进行。在线建图默认活跃库已移至
+`/workspace/mapping/rtabmap.db`，入口不再带清库参数，重启保留原库。新地图应显式指定新的
+`mapping_database_path:=/workspace/mapping/新的文件名.db`；`database_path` 仍表示已有地图定位库，不与它混用。
+
+建图进程异常退出后默认自动恢复保存：从活跃库和 `.back` 中按最后观测、节点 ID 和数量选择有效库，
+复制后调用 `rtabmap-export` 生成配套二维地图，校验通过才公开目录；原库不被修改。
+网页“保存地图”和 `/mapping/save_snapshot` 在所有建图服务消失后自动转入恢复，
+也可显式调用 `/mapping/recover_snapshot`。只要数据库有效，即使缓存地图、点云丢失也能恢复。
+如果整车/容器退出或快照服务不可用，重新启动容器后，在已加载工作区环境的终端执行：
+
+```bash
+ros2 launch robot_navigation mapping_recovery.launch.py
+# 本次旧版故障库位于 /tmp，需要明确指定；先恢复，不要重启旧版带清库参数的建图入口
+ros2 launch robot_navigation mapping_recovery.launch.py database_path:=/tmp/robot_rtabmap_mapping.db
+```
+
+该入口只恢复文件，不启动相机、底盘或在线建图。恢复包保证包含 `map.{yaml,pgm,json,db}`；
+只有缓存二维地图与导出地图匹配且来源数据库相同时才复用 PLY。无缓存时默认不重建三维点云，
+`map.json` 中 `cloud_available=false` 明确表示缺失，不能用来仿真三维环境。
+可复制 `mapping_recovery.yaml` 并设置 `export_cloud: true` 后通过 `config_file` 指定，按降采样设置重建三维。
+数据库中尚未写盘的帧无法找回，恢复也不会自动恢复驾驶或绕过定位许可。
+更多参数、继续建图方法及内存分析见 [地图异常恢复](docs/mapping_recovery.md)。
 快照目录发布前会设置属主及权限：目录 755、文件 644，目标用户拥有读写权限。普通进程使用当前用户；
 root 容器默认沿保存路径向上查找最近的非 root 目录属主（默认 `/workspace` 对应宿主机用户）。
 可通过 `mapping_snapshot.yaml` 的 `snapshot_owner_uid/snapshot_owner_gid` 显式指定宿主机 `id -u`、`id -g`；
@@ -428,7 +473,7 @@ ros2 service call /hardware/recover std_srvs/srv/Trigger '{}'
 脚本会警告它与 ROS 2 争用控制板；实机启动前必须执行
 `sudo systemctl stop vctrl.service`，禁止两个硬件驱动同时连接串口。控制链为
 `Nav2 -> /cmd_vel_nav -> robot_web /cmd_vel_console -> 超声波安全层 -> /cmd_vel_nav_safe -> robot_web /cmd_vel_safe -> 三模式运动学 -> ros2_control`。
-实机 SE2 的 `U` 指令由硬件插件独立按 40 ms 刷新，避免慢速 DMC1/DMC0 串口周期触发固件 100 ms 回中；超过 400 ms 没有新的舵机计算结果时仅刷新中性值。相关周期配置在 `robot_hardware/config/hardware_bringup.yaml`，不改变固件。
+实机 SE2 的 `U` 指令由硬件插件独立按 20 ms 刷新，避免慢速 DMC1/DMC0 串口周期挤占固件 100 ms 回中期限；超过 400 ms 没有新的舵机计算结果时仅刷新中性值。看门狗按 `tcdrain` 后的真实单调发送时间计时，ACK 抖动不再混入发送间隔；串口日志由有界队列异步发布。相关周期配置在 `robot_hardware/config/hardware_bringup.yaml`，不改变固件。
 四路转向到位后刷新中性 PWM，不再反复追逐 ADC 反馈波动；默认误差 ≤2.5° 停止，误差 >4° 或目标变化时重新调整，确保在轮速放行门槛约 4.58° 之前恢复调整。阈值在 `robot_hardware/config/servo_calibration.yaml` 配置。
 轮速命令经过独立 500 ms 看门狗，转向反馈未进入允许误差时轮速保持零，到位后按误差比例调速；定距 Action 的 T 指令有独立停车服务和动作租约。8 路超声波统一为前3、后3、左1、右1。SE2 的 Range
 话题使用传感器 Best Effort QoS，避障和 `/scan` 合成节点使用相同 QoS 接收。最终安全层默认
@@ -576,6 +621,8 @@ ros2 launch robot_main robot.launch.py mode:=real \
 “视觉地图加载中”，默认最多等待输入就绪 120 秒；匹配超时 60 秒从实际处理就绪后开始计算。
 初始估计只影响搜索与投影匹配，最终位置由视觉几何验证校正，不能据此直接解锁导航。
 
+已有地图联合定位要求每路独立完成三次有效确认，合格的视觉或轮廓来源可支撑定位；两路都暂缺时才使用现有 `/odom` 有界跟踪。默认最多 120 秒、累计 5 米或累计转角约 360°，先到上限即停车；里程计须新鲜、协方差合格且 TF 有效。定位输入整体中断默认容忍 20 秒，持续超时或里程计/TF 失效时撤销许可，恢复后重新确认。联合模式阈值在 `robot_navigation/config/global_localization.yaml`，原视觉模式仍使用 `map_localization.yaml`；网页显示当前来源、轮廓吻合度、拒绝原因与跟踪预算。低质量视觉不会因视觉优先而覆盖有效定位。
+
 本机短基线双目的定位配准保留旧地图 GFTT/ORB 词典，从历史原图重新提取最多 2000 个、2×3 均匀分布的配准特征，
 采用双向最近邻交叉验证与位姿先验辅助。重投影误差范围为 4 像素，几何内点仍至少 20 个，
 协方差、三次连续匹配和超时门控保持生效。不要把短时偶然匹配成功当作定位稳定，也不要只靠降低内点数解锁。
@@ -610,7 +657,7 @@ ros2 launch robot_main robot.launch.py mode:=real \
 统一实机入口不再允许 `initial_yaw_source:=magnetic` 绕过视觉定位，地磁不能提供地图中的绝对位置。
 不传 `map_yaml_file` 时仍使用在线 RTAB-Map 建图及其地图变换，避免与静态变换重复发布。
 
-实机模式启动 GY95T、双目视觉里程计和三维 EKF：`/visual_odom` 与 IMU 三轴角速度、roll/pitch
+实机模式默认启动 GY95T、Astra RGB-D 视觉里程计和三维 EKF：`/visual_odom` 与 IMU 三轴角速度、roll/pitch
 融合为 `/odom`，并由 EKF 发布 `odom -> base_link`。默认 `use_imu:=true`；没有映射 GY95T
 设备时应传入 `use_imu:=false`。已有地图使用 RTAB-Map 视觉重定位；IMU 和 odom 负责连续运动估计，不能独立推断地图中的绝对位置。
 三维位姿还需现场核对 `/visual_odom_raw.pose.covariance`；视觉 z/roll/pitch 缺少有效方差时
@@ -683,6 +730,7 @@ GY95T 开始发布滤波数据前还会静止估计约 2 秒
 | `map_localization.yaml` | 已有地图视觉重定位及定位确认、超时阈值 |
 | `map_server_recovery.yaml` | 静态地图生命周期自动恢复及重试退避参数 |
 | `mapping_snapshot.yaml` | 二维地图、三维点云及定位数据库成套保存参数 |
+| `mapping_recovery.yaml` | 异常退出后的独立恢复、导出超时及可选三维重建参数 |
 | `state_estimation.yaml` | 视觉、IMU 和四轮反馈里程计的三维 EKF 参数 |
 | `nav2.yaml` | Nav2 控制器、规划器、代价地图和行为树参数 |
 | `stereo_robot.yaml` | 在线双目及独立 SegFormer 语义层的 Nav2 覆盖参数 |
