@@ -1,7 +1,7 @@
 <!-- 作用：列出当前 ROS 2 工作区的全部功能包文档；使用方法：从本页进入对应包说明，修改包职责时同步更新。 -->
 # 功能包文档索引
 
-当前 `ROS2/src/` 有 11 个 ROS 2 功能包：
+当前 `ROS2/robot_car/src/` 有 11 个 ROS 2 功能包：
 
 | 功能包 | 主要职责 |
 | --- | --- |
@@ -17,4 +17,4 @@
 | [robot_stereo_components](robot_stereo_components.md) | 高带宽双目处理 C++ 组件 |
 | [robot_web](robot_web.md) | 9100 网页入口、人工控制台与速度仲裁 |
 
-新增或删除功能包时，同时更新本页和 `ROS2/README.md` 的项目结构。
+新增或删除功能包时，同时更新本页和 `ROS2/robot_car/README.md` 的项目结构。

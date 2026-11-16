@@ -4,7 +4,7 @@
 ## 正常建图与异常恢复
 
 `robot_main robot.launch.py mode:=real` 的活跃库默认是 `/workspace/mapping/rtabmap.db`，
-位于宿主机 `ROS2/mapping/` 挂载目录，退出或重启容器不会自动删除。建图入口已移除
+位于宿主机 `ROS2/robot_car/mapping/` 挂载目录，退出或重启容器不会自动删除。建图入口已移除
 `--delete_db_on_start`；重新启动会打开原库，新建地图应显式使用另一个文件名：
 
 ```bash

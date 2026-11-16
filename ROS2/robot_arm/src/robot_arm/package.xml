@@ -1,0 +1,11 @@
+<?xml version="1.0"?>
+<!-- 作用：声明机械臂独立功能包；使用方法：在 ROS2/robot_arm 下执行 colcon build。 -->
+<package format="3">
+  <name>robot_arm</name>
+  <version>0.1.0</version>
+  <description>机械臂独立功能包骨架，待实现通信和控制。</description>
+  <maintainer email="shijiahao@todo.todo">shijiahao</maintainer>
+  <license>TODO: License declaration</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

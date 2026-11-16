@@ -84,7 +84,7 @@ def test_servo_refresh_stays_ahead_of_firmware_watchdog():
                               .read_text(encoding='utf-8'))['hardware']
     control = yaml.safe_load((root / 'src/robot_control/config/controllers.yaml')
                              .read_text(encoding='utf-8'))
-    firmware = (root.parent / 'STM32/Sevo_Echo_F103_V2/Core/Src/tim_servo.c')
+    firmware = (root.parents[1] / 'STM32/Sevo_Echo_F103_V2/Core/Src/tim_servo.c')
     # 独立构建环境可能只有 ROS2 工作区，固件缺失时仍检查 ROS 参数互相匹配。
     watchdog_ms = 100
     if firmware.exists():
