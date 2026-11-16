@@ -473,7 +473,7 @@ ros2 service call /hardware/recover std_srvs/srv/Trigger '{}'
 脚本会警告它与 ROS 2 争用控制板；实机启动前必须执行
 `sudo systemctl stop vctrl.service`，禁止两个硬件驱动同时连接串口。控制链为
 `Nav2 -> /cmd_vel_nav -> robot_web /cmd_vel_console -> 超声波安全层 -> /cmd_vel_nav_safe -> robot_web /cmd_vel_safe -> 三模式运动学 -> ros2_control`。
-实机 SE2 的 `U` 指令由硬件插件独立按 20 ms 刷新，避免慢速 DMC1/DMC0 串口周期挤占固件 100 ms 回中期限；超过 400 ms 没有新的舵机计算结果时仅刷新中性值。看门狗按 `tcdrain` 后的真实单调发送时间计时，ACK 抖动不再混入发送间隔；串口日志由有界队列异步发布。相关周期配置在 `robot_hardware/config/hardware_bringup.yaml`，不改变固件。
+实机 SE2 的 `U` 指令由硬件插件独立按 20 ms 刷新，避免慢速 DMC1/DMC0 串口周期挤占固件 100 ms 回中期限；超过 400 ms 没有新的舵机计算结果时仅刷新中性值。看门狗按 `tcdrain` 后的真实单调发送时间计时，ACK 抖动不再混入发送间隔；发送间隔达到 100 ms 仅记录超限统计，不再触发软件整车锁定，固件自身超时回中保持不变；串口日志由有界队列异步发布。相关周期配置在 `robot_hardware/config/hardware_bringup.yaml`，不改变固件。
 四路转向到位后刷新中性 PWM，不再反复追逐 ADC 反馈波动；默认误差 ≤2.5° 停止，误差 >4° 或目标变化时重新调整，确保在轮速放行门槛约 4.58° 之前恢复调整。阈值在 `robot_hardware/config/servo_calibration.yaml` 配置。
 轮速命令经过独立 500 ms 看门狗，转向反馈未进入允许误差时轮速保持零，到位后按误差比例调速；定距 Action 的 T 指令有独立停车服务和动作租约。8 路超声波统一为前3、后3、左1、右1。SE2 的 Range
 话题使用传感器 Best Effort QoS，避障和 `/scan` 合成节点使用相同 QoS 接收。最终安全层默认

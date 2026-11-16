@@ -1,4 +1,4 @@
-// 作用：用伪终端执行真实串口驱动的并行、反馈、停车和故障测试；用法：colcon test --packages-select robot_hardware。
+// 作用：用伪终端验证串口驱动、停车故障及 SE2 间隔超限仅统计；用法：colcon test --packages-select robot_hardware。
 #include <gtest/gtest.h>
 #include <pty.h>
 #include <poll.h>
@@ -280,14 +280,15 @@ struct SerialSystemTest
     s.stop_board_workers();
   }
 
-  static void slow_servo_query_fails_closed()
+  static void slow_servo_query_only_counts_overruns()
   {
     FakeBoard legs("DMC0"), wheels("DMC1"), servos("SE2", 55);
     RobotSerialSystem s;
     prepare(s, legs, wheels, servos, 200);
     std::this_thread::sleep_for(450ms);
-    EXPECT_TRUE(s.async_fault_);
-    EXPECT_FALSE(s.outputs_enabled_);
+    EXPECT_FALSE(s.async_fault_) << s.fault_;
+    EXPECT_TRUE(s.outputs_enabled_);
+    EXPECT_FALSE(s.manual_recovery_required_);
     EXPECT_GE(s.servo_watchdog_overruns_.load(), 1u);
     s.stop_board_workers();
   }
@@ -314,7 +315,7 @@ struct SerialSystemTest
     EXPECT_EQ(system.trace_queue_.size(), 2u);  // 串口线程只入队，不直接发布 ROS。
   }
 
-  static void genuine_send_gap_still_latches()
+  static void genuine_send_gap_only_counts_overruns()
   {
     RobotSerialSystem system;
     system.async_active_ = true;
@@ -322,9 +323,11 @@ struct SerialSystemTest
     auto first = std::chrono::steady_clock::now();
     system.record_servo_send(first);
     system.record_servo_send(first+120ms);
-    EXPECT_TRUE(system.async_fault_);
+    EXPECT_FALSE(system.async_fault_);
     EXPECT_EQ(system.servo_watchdog_overruns_.load(), 1u);
-    EXPECT_FALSE(system.outputs_enabled_);
+    EXPECT_TRUE(system.outputs_enabled_);
+    EXPECT_FALSE(system.manual_recovery_required_);
+    EXPECT_EQ(system.servo_gap_timing_.summary().maximum, 120.0);
   }
 };
 
@@ -335,9 +338,9 @@ TEST(AsyncSerial, TimeoutLatchesAndStopsWithoutSelfJoin) {SerialSystemTest::faul
 TEST(AsyncSerial, DistanceMotionIsNotOverwrittenAndCancellationStops) {SerialSystemTest::distance_and_cancel(false);}
 TEST(AsyncSerial, LostDistanceResponseStopsAndLatches) {SerialSystemTest::distance_and_cancel(true);}
 TEST(AsyncSerial, ExpiredLeaseStopsWhileServoRefreshContinues) {SerialSystemTest::expired_lease_stops();}
-TEST(AsyncSerial, SlowServoQueryDoesNotSilentlyBreakWatchdog) {SerialSystemTest::slow_servo_query_fails_closed();}
+TEST(AsyncSerial, SlowServoQueryCountsOverrunsWithoutLocking) {SerialSystemTest::slow_servo_query_only_counts_overruns();}
 TEST(AsyncSerial, DelayedAckDoesNotFakeSendGap) {SerialSystemTest::delayed_ack_does_not_fake_send_gap();}
-TEST(AsyncSerial, GenuineSendGapStillLatches) {SerialSystemTest::genuine_send_gap_still_latches();}
+TEST(AsyncSerial, GenuineSendGapCountsWithoutLocking) {SerialSystemTest::genuine_send_gap_only_counts_overruns();}
 
 TEST(BoardWorker, UrgentStopCancelsPendingNormalService)
 {

@@ -7,6 +7,7 @@
 // 协议分工：DMC0 使用 R 查询/设置四腿；DMC1 使用 I 查询编码器、D 查询轮位及设置 PWM、
 // T 执行四轮定距；SE2 使用 f 读取六路舵机 ADC 与八路超声波、
 // U 下发六路舵机 PWM。ROS 关节命令是目标值，实际串口输出由每轮反馈和标定计算。
+// SE2 发送间隔超限仅计数，不触发软件故障锁定；固件自身超时回中保持不变。
 // 每次串口写入记录真实发送时刻并入有界队列，由状态回调发布 /hardware/serial_tx；日志背压不阻塞保活。
 #include "robot_hardware/robot_serial_system.hpp"
 #include "robot_hardware/servo_settling.hpp"
@@ -697,7 +698,7 @@ void RobotSerialSystem::attach_trace(SerialPort & port)
         });
 }
 
-// 只比较串口整行真正写出后的单调时刻，不让 ACK 抖动误报为发送中断。
+// 只比较串口整行真正写出后的单调时刻；间隔超限仅用于诊断，不锁定整车。
 void RobotSerialSystem::record_servo_send(std::chrono::steady_clock::time_point sent)
 {
   if (last_u_sent_.time_since_epoch().count() && async_active_) {
@@ -705,7 +706,6 @@ void RobotSerialSystem::record_servo_send(std::chrono::steady_clock::time_point 
     servo_gap_timing_.add(gap);
     if (gap >= servo_watchdog_ms_ && outputs_enabled_) {
       ++servo_watchdog_overruns_;
-      report_async_fault("SE2 U 实际发送间隔超过固件看门狗期限");
     }
   }
   last_u_sent_ = sent;
