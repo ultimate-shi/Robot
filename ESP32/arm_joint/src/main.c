@@ -1,4 +1,4 @@
-/* 作用：ESP32-C3硬件适配、USB文本API和主从总线；用法：PlatformIO master/slave环境构建，按API标定后运动。 */
+/* 作用：ESP32-C3独立主轴、免标定限时PWM及主从总线；用法：PlatformIO master/slave构建，默认中立1500us，从板离线不停止主轴。 */
 #include "arm_core.h"
 #include <math.h>
 #include <stdio.h>
@@ -108,7 +108,9 @@ static void local_state(char *out) {
     }
     if (age>=0) snprintf(ag,sizeof(ag),"%d",age);
     int fault=j.fault;
-    if (!fault && (!j.cfg.zero_valid || !j.cfg.direction_valid || !j.cfg.neutral_valid)) fault=2;
+    /* 未标定仍可运行限时PWM；此时状态应如实报告RUN/PWM而非合成未标定故障。 */
+    if (!fault && !(j.state==RUN && j.mode==PWM) &&
+        (!j.cfg.zero_valid || !j.cfg.direction_valid || !j.cfg.neutral_valid)) fault=2;
     snprintf(out,OUT_CAP,"R%d %s %s NA %d %d %d %d %s %d",ARM_NODE_ID,a,v,j.pwm_us,
         fault?FAULT:j.state,fault,remaining,ag,j.mode);
 }
@@ -237,14 +239,15 @@ static void poll_task(void *arg) {
         char reply[OUT_CAP]; int state=0,fault=0;
         if (xSemaphoreTake(bus_lock,pdMS_TO_TICKS(2))==pdTRUE) {
             bool good=transaction("R2",reply) && peer_parse(reply,&state,&fault);
-            lock(); bool was_online=peer.online;
-            if (good) { snprintf(peer.line,sizeof(peer.line),"%s",reply); peer.received=now_us(); peer.online=true; arm_bus_seen(&joint,peer.received); }
+            lock();
+            if (good) { snprintf(peer.line,sizeof(peer.line),"%s",reply); peer.received=now_us(); peer.online=true; }
             else if (peer.received && now_us()-peer.received>100000) peer.online=false;
-            bool lost=was_online && !peer.online;
             bool running=joint.state==RUN;
-            if (lost || (good && fault && running)) arm_stop(&joint);
+            bool blocks=fault && !(fault==2 && joint.mode==PWM);
+            /* 离线只更新从轴状态；收到从轴真实故障时保留现有整机故障联锁。 */
+            if (good && blocks && running) arm_stop(&joint);
             unlock();
-            if (lost || (good && fault && running)) send_bus("X");
+            if (good && blocks && running) send_bus("X");
             xSemaphoreGive(bus_lock);
         }
         vTaskDelay(pdMS_TO_TICKS(ARM_POLL_US/1000));
@@ -277,7 +280,7 @@ static void master_request(const char *input) {
         bool online=peer.online && now_us()-peer.received<=100000;
         int ps=0,pf=0;
         if (remote && (!online || !peer_parse(peer.line,&ps,&pf))) err="TIMEOUT";
-        else if (remote && pf) err="FAULT";
+        else if (remote && pf && !(c.op=='U' && pf==2)) err="FAULT";
         unlock();
         if (err) { fail_reply(out,c.name,err); usb_line(out); return; }
     }
@@ -370,7 +373,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(nvs_flash_init_partition("arm_cfg"));
     joint_lock=xSemaphoreCreateMutex(); bus_lock=xSemaphoreCreateMutex();
     arm_settings_t cfg; load_settings(&cfg); arm_init(&joint,&cfg);
-    /* 两板均从启动起启用总线看门狗，未建立通信也不能持续运动。 */
+    /* 仅从板启用总线看门狗；master不依赖从板在线，U仍受自身100ms期限约束。 */
     arm_bus_seen(&joint,now_us());
     gpio_config_t gate={.pin_bit_mask=1ULL<<ARM_TX_EN_PIN,.mode=GPIO_MODE_OUTPUT};
     ESP_ERROR_CHECK(gpio_config(&gate)); gpio_set_level(ARM_TX_EN_PIN,ARM_MASTER?1:0);

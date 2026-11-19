@@ -1,4 +1,4 @@
-/* 作用：实现文本解析、CRC、PWM期限、角度到位/保持、输出轴PID和限位；用法：由main硬件任务调用，clang可独立测试。 */
+/* 作用：实现免标定PWM期限、角度PID、限位及仅从板启用的总线看门狗；用法：由main调用，主机测试需分别指定ARM_MASTER=1/0。 */
 #include "arm_core.h"
 #include <ctype.h>
 #include <errno.h>
@@ -9,7 +9,7 @@
 #include <string.h>
 static float clip(float x, float lo, float hi) { return fminf(hi,fmaxf(lo,x)); }
 void arm_defaults(arm_settings_t *c) {
-    *c=(arm_settings_t){.encoder_dir=1,.motor_dir=1,.neutral_us=ARM_PWM_NEUTRAL,
+    *c=(arm_settings_t){.encoder_dir=1,.motor_dir=1,.neutral_us=ARM_PWM_NEUTRAL,.neutral_valid=true,
         .vmax=ARM_DEFAULT_VMAX,.amax=ARM_DEFAULT_AMAX,.kp=ARM_DEFAULT_KP};
 }
 /* schema=2采用旧结构前40字节，schema=3追加hold；只在校验成功后覆盖配置。 */
@@ -33,9 +33,20 @@ bool arm_settings_decode(arm_settings_t *c,uint32_t schema,const void *blob,size
         !isfinite(stored.kd) || stored.kd<0 || stored.kd>10 || (stored.hold!=0 && stored.hold!=1)) return false;
     *c=stored; return true;
 }
-void arm_bus_seen(arm_joint_t *j,int64_t now) { j->bus_deadline_us=now+ARM_BUS_WATCHDOG_US; }
+void arm_bus_seen(arm_joint_t *j,int64_t now) {
+#if ARM_MASTER
+    /* 主轴由USB独立控制，不因从板离线而停转，也不由从板回包续期。 */
+    (void)now; j->bus_deadline_us=0;
+#else
+    j->bus_deadline_us=now+ARM_BUS_WATCHDOG_US;
+#endif
+}
 void arm_init(arm_joint_t *j,const arm_settings_t *c) {
     memset(j,0,sizeof(*j)); j->cfg=*c; j->pwm_us=0;
+    /* 旧配置未设置中立时也使用默认1500us，不覆盖已设置的逐轴中立值。 */
+    if (!j->cfg.neutral_valid) {
+        j->cfg.neutral_us=ARM_PWM_NEUTRAL; j->cfg.neutral_valid=true;
+    }
 }
 void arm_stop(arm_joint_t *j) {
     j->state=j->fault?FAULT:STOP; j->mode=NONE; j->deadline_us=0;
@@ -61,9 +72,10 @@ void arm_sample(arm_joint_t *j,bool valid,int raw,int64_t now) {
 const char *arm_move_check(const arm_joint_t *j,char op,float value) {
     if (!isfinite(value) || (op=='R' && (value < -90 || value>90)) ||
         (op=='U' && (value<ARM_PWM_MIN || value>ARM_PWM_MAX || truncf(value)!=value))) return "RANGE";
-    /* 固件首次运行没有可信中立点，必须显式完成A/J标定后才开放运动。 */
-    if (j->fault || !j->sensor_valid || !j->cfg.zero_valid ||
-        !j->cfg.direction_valid || !j->cfg.neutral_valid) return "FAULT";
+    /* U直接输出限时脉宽，不依赖零位/方向/中立标定；真实故障和传感器检查保留。 */
+    if (j->fault || !j->sensor_valid) return "FAULT";
+    if (op=='R' && (!j->cfg.zero_valid || !j->cfg.direction_valid ||
+                    !j->cfg.neutral_valid)) return "FAULT";
     return NULL;
 }
 void arm_move(arm_joint_t *j,char op,float value,int64_t deadline) {
@@ -109,8 +121,10 @@ void arm_tick(arm_joint_t *j,int64_t now) {
     j->pwm_us=(int)clip(j->pwm_us,ARM_PWM_MIN,ARM_PWM_MAX);
     float drive=(j->pwm_us-j->cfg.neutral_us)*j->cfg.motor_dir;
     float stopping=j->speed*j->speed/(2*fmaxf(j->cfg.amax,1))+ARM_LIMIT_MARGIN_DEG;
-    if ((drive>0 && j->angle+stopping>=ARM_LIMIT_DEG) ||
-        (drive<0 && j->angle-stopping<=-ARM_LIMIT_DEG)) {
+    /* 方向及中立未知时，不能用默认映射将直接PWM误判为朝限位运动。 */
+    if (j->cfg.zero_valid && j->cfg.direction_valid && j->cfg.neutral_valid &&
+        ((drive>0 && j->angle+stopping>=ARM_LIMIT_DEG) ||
+         (drive<0 && j->angle-stopping<=-ARM_LIMIT_DEG))) {
         j->pwm_us=j->cfg.neutral_us; j->integral=0;
     }
 }

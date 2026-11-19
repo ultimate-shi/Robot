@@ -1,4 +1,4 @@
-/* 作用：验证真实控制核心的超时/限位/模式与协议边界；用法：scripts/test.sh，使用主机clang和运行时检查。 */
+/* 作用：验证免标定PWM、主轴独立运行和从板看门狗；用法：scripts/test.sh或主机编译时分别指定ARM_MASTER=1/0。 */
 #include "arm_core.h"
 #include <assert.h>
 #include <math.h>
@@ -72,6 +72,57 @@ static void trajectory_test(void) {
         angle+=(j.pwm_us-1500)/ARM_PWM_US_PER_DPS*0.005f;
     }
     assert(angle>1 && angle<20);
+}
+static void uncalibrated_pwm_test(void) {
+    /* 覆盖三个标定标志的全部组合，不能只放开“全新板”这一种情况。 */
+    for (int flags=0;flags<8;flags++) {
+        arm_settings_t cfg; arm_defaults(&cfg); cfg.zero_raw=2048;
+        cfg.zero_valid=(flags&1)!=0; cfg.direction_valid=(flags&2)!=0;
+        cfg.neutral_valid=(flags&4)!=0;
+        arm_joint_t j; arm_init(&j,&cfg); arm_sample(&j,true,2048,1000); arm_stop(&j);
+        assert(!arm_move_check(&j,'U',1600));
+        assert(j.cfg.neutral_valid && j.cfg.neutral_us==1500);
+        assert((arm_move_check(&j,'R',0)==NULL)==((flags&3)==3));
+        assert(arm_move_check(&j,'U',499) && arm_move_check(&j,'U',2501));
+        assert(arm_move_check(&j,'U',1500.5f) && arm_move_check(&j,'U',NAN));
+        arm_move(&j,'U',1600,101000);
+        for (int i=1;i<=20;i++) {
+            int64_t now=1000+i*5000LL;
+            arm_sample(&j,true,2048,now); arm_tick(&j,now);
+            if(i<20) assert(j.state==RUN && j.mode==PWM && j.pwm_us==1600);
+        }
+        assert(j.state==STOP && j.mode==NONE);
+        assert(j.pwm_us==1500);
+        arm_move(&j,'U',1400,201000); arm_stop(&j);
+        assert(j.mode==NONE && j.pwm_us==1500);
+        arm_fault(&j,1); assert(arm_move_check(&j,'U',1600));
+    }
+    arm_settings_t cfg; arm_defaults(&cfg);
+    arm_joint_t j; arm_init(&j,&cfg); arm_sample(&j,true,2048,1000);
+    /* 未标定的默认角度约-180度，不能误触发依赖方向/中立的制动。 */
+    assert(!arm_move_check(&j,'U',1400)); arm_move(&j,'U',1400,101000);
+    arm_sample(&j,true,2048,6000); arm_tick(&j,6000); assert(j.pwm_us==1400);
+    arm_sample(&j,false,0,11000); assert(j.state==FAULT && j.pwm_us==1500);
+    arm_init(&j,&cfg); arm_sample(&j,true,2048,1000); arm_bus_seen(&j,1000);
+    arm_move(&j,'U',1600,201000);
+    for(int i=1;i<=20;i++) {
+        int64_t now=1000+i*5000LL;
+        arm_sample(&j,true,2048,now); arm_tick(&j,now);
+    }
+#if ARM_MASTER
+    assert(j.state==RUN && j.pwm_us==1600 && j.bus_deadline_us==0);
+#else
+    assert(j.state==STOP && j.pwm_us==1500); /* 从板失去总线仍停止。 */
+#endif
+    /* 旧NVS中未启用的中立值回退1500，已保存的自定义中立值保留。 */
+    cfg.zero_raw=1962; cfg.zero_valid=true; cfg.neutral_us=1700; cfg.neutral_valid=false;
+    arm_settings_t loaded; arm_defaults(&loaded);
+    assert(arm_settings_decode(&loaded,3,&cfg,sizeof(cfg)));
+    arm_init(&j,&loaded); arm_stop(&j);
+    assert(j.cfg.zero_raw==1962 && j.cfg.zero_valid && j.cfg.neutral_valid && j.pwm_us==1500);
+    cfg.neutral_us=1499; cfg.neutral_valid=true;
+    assert(arm_settings_decode(&loaded,3,&cfg,sizeof(cfg)));
+    arm_init(&j,&loaded); arm_stop(&j); assert(j.pwm_us==1499);
 }
 static void framing_crc_test(void) {
     assert(arm_crc("123456789",9)==0x29b1);
@@ -234,9 +285,17 @@ static void watchdog_test(void) {
     for (int hold=0;hold<=1;hold++) {
         arm_joint_t j=calibrated();j.cfg.hold=hold;arm_bus_seen(&j,1000);arm_move(&j,'R',30,0);
         for(int i=1;i<=20;i++){arm_sample(&j,true,2048,1000+i*5000LL);arm_tick(&j,1000+i*5000LL);}
+#if ARM_MASTER
+        assert(j.state==RUN && j.mode==POS && j.bus_deadline_us==0);
+#else
         assert(j.state==STOP && j.mode==NONE && j.pwm_us==1500);
+#endif
         arm_bus_seen(&j,106000);arm_sample(&j,true,2048,106000);arm_tick(&j,106000);
-        assert(j.state==STOP); /* 通信恢复不能恢复旧动作。 */
+#if ARM_MASTER
+        assert(j.state==RUN); /* 主轴在从板离线及重连期间保持原目标。 */
+#else
+        assert(j.state==STOP); /* 从板通信恢复不能恢复旧动作。 */
+#endif
         arm_move(&j,'R',30,0);
         for(int i=22;i<=80;i++) {
             int64_t now=1000+i*5000LL;
@@ -286,6 +345,6 @@ static void bus_motion_test(void) {
     assert(arm_parse("U2 1490",true,&c));assert(arm_parse("U2 1490 93.0",true,&c));
 }
 int main(void) {
-    float_settings_test(); position_modes_test(); independent_test(); watchdog_test(); migration_test(); bus_motion_test(); parser_test(); timeout_modes_test(); limits_sensor_test(); trajectory_test(); framing_crc_test(); bus_query_test(); bus_resync_test();
+    uncalibrated_pwm_test(); float_settings_test(); position_modes_test(); independent_test(); watchdog_test(); migration_test(); bus_motion_test(); parser_test(); timeout_modes_test(); limits_sensor_test(); trajectory_test(); framing_crc_test(); bus_query_test(); bus_resync_test();
     puts("PASS: float API, arrival/hold, independent axes, bus watchdog, settings migration, parser, expiry, modes, limits, sensor loss, trajectory, framing, CRC, bus queries, captured UART replay"); return 0;
 }
