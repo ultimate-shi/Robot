@@ -1,6 +1,14 @@
 <!-- 作用：记录 ROS 2 开发过程；使用方法：按日期记录本次修改、验证结果、当前卡点和踩坑。 -->
 # 过程记录
 
+## 2026-11-19
+
+- 本次修改：通过 SSH 将 RK3588 `/home/radxa/Robot/ROS2/` 外层的 build、install、log、calibration_output、calibration_reports、maps、model、qwen_logs、.runtime、.pytest_cache 整体迁入 robot_car；原 src/scripts 的缓存合并到新目录，无文件冲突。目录迁移使用同文件系统重命名并核对 inode，保留地图、模型、标定及日志。外层只保留导航 README、robot_car、robot_arm 和系统元数据。
+- 同步修正用户级 robot-web.service 工作目录、配置及 Python 入口；备份原服务配置为 robot-web.service.before-workspace-move，更新模型目录内 13 个虚拟环境路径文件，重启网页服务。容器仍使用 /workspace，因此原 install 软链接可解析；此次未重建全部代码。
+- 验证结果：RK3588 临时 Jazzy 容器以新目录只读挂载，11 个 ROS 包可发现，原安装的 robot_hardware 可定位，硬件 launch 参数解析成功，6 项协议测试通过；git diff --check 通过。未启动机器人控制或下发运动指令。
+- 当前卡点：无迁移卡点。网页网关 active，但机器人控制台未启动，/robot/ 返回明确的 503 提示；整车运行与实机运动未验证。
+- 踩坑：第一次只读容器检查中 colcon 默认试图写入 log，改用 /tmp 日志目录；协议测试用 parents[1] 查固件在 /workspace 挂载下越界，改为 parent.parent，兼容仓库与独立容器环境。
+
 ## 2026-11-16
 
 - 本次修改：小车工作区整体移至 `ROS2/robot_car/`；同步当前文档、仓库约定和构建数据忽略路径；硬件协议测试的 STM32 路径适配新层级。容器内仍挂载为 `/workspace`，启动脚本相对工作区定位保持有效。新增独立 `ROS2/robot_arm/` 和 `robot_arm` ament_python 包骨架，不含硬件控制实现。
