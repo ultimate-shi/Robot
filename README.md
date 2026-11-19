@@ -7,19 +7,20 @@
 驾驶输入已增加独立持续连接，并以驾驶确认单独判断连接状态，避免状态查询超时清空按键；自动平衡中档改为依据实际腿角和 IMU 直接发送完整到位位置，并抑制微小目标重复下发，保持区采用 1° 进入、1.5° 退出的滞回；腿板按通道去重，未变化的到位目标不重复启动。参数和验收边界见 [通信与平衡优化](ROS2/robot_car/docs/balance_optimization.md)。
 
 
-机器人项目仓库，按控制平台分为 ROS 2 工作区和 STM32 控制板工程：
+机器人项目仓库包含独立ROS 2工作区、STM32控制板工程和ESP32机械臂关节固件：
 
 ```text
 Robot/
 ├── ROS2/
 │   ├── robot_car/  # 小车独立工作区
 │   └── robot_arm/  # 机械臂独立工作区
+├── ESP32/arm_joint/  # ESP32-C3机械臂关节master/slave固件
 └── STM32/  # 两套 STM32 控制板工程
     ├── Sevo_Echo_F103_V2/
     └── motor2_stm32f401rct6_mini/
 ```
 
-机械臂独立工作区及构建方法见 [机械臂 README](ROS2/robot_arm/README.md)。当前 `robot_arm` 仅为功能包骨架，尚未实现硬件驱动。小车和机械臂须分别进入各自工作区构建，不在 `ROS2/` 统一构建。
+机械臂独立工作区及构建方法见 [机械臂 README](ROS2/robot_arm/README.md)。 ESP32-C3固件和构建方法见[固件README](ESP32/arm_joint/README.md)，文本接口、100ms超时及标定说明见[机械臂硬件API](ROS2/robot_arm/docs/hardware_api.md)。当前 `robot_arm` 仅为功能包骨架，尚未实现硬件驱动。小车和机械臂须分别进入各自工作区构建，不在 `ROS2/` 统一构建。
 
 当前实机默认使用 Astra Pro RGB-D（已替换原头部双目），安装中心与高度沿用原头部 xacro，安装 TF 已启用；部署和坐标说明见 [Astra Pro 接入](ROS2/robot_car/docs/astra_pro.md)。
 

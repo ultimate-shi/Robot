@@ -1,0 +1,12 @@
+# 作用：排除ESP-IDF/PlatformIO生成物；用法：保留源码、默认配置、脚本和测试。
+.pio/
+.venv/
+build/
+sdkconfig.master
+sdkconfig.slave
+sdkconfig.old
+sdkconfig.master.old
+sdkconfig.slave.old
+*.bin
+*.elf
+.DS_Store
