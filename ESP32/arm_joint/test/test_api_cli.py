@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 作用：无设备验证串口工具的到位等待、保持退出和失败停止；用法：python -m unittest discover -s ESP32/arm_joint/test -p 'test_*.py'。
+# 作用：无设备验证0.4含raw反馈、到位等待和失败停止；用法：python -m unittest discover -s ESP32/arm_joint/test -p 'test_*.py'。
 import contextlib
 import importlib.util
 import io
@@ -34,6 +34,8 @@ class Board:
         self.premature_stop = False
         self.stale_once = False
         self.invalid_feedback = None
+        self.raw = 2048
+        self.legacy_feedback = False
 
     def exchange(self, port, command):
         self.commands.append(command)
@@ -49,17 +51,18 @@ class Board:
             joint_id = int(name[1:])
             target, sent_at, _ = self.targets[joint_id]
             if self.fault:
-                return [f"{name} NA NA NA 1500 2 5 0 NA 0"]
+                return [f"{name} NA NA NA 1500 2 5 0 NA 0 -1"]
             if self.stale_once:
                 self.stale_once = False
-                return [f"{name} 0 0 NA 1500 0 0 0 50 0"]
+                return [f"{name} 0 0 NA 1500 0 0 0 50 0 {self.raw}"]
             if self.invalid_feedback:
-                return [f"{name} {self.invalid_feedback} 0 NA 1500 1 0 0 0 1"]
+                return [f"{name} {self.invalid_feedback} 0 NA 1500 1 0 0 0 1 {self.raw}"]
             ready = self.clock.now - sent_at >= .15 and not self.stuck
             angle = target if ready else target - 2
             state = 0 if self.premature_stop or (ready and not self.hold[joint_id]) else 1
             mode = 0 if state == 0 else 1
-            return [f"{name} {angle} 0 NA 1500 {state} 0 0 0 {mode}"]
+            line = f"{name} {angle} 0 NA 1500 {state} 0 0 0 {mode}"
+            return [line if self.legacy_feedback else f"{line} {self.raw}"]
         return [name + " OK"]
 
 
@@ -146,6 +149,25 @@ class CliTests(unittest.TestCase):
         with mock.patch.object(cli, "wait_positions", side_effect=KeyboardInterrupt):
             with self.assertRaises(KeyboardInterrupt):
                 self.batch(["R1 2.5"])
+        self.assertEqual(self.board.commands[-1], "X")
+
+    def test_raw_boundaries_allow_arrival(self):
+        for raw in (0, 4095):
+            self.board.raw = raw
+            self.batch(["R1 2.5"])
+        self.assertNotIn("X", self.board.commands)
+
+    def test_invalid_raw_stops(self):
+        for raw in (-1, 4096):
+            self.board.raw = raw
+            with self.assertRaises(RuntimeError):
+                self.batch(["R1 2.5"])
+            self.assertEqual(self.board.commands[-1], "X")
+
+    def test_legacy_status_rejected(self):
+        self.board.legacy_feedback = True
+        with self.assertRaises(RuntimeError):
+            self.batch(["R1 2.5"])
         self.assertEqual(self.board.commands[-1], "X")
 
 

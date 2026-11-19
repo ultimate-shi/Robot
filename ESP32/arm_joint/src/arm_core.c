@@ -1,4 +1,4 @@
-/* 作用：实现免标定PWM期限、角度PID、限位及仅从板启用的总线看门狗；用法：由main调用，主机测试需分别指定ARM_MASTER=1/0。 */
+/* 作用：实现0.4反馈解析、免标定PWM、角度PID及从板看门狗；用法：由main调用，主机测试分别指定ARM_MASTER=1/0，J不再支持。 */
 #include "arm_core.h"
 #include <ctype.h>
 #include <errno.h>
@@ -172,7 +172,7 @@ const char *arm_parse(const char *line,bool bus,arm_command_t *c) {
         else if (!strcmp(word,"$busraw")) c->op='h';
         else return "CMD";
     } else {
-        c->op=word[0]; if (!strchr("RUXAJPH",c->op)) return "CMD";
+        c->op=word[0]; if (!strchr("RUXAPH",c->op)) return "CMD";
         if (word[1] && (!number(word+1,&c->id) || c->id<1 || c->id>ARM_COUNT)) return "ID";
     }
     char *args[4];
@@ -181,7 +181,7 @@ const char *arm_parse(const char *line,bool bus,arm_command_t *c) {
         args[c->argc++]=word;
     }
     for (int i=0;i<c->argc;i++) {
-        bool real=c->op=='R' || c->op=='P' || (c->op=='J' && i<2);
+        bool real=c->op=='R' || c->op=='P';
         if (real) { if (!decimal(args[i],&c->val[i])) return "ARG"; }
         else { int n; if (!number(args[i],&n)) return "ARG"; c->val[i]=(float)n; }
     }
@@ -217,11 +217,6 @@ const char *arm_setting(arm_joint_t *j,const arm_command_t *c) {
         j->cfg.zero_raw=c->val[0]; j->cfg.encoder_dir=c->val[1]; j->cfg.motor_dir=c->val[2];
         j->cfg.zero_valid=true; j->cfg.direction_valid=true;
         j->sensor_valid=false; j->sample_us=0;
-    } else if (c->op=='J') {
-        if (c->val[0]<0.01f || c->val[0]>ARM_MAX_VMAX || c->val[1]<0.01f ||
-            c->val[1]>ARM_MAX_AMAX || c->val[2]<500 || c->val[2]>2500) return "RANGE";
-        j->cfg.vmax=c->val[0]; j->cfg.amax=c->val[1];
-        j->cfg.neutral_us=c->val[2]; j->cfg.neutral_valid=true;
     } else if (c->op=='P') {
         if (c->val[0]<0 || c->val[0]>100 || c->val[1]<0 || c->val[1]>100 ||
             c->val[2]<0 || c->val[2]>10) return "RANGE";
@@ -231,6 +226,14 @@ const char *arm_setting(arm_joint_t *j,const arm_command_t *c) {
         j->cfg.hold=(int)c->val[0];
     } else return "CMD";
     arm_stop(j); return NULL;
+}
+bool arm_feedback_parse(const char *line,int expected_id,int *state,int *fault,int *raw) {
+    char a[24],v[24],cur[24],pwm[24],age[24]; int id,remain,mode,n=0;
+    if (sscanf(line,"R%d %23s %23s %23s %23s %d %d %d %23s %d %d%n",
+        &id,a,v,cur,pwm,state,fault,&remain,age,&mode,raw,&n)!=11) return false;
+    return line[n]==0 && id==expected_id && *state>=0 && *state<=2 &&
+        *fault>=0 && *fault<=7 && mode>=0 && mode<=2 && remain>=0 && remain<=100 &&
+        *raw>=-1 && *raw<=4095;
 }
 uint16_t arm_crc(const char *data,size_t n) {
     uint16_t crc=0xffff;

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 作用：验证0.3浮点API，批处理等待角度到位并保留保持模式；用法：--command 'R1 2.5'，交互用--interactive，需pyserial。
+# 作用：验证0.4含raw状态API并等待到位/保持；用法：--command R1查询，运动用--command 'R1 2.5'，交互用--interactive，需pyserial。
 import argparse
 import math
 import time
@@ -72,8 +72,11 @@ def wait_positions(port, targets, timeout):
                 raise TimeoutError("等待关节到位超时")
             line = checked_exchange(port, f"R{joint_id}")[0]
             fields = line.split()
-            if len(fields) != 10 or fields[0] != f"R{joint_id}":
+            if len(fields) != 11 or fields[0] != f"R{joint_id}":
                 raise RuntimeError(f"状态格式异常：{line}")
+            raw = int(fields[10])
+            if not 0 <= raw <= 4095:
+                raise RuntimeError(f"关节{joint_id}编码器反馈无效：{line}")
             state, fault, mode = int(fields[5]), int(fields[6]), int(fields[9])
             if fault or state == 2:
                 raise RuntimeError(f"关节{joint_id}故障：{line}")
@@ -149,7 +152,7 @@ def run_batch(port, commands, repeat, hz, wait_timeout):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="机械臂USB文本API 0.3终端")
+    parser = argparse.ArgumentParser(description="机械臂USB文本API 0.4终端")
     parser.add_argument("--port", required=True)
     parser.add_argument("--command", action="append", help="可重复；角度和PID直接填写实际小数")
     parser.add_argument("--repeat", type=int, default=1)
@@ -161,7 +164,7 @@ def main():
         parser.error("repeat须>=1，hz须在(0,20]内")
     if not math.isfinite(args.wait_timeout) or args.wait_timeout <= 0:
         parser.error("wait-timeout须为有限正数")
-    commands = args.command or ["$info", "$version", "R", "$raw 1", "A1", "J1", "P1", "H1"]
+    commands = args.command or ["$info", "$version", "R", "$raw 1", "A1", "P1", "H1"]
     port = serial.Serial(port=None, baudrate=115200, timeout=0.1, write_timeout=1)
     port.dtr = False
     port.rts = False
@@ -172,8 +175,8 @@ def main():
         port.write(b"\n")
         time.sleep(0.05)
         port.reset_input_buffer()
-        if checked_exchange(port, "$version") != ["$version 0.3"]:
-            raise RuntimeError("工具需要0.3固件；旧版使用不同数值单位，请配套升级主从板")
+        if checked_exchange(port, "$version") != ["$version 0.4"]:
+            raise RuntimeError("工具需要0.4固件（状态末项为raw、移除J）；请配套升级主从板")
         if args.interactive:
             print("整行发送；:quit退出并停止。角度目标无需刷新；X输出配置中立值。")
             while True:

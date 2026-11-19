@@ -1,7 +1,7 @@
-<!-- 作用：说明ESP32-C3独立主轴、免标定PWM和固件构建验证；使用方法：先读API，分别选择master/slave环境。 -->
+<!-- 作用：说明ESP32-C3的0.4含raw反馈、移除J及固件构建验证；使用方法：先读API，分别选择master/slave环境并配套升级工具。 -->
 # ESP32-C3机械臂关节固件
 
-源码对应机械臂文本API 0.3：角度/PID直接使用实际浮点数值。位置命令R发送一次后在板端执行PID，H逐轴选择到位停转或保持，U直接输出舵机脉宽且100ms到期。Mac或RK3588通过原生USB连接master；master同时控制本地关节1并通过UART控制从板关节2。
+源码对应机械臂文本API 0.4：R1/R2状态末尾追加原始编码器raw（0～4095，不可用为-1），移除J查询与设置，主从及串口工具须配套升级。角度/PID直接使用实际浮点数值。位置命令R发送一次后在板端执行PID，H逐轴选择到位停转或保持，U直接输出舵机脉宽且100ms到期。Mac或RK3588通过原生USB连接master；master同时控制本地关节1并通过UART控制从板关节2。
 
 U不要求零位、方向或中立标定；编码器有效和真实故障检查仍保留。master关节1不依赖从板在线，slave收不到有效总线数据时仍受100ms看门狗约束。两轴默认中立均为1500µs，上电、停止和PWM到期输出该值；旧配置未设置中立时也回退到1500µs，已设置的自定义中立保留。R角度控制仍要求完成标定。仅当标定完整时启用依赖方向映射的限位制动，已设置零位的绝对越限检查仍保留。100ms限制的是本次U脉宽输出时间，不代表断电或对未知中立的物理停转保证。
 
@@ -33,7 +33,7 @@ python3 -m venv .venv
 
 ## 核心测试与只读检查
 
-逐步操作见[通信、零位/中立与固件测试](../../ROS2/robot_arm/docs/firmware_test_guide.md)。标定推荐串口工具加`--interactive`，按回车整行发送并保持RAM配置；先确认J设置立即输出的中立值风险。
+逐步操作见[通信、零位与固件测试](../../ROS2/robot_arm/docs/firmware_test_guide.md)。推荐串口工具加`--interactive`，按回车整行发送；R1查询当前角度和末项raw，不发运动命令。
 
 ```bash
 ESP32/arm_joint/scripts/test.sh
@@ -41,7 +41,7 @@ python3 -m unittest discover -s ESP32/arm_joint/test -p 'test_*.py'
 python3 ESP32/arm_joint/scripts/api_cli.py --port /dev/cu.usbmodemXXXX
 ```
 
-历史0.2 master曾在2026-11-16烧录并通过身份/传感器只读检查；运动标定与从板联动尚未验收。本次0.3尚未烧录或实机运动验收，主从板和工具必须配套升级；不自动兼容旧版缩放指令。旧schema=2配置可读取，H默认0，save后写入schema=3。原Flash备份位于`backups/master_before_2026-11-16.bin`，不纳入版本管理。
+历史0.2/0.3已做部分身份和传感器检查，过程见机械臂progress.md；运动标定与从板联动尚未验收。本次0.4尚未烧录或实机运动验收，主从板和工具必须配套升级；不兼容旧版状态行。旧schema=2配置可读取，H默认0，save后写入schema=3，移除J不改变NVS布局及已有内部控制配置。原Flash备份位于backups目录，不纳入版本管理。
 
 测试脚本依赖主机clang，直接编译实际`arm_core.c`并启用AddressSanitizer/UndefinedBehaviorSanitizer，不使用模拟副本。串口脚本依赖pyserial，默认只查身份、状态、ADC原始值和配置，不发运动/标定命令。PWM的20Hz刷新须显式指定`--command`、`--repeat`，结束发送对应轴X。角度命令默认一次发送并等待到位（`--wait-timeout`默认60秒）；保持模式到位后正常退出不发送X，超时/故障/中断则发送X。交互模式便于运动中覆盖命令，退出时停止。
 

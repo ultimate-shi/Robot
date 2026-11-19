@@ -1,4 +1,4 @@
-/* 作用：定义不依赖ESP-IDF的协议/关节控制核心；用法：硬件任务或主机单元测试调用。 */
+/* 作用：定义0.4协议/关节控制核心及含raw的反馈解析接口；用法：硬件任务或主机单元测试调用。 */
 #pragma once
 #include <stdbool.h>
 #include <stddef.h>
@@ -44,6 +44,8 @@ const char *arm_move_check(const arm_joint_t *j, char op, float value);
 void arm_move(arm_joint_t *j, char op, float value, int64_t deadline);
 const char *arm_parse(const char *line, bool bus, arm_command_t *c);
 const char *arm_setting(arm_joint_t *j, const arm_command_t *c);
+/* 仅接受指定关节的0.4完整状态行，末项raw允许-1或0～4095。 */
+bool arm_feedback_parse(const char *line,int expected_id,int *state,int *fault,int *raw);
 uint16_t arm_crc(const char *data, size_t n);
 bool arm_bus_encode(uint16_t seq, const char *body, char *out, size_t cap);
 bool arm_bus_decode(char *line, uint16_t *seq, char **body);
