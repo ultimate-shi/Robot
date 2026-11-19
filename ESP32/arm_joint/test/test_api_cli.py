@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-# 作用：无设备验证0.4含raw反馈、到位等待和失败停止；用法：python -m unittest discover -s ESP32/arm_joint/test -p 'test_*.py'。
+# 作用：无设备验证0.5编码器/角度/弧度反馈与到位停止；用法：python -m unittest discover -s ESP32/arm_joint/test -p 'test_*.py'。
 import contextlib
 import importlib.util
 import io
+import math
 import pathlib
 import unittest
 from unittest import mock
@@ -36,6 +37,7 @@ class Board:
         self.invalid_feedback = None
         self.raw = 2048
         self.legacy_feedback = False
+        self.invalid_radians = False
 
     def exchange(self, port, command):
         self.commands.append(command)
@@ -51,18 +53,20 @@ class Board:
             joint_id = int(name[1:])
             target, sent_at, _ = self.targets[joint_id]
             if self.fault:
-                return [f"{name} NA NA NA 1500 2 5 0 NA 0 -1"]
+                return [f"{name} -1 NA NA NA 1500 2 5 0"]
             if self.stale_once:
                 self.stale_once = False
-                return [f"{name} 0 0 NA 1500 0 0 0 50 0 {self.raw}"]
+                return [f"{name} {self.raw} 0 0 NA 1500 0 0 0"]
             if self.invalid_feedback:
-                return [f"{name} {self.invalid_feedback} 0 NA 1500 1 0 0 0 1 {self.raw}"]
+                return [f"{name} {self.raw} {self.invalid_feedback} 0 NA 1500 1 0 1"]
             ready = self.clock.now - sent_at >= .15 and not self.stuck
             angle = target if ready else target - 2
             state = 0 if self.premature_stop or (ready and not self.hold[joint_id]) else 1
             mode = 0 if state == 0 else 1
-            line = f"{name} {angle} 0 NA 1500 {state} 0 0 0 {mode}"
-            return [line if self.legacy_feedback else f"{line} {self.raw}"]
+            if self.legacy_feedback:
+                return [f"{name} {angle} 0 NA 1500 {state} 0 0 0 {mode} {self.raw}"]
+            radians = 1.0 if self.invalid_radians else math.radians(angle)
+            return [f"{name} {self.raw} {angle:.4f} {radians:.6f} NA 1500 {state} 0 {mode}"]
         return [name + " OK"]
 
 
@@ -115,10 +119,11 @@ class CliTests(unittest.TestCase):
         self.assertNotIn("R1", self.board.commands)
         self.assertIn("X1", self.board.commands)
 
-    def test_stale_stop_is_ignored(self):
+    def test_off_target_stop_is_rejected(self):
         self.board.stale_once = True
-        self.batch(["R1 2.5"])
-        self.assertNotIn("X", self.board.commands)
+        with self.assertRaises(RuntimeError):
+            self.batch(["R1 2.5"])
+        self.assertEqual(self.board.commands[-1], "X")
 
     def test_timeout_stops(self):
         self.board.stuck = True
@@ -166,6 +171,12 @@ class CliTests(unittest.TestCase):
 
     def test_legacy_status_rejected(self):
         self.board.legacy_feedback = True
+        with self.assertRaises(RuntimeError):
+            self.batch(["R1 2.5"])
+        self.assertEqual(self.board.commands[-1], "X")
+
+    def test_inconsistent_radians_stops(self):
+        self.board.invalid_radians = True
         with self.assertRaises(RuntimeError):
             self.batch(["R1 2.5"])
         self.assertEqual(self.board.commands[-1], "X")

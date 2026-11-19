@@ -1,4 +1,4 @@
-/* 作用：验证0.4原始编码器反馈、移除J及主从控制边界；用法：scripts/test.sh或编译时分别指定ARM_MASTER=1/0。 */
+/* 作用：验证0.5编码器/角度/弧度反馈及主从控制边界；用法：scripts/test.sh或编译时分别指定ARM_MASTER=1/0。 */
 #include "arm_core.h"
 #include <assert.h>
 #include <math.h>
@@ -157,7 +157,7 @@ static void bus_query_test(void) {
         assert(arm_bus_decode(line.data,&seq,&body) && seq==73);
         assert(!arm_parse(body,true,&c) && c.id==2 && !c.argc);
         assert((q==0 && c.op=='R') || (q==1 && c.op=='d'));
-        const char *response=q?"$raw 2 2119 3708 4095 0 0":"R2 NA NA NA 1500 2 2 0 2 0 2119";
+        const char *response=q?"$raw 2 2119 3708 4095 0 0":"R2 2119 NA NA NA 1500 2 2 0";
         assert(arm_bus_encode(seq,response,packet,sizeof(packet)));
         packet[strlen(packet)-1]=0;
         assert(arm_bus_decode(packet,&seq,&body) && seq==73 && !strcmp(body,response));
@@ -336,14 +336,14 @@ static void migration_test(void) {
 }
 static void feedback_and_removed_j_test(void) {
     int state,fault,raw;
-    assert(arm_feedback_parse("R1 NA NA NA 1500 2 2 0 2 0 1955",1,&state,&fault,&raw));
+    assert(arm_feedback_parse("R1 1955 NA NA NA 1500 2 2 0",1,&state,&fault,&raw));
     assert(state==FAULT && fault==2 && raw==1955); /* 未标定仍有原始读数。 */
-    const char *good[]={"R2 0 0 NA 1500 0 0 0 2 0 0", "R2 0 0 NA 1600 1 0 90 2 2 4095",
-        "R2 NA NA NA NA 2 5 0 NA 0 -1"};
+    const char *good[]={"R2 0 0.0000 0.000000 NA 1500 0 0 0", "R2 4095 2.5000 0.043633 NA 1600 1 0 2",
+        "R2 -1 NA NA NA NA 2 5 0"};
     for(unsigned i=0;i<sizeof(good)/sizeof(*good);i++) assert(arm_feedback_parse(good[i],2,&state,&fault,&raw));
-    const char *bad[]={"R2 0 0 NA 1500 0 0 0 2 0", "R2 0 0 NA 1500 0 0 0 2 0 4096",
-        "R2 0 0 NA 1500 0 0 0 2 0 -2", "R2 0 0 NA 1500 0 0 0 2 0 1 junk",
-        "R1 0 0 NA 1500 0 0 0 2 0 1", "R2 0 0 NA 1500 0 0 0 2 0 NA"};
+    const char *bad[]={"R2 0 0 NA 1500 0 0 0 2 0 0", "R2 4096 0 0 NA 1500 0 0 0",
+        "R2 -2 0 0 NA 1500 0 0 0", "R2 1 0 0 NA 1500 0 0 0 junk",
+        "R1 1 0 0 NA 1500 0 0 0", "R2 NA 0 0 NA 1500 0 0 0"};
     for(unsigned i=0;i<sizeof(bad)/sizeof(*bad);i++) assert(!arm_feedback_parse(bad[i],2,&state,&fault,&raw));
     const char *removed[]={"J", "J1", "J2", "J1 5 10 1500", "J2 10 30 1500"};
     arm_command_t command;
@@ -351,6 +351,24 @@ static void feedback_and_removed_j_test(void) {
         assert(!strcmp(arm_parse(removed[i],false,&command),"CMD"));
         assert(!strcmp(arm_parse(removed[i],true,&command),"CMD"));
     }
+}
+static void feedback_format_test(void) {
+    char out[256]; arm_joint_t j=calibrated();
+    arm_feedback_format(&j,1,1000,out,sizeof(out));
+    assert(!strcmp(out,"R1 2048 0.0000 0.000000 NA 1500 0 0 0"));
+    arm_sample(&j,true,3072,6000); arm_feedback_format(&j,1,6000,out,sizeof(out));
+    assert(!strcmp(out,"R1 3072 90.0000 1.570796 NA 1500 0 0 0"));
+    j=calibrated(); arm_sample(&j,true,1024,6000);arm_feedback_format(&j,2,6000,out,sizeof(out));
+    assert(!strcmp(out,"R2 1024 -90.0000 -1.570796 NA 1500 0 0 0"));
+    arm_settings_t cfg;arm_defaults(&cfg);arm_init(&j,&cfg);arm_stop(&j);arm_sample(&j,true,1955,1000);
+    arm_feedback_format(&j,1,1000,out,sizeof(out));
+    assert(!strcmp(out,"R1 1955 NA NA NA 1500 2 2 0"));
+    arm_move(&j,'U',1600,101000);arm_feedback_format(&j,1,1000,out,sizeof(out));
+    assert(!strcmp(out,"R1 1955 NA NA NA 1600 1 0 2"));
+    arm_feedback_format(&j,1,22000,out,sizeof(out));
+    assert(!strcmp(out,"R1 -1 NA NA NA 1600 1 0 2"));
+    arm_sample(&j,false,0,23000);arm_feedback_format(&j,1,23000,out,sizeof(out));
+    assert(!strcmp(out,"R1 -1 NA NA NA 1500 2 1 0"));
 }
 static void bus_motion_test(void) {
     const char *commands[]={"R 30.5 -20.25","R2 -20.25","U 1510 1490 93","U2 1490 93","H2 1","P2 1.25 .01 0","A2 2048 1 -1"};
@@ -366,6 +384,6 @@ static void bus_motion_test(void) {
     assert(arm_parse("U2 1490",true,&c));assert(arm_parse("U2 1490 93.0",true,&c));
 }
 int main(void) {
-    feedback_and_removed_j_test(); uncalibrated_pwm_test(); float_settings_test(); position_modes_test(); independent_test(); watchdog_test(); migration_test(); bus_motion_test(); parser_test(); timeout_modes_test(); limits_sensor_test(); trajectory_test(); framing_crc_test(); bus_query_test(); bus_resync_test();
+    feedback_format_test(); feedback_and_removed_j_test(); uncalibrated_pwm_test(); float_settings_test(); position_modes_test(); independent_test(); watchdog_test(); migration_test(); bus_motion_test(); parser_test(); timeout_modes_test(); limits_sensor_test(); trajectory_test(); framing_crc_test(); bus_query_test(); bus_resync_test();
     puts("PASS: float API, arrival/hold, independent axes, bus watchdog, settings migration, parser, expiry, modes, limits, sensor loss, trajectory, framing, CRC, bus queries, captured UART replay"); return 0;
 }

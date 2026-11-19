@@ -1,4 +1,4 @@
-/* 作用：实现0.4反馈解析、免标定PWM、角度PID及从板看门狗；用法：由main调用，主机测试分别指定ARM_MASTER=1/0，J不再支持。 */
+/* 作用：实现0.5编码器/角度/弧度反馈、PWM和角度PID；用法：由main调用，主机测试分别指定ARM_MASTER=1/0。 */
 #include "arm_core.h"
 #include <ctype.h>
 #include <errno.h>
@@ -227,12 +227,26 @@ const char *arm_setting(arm_joint_t *j,const arm_command_t *c) {
     } else return "CMD";
     arm_stop(j); return NULL;
 }
+void arm_feedback_format(const arm_joint_t *j,int id,int64_t now,char *out,size_t cap) {
+    bool fresh=j->sensor_valid && j->sample_us && now>=j->sample_us &&
+        now-j->sample_us<=ARM_ENCODER_STALE_US;
+    char angle[24]="NA",radians[24]="NA";
+    if (fresh && j->cfg.zero_valid && j->cfg.direction_valid) {
+        snprintf(angle,sizeof(angle),"%.4f",(double)j->angle);
+        snprintf(radians,sizeof(radians),"%.6f",(double)j->angle*3.14159265358979323846/180.0);
+    }
+    int fault=j->fault;
+    if (!fault && !(j->state==RUN && j->mode==PWM) &&
+        (!j->cfg.zero_valid || !j->cfg.direction_valid || !j->cfg.neutral_valid)) fault=2;
+    snprintf(out,cap,"R%d %d %s %s NA %d %d %d %d",id,fresh?j->raw:-1,angle,radians,
+        j->pwm_us,fault?FAULT:j->state,fault,j->mode);
+}
 bool arm_feedback_parse(const char *line,int expected_id,int *state,int *fault,int *raw) {
-    char a[24],v[24],cur[24],pwm[24],age[24]; int id,remain,mode,n=0;
-    if (sscanf(line,"R%d %23s %23s %23s %23s %d %d %d %23s %d %d%n",
-        &id,a,v,cur,pwm,state,fault,&remain,age,&mode,raw,&n)!=11) return false;
+    char a[24],rad[24],cur[24],pwm[24]; int id,mode,n=0;
+    if (sscanf(line,"R%d %d %23s %23s %23s %23s %d %d %d%n",
+        &id,raw,a,rad,cur,pwm,state,fault,&mode,&n)!=9) return false;
     return line[n]==0 && id==expected_id && *state>=0 && *state<=2 &&
-        *fault>=0 && *fault<=7 && mode>=0 && mode<=2 && remain>=0 && remain<=100 &&
+        *fault>=0 && *fault<=7 && mode>=0 && mode<=2 &&
         *raw>=-1 && *raw<=4095;
 }
 uint16_t arm_crc(const char *data,size_t n) {

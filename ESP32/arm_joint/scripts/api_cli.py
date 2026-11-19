@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# 作用：验证0.4含raw状态API并等待到位/保持；用法：--command R1查询，运动用--command 'R1 2.5'，交互用--interactive，需pyserial。
+# 作用：验证0.5编码器/角度/弧度状态并等待到位；用法：--command R1查询，--interactive交互，需pyserial。
 import argparse
 import math
 import time
@@ -8,7 +8,7 @@ import serial
 ARRIVAL_DEG = 0.5
 ARRIVAL_DPS = 1.0
 ARRIVAL_SECONDS = 0.2
-FEEDBACK_MAX_MS = 100
+SPEED_FILTER_SECONDS = 0.1
 
 
 def exchange(port, command):
@@ -62,36 +62,42 @@ def motion_axes(command):
 def wait_positions(port, targets, timeout):
     """targets为id -> (角度, 保持参数, 下发时刻)，只查状态、不续发目标。"""
     deadline = time.monotonic() + timeout
-    stable = {}
+    stable, previous = {}, {}
     pending = dict(targets)
     while pending:
         if time.monotonic() >= deadline:
             raise TimeoutError("等待关节到位超时")
-        for joint_id, (target, hold, sent_at) in list(pending.items()):
+        for joint_id, (target, hold, _sent_at) in list(pending.items()):
             if time.monotonic() >= deadline:
                 raise TimeoutError("等待关节到位超时")
             line = checked_exchange(port, f"R{joint_id}")[0]
             fields = line.split()
-            if len(fields) != 11 or fields[0] != f"R{joint_id}":
+            if len(fields) != 9 or fields[0] != f"R{joint_id}":
                 raise RuntimeError(f"状态格式异常：{line}")
-            raw = int(fields[10])
+            raw = int(fields[1])
             if not 0 <= raw <= 4095:
                 raise RuntimeError(f"关节{joint_id}编码器反馈无效：{line}")
-            state, fault, mode = int(fields[5]), int(fields[6]), int(fields[9])
+            state, fault, mode = int(fields[6]), int(fields[7]), int(fields[8])
             if fault or state == 2:
                 raise RuntimeError(f"关节{joint_id}故障：{line}")
-            angle, speed = float(fields[1]), float(fields[2])
-            age = int(fields[8])
-            if not math.isfinite(angle) or not math.isfinite(speed) or not 0 <= age <= FEEDBACK_MAX_MS:
+            angle, radians = float(fields[2]), float(fields[3])
+            if not math.isfinite(angle) or not math.isfinite(radians) or not math.isclose(radians, math.radians(angle), abs_tol=2e-6):
                 raise RuntimeError(f"关节{joint_id}反馈无效：{line}")
             now = time.monotonic()
-            # 网关可能返回下发前的缓存，不能把旧STOP当作本次动作完成或失败。
-            if age >= (now - sent_at) * 1000 - 1:
-                continue
-            arrived = abs(angle - target) <= ARRIVAL_DEG and abs(speed) <= ARRIVAL_DPS
+            # 0.5不返回速度；保持模式按连续角度采样估算速度，STOP由板端确认到位。
+            speed = math.inf
+            if joint_id in previous:
+                last_angle, last_time, last_speed = previous[joint_id]
+                dt = now - last_time
+                if dt > 0:
+                    measured = math.remainder(angle - last_angle, 360) / dt
+                    speed = measured if not math.isfinite(last_speed) else last_speed + dt / (dt + SPEED_FILTER_SECONDS) * (measured - last_speed)
+            previous[joint_id] = (angle, now, speed)
+            near = abs(angle - target) <= ARRIVAL_DEG
+            arrived = near and abs(speed) <= ARRIVAL_DPS
             if not hold:
                 if state == 0 and mode == 0:
-                    if not arrived:
+                    if not near:
                         raise RuntimeError(f"关节{joint_id}未到目标便停止：{line}")
                     del pending[joint_id]
                 elif state != 1 or mode != 1:
@@ -152,7 +158,7 @@ def run_batch(port, commands, repeat, hz, wait_timeout):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="机械臂USB文本API 0.4终端")
+    parser = argparse.ArgumentParser(description="机械臂USB文本API 0.5终端")
     parser.add_argument("--port", required=True)
     parser.add_argument("--command", action="append", help="可重复；角度和PID直接填写实际小数")
     parser.add_argument("--repeat", type=int, default=1)
@@ -175,8 +181,8 @@ def main():
         port.write(b"\n")
         time.sleep(0.05)
         port.reset_input_buffer()
-        if checked_exchange(port, "$version") != ["$version 0.4"]:
-            raise RuntimeError("工具需要0.4固件（状态末项为raw、移除J）；请配套升级主从板")
+        if checked_exchange(port, "$version") != ["$version 0.5"]:
+            raise RuntimeError("工具需要0.5固件（raw、角度、弧度的新状态格式）；请配套升级主从板")
         if args.interactive:
             print("整行发送；:quit退出并停止。角度目标无需刷新；X输出配置中立值。")
             while True:

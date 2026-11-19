@@ -1,4 +1,4 @@
-/* 作用：ESP32-C3独立主轴、0.4原始编码器反馈及主从总线；用法：master/slave配套构建，R状态末项为raw，J命令已移除。 */
+/* 作用：ESP32-C3独立主轴与0.5编码器/角度/弧度反馈；用法：master/slave及工具配套升级，R查询不返回速度和时间字段。 */
 #include "arm_core.h"
 #include <math.h>
 #include <stdio.h>
@@ -99,21 +99,7 @@ static bool save_settings(const arm_settings_t *c) {
 }
 static void local_state(char *out) {
     lock(); arm_joint_t j=joint; unlock();
-    int64_t now=now_us(); int age=j.sample_us?(int)((now-j.sample_us)/1000):-1;
-    int remaining=j.state==RUN && j.mode==PWM?(int)fmax(0,(j.deadline_us-now)/1000):0;
-    char a[24]="NA",v[24]="NA",ag[24]="NA";
-    if (j.sensor_valid && j.cfg.zero_valid && j.cfg.direction_valid && age>=0 && age<=20) {
-        snprintf(a,sizeof(a),"%.4f",(double)j.angle);
-        snprintf(v,sizeof(v),"%.4f",(double)j.arrival_speed);
-    }
-    if (age>=0) snprintf(ag,sizeof(ag),"%d",age);
-    int fault=j.fault;
-    /* 未标定仍可运行限时PWM；此时状态应如实报告RUN/PWM而非合成未标定故障。 */
-    if (!fault && !(j.state==RUN && j.mode==PWM) &&
-        (!j.cfg.zero_valid || !j.cfg.direction_valid || !j.cfg.neutral_valid)) fault=2;
-    int raw=j.sensor_valid && age>=0 && age<=20?j.raw:-1;
-    snprintf(out,OUT_CAP,"R%d %s %s NA %d %d %d %d %s %d %d",ARM_NODE_ID,a,v,j.pwm_us,
-        fault?FAULT:j.state,fault,remaining,ag,j.mode,raw);
+    arm_feedback_format(&j,ARM_NODE_ID,now_us(),out,OUT_CAP);
 }
 static void local_command(const arm_command_t *c,int64_t deadline,char *out) {
     out[0]=0;
@@ -219,17 +205,13 @@ static bool peer_parse(const char *s,int *state,int *fault) {
 static void peer_state(char *out) {
     lock(); char cached[OUT_CAP]; snprintf(cached,sizeof(cached),"%s",peer.line);
     int64_t received=peer.received; unlock();
-    int age=received?(int)((now_us()-received)/1000):-1;
-    if (age<0) { snprintf(out,OUT_CAP,"R2 NA NA NA NA 2 5 0 NA 0 -1"); return; }
-    if (age>100) { snprintf(out,OUT_CAP,"R2 NA NA NA NA 2 5 0 %d 0 -1",age); return; }
-    char a[24],v[24],cur[24],pwm[24],node_age[24]; int state,fault,remaining,mode,raw;
-    if (sscanf(cached,"R2 %23s %23s %23s %23s %d %d %d %23s %d %d",a,v,cur,pwm,&state,&fault,&remaining,node_age,&mode,&raw)!=10) {
-        snprintf(out,OUT_CAP,"R2 NA NA NA NA 2 5 0 %d 0 -1",age); return;
+    int64_t age=received?now_us()-received:-1;
+    int state,fault;
+    /* 不对外返回龄期，内部仍保守限制采样20ms加缓存80ms不超过100ms。 */
+    if (age<0 || age>ARM_BUS_WATCHDOG_US-ARM_ENCODER_STALE_US || !peer_parse(cached,&state,&fault)) {
+        snprintf(out,OUT_CAP,"R2 -1 NA NA NA NA 2 5 0"); return;
     }
-    /* 把从板采样龄期合并到网关缓存龄期，主机收到的是保守总龄期。 */
-    int total_age=age+atoi(node_age);
-    snprintf(out,OUT_CAP,"R2 %s %s %s %s %d %d %d %d %d %d",a,v,cur,pwm,state,fault,
-        remaining>age?remaining-age:0,total_age,mode,total_age<=100?raw:-1);
+    snprintf(out,OUT_CAP,"%s",cached);
 }
 static void poll_task(void *arg) {
     (void)arg;
@@ -260,12 +242,22 @@ static void master_request(const char *input) {
     int64_t deadline=now_us()+ARM_COMMAND_US;
     if (err) { fail_reply(out,c.name,err); usb_line(out); return; }
     if (c.op=='i') { usb_line("$info ARM 2 1 2"); return; }
-    if (c.op=='v') { usb_line("$version 0.4"); return; }
+    if (c.op=='v') { usb_line("$version 0.5"); return; }
     if (c.op=='b') { bus_diagnostics(out); usb_line(out); return; }
     if (c.op=='h') { bus_raw_diagnostics(out); usb_line(out); return; }
     if (c.op=='R' && !c.argc) {
         if (!c.id || c.id==1) { local_state(out); usb_line(out); }
-        if (!c.id || c.id==2) { peer_state(out); usb_line(out); }
+        if (!c.id || c.id==2) {
+            /* 主动读取，避免移除龄期字段后把下发目标前的缓存STOP当成新结果。 */
+            char reply[OUT_CAP]; int state,fault;
+            xSemaphoreTake(bus_lock,portMAX_DELAY);
+            bool good=transaction("R2",reply) && peer_parse(reply,&state,&fault);
+            lock();
+            if (good) { snprintf(peer.line,sizeof(peer.line),"%s",reply); peer.received=now_us(); peer.online=true; }
+            else { peer.received=0; peer.online=false; }
+            unlock(); xSemaphoreGive(bus_lock);
+            peer_state(out); usb_line(out);
+        }
         if (!c.id) usb_line("R END");
         return;
     }
@@ -328,7 +320,7 @@ static void usb_task(void *arg) {
             /* 从板USB只开放只读检查；运动与设置仅由总线master控制。 */
             arm_command_t c; const char *e=arm_parse(line.data,false,&c); char out[OUT_CAP];
             if (!e && c.op=='i') snprintf(out,sizeof(out),"$info ARM_NODE %d",ARM_NODE_ID);
-            else if (!e && c.op=='v') snprintf(out,sizeof(out),"$version 0.4");
+            else if (!e && c.op=='v') snprintf(out,sizeof(out),"$version 0.5");
             else if (!e && c.op=='b') bus_diagnostics(out);
             else if (!e && c.op=='h') bus_raw_diagnostics(out);
             else if (!e && c.id==ARM_NODE_ID && (!c.argc || c.op=='d') && strchr("RAPHd",c.op)) local_command(&c,0,out);
