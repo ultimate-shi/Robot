@@ -1,8 +1,14 @@
 #!/usr/bin/env python3
-# 作用：独占USB串口验证API，支持整行交互及20Hz刷新；用法：加--interactive保持同一连接进行标定，需pyserial。
+# 作用：验证0.3浮点API，批处理等待角度到位并保留保持模式；用法：--command 'R1 2.5'，交互用--interactive，需pyserial。
 import argparse
+import math
 import time
 import serial
+
+ARRIVAL_DEG = 0.5
+ARRIVAL_DPS = 1.0
+ARRIVAL_SECONDS = 0.2
+FEEDBACK_MAX_MS = 100
 
 
 def exchange(port, command):
@@ -24,36 +30,152 @@ def exchange(port, command):
             if not (line.startswith("R1 ") or line.startswith("R2 ") or line == "R END" or line.startswith("!R ")):
                 continue
         elif not (line.startswith(name + " ") or line.startswith("!" + name + " ")):
-            continue  # 启动ROM输出不能被当作API成功响应。
+            continue
         lines.append(line)
         if command.strip() != "R" or line == "R END" or line.startswith("!"):
             return lines
     raise TimeoutError(f"{command!r}: {lines!r}")
 
 
+def checked_exchange(port, command):
+    lines = exchange(port, command)
+    for line in lines:
+        print("<", line)
+        if line.startswith("!"):
+            raise RuntimeError(line)
+    return lines
+
+
+def motion_axes(command):
+    """仅识别运动/停止命令；设置和查询不替换跟踪中的目标。"""
+    words = command.split()
+    if not words:
+        return None, {}
+    name = words[0]
+    if name[0] not in "RUX" or (name[0] != "X" and len(words) == 1):
+        return None, {}
+    ids = [int(name[1:])] if name[1:] else [1, 2]
+    values = [float(v) for v in words[1:]] if name[0] != "X" else [0] * len(ids)
+    return name[0], dict(zip(ids, values))
+
+
+def wait_positions(port, targets, timeout):
+    """targets为id -> (角度, 保持参数, 下发时刻)，只查状态、不续发目标。"""
+    deadline = time.monotonic() + timeout
+    stable = {}
+    pending = dict(targets)
+    while pending:
+        if time.monotonic() >= deadline:
+            raise TimeoutError("等待关节到位超时")
+        for joint_id, (target, hold, sent_at) in list(pending.items()):
+            if time.monotonic() >= deadline:
+                raise TimeoutError("等待关节到位超时")
+            line = checked_exchange(port, f"R{joint_id}")[0]
+            fields = line.split()
+            if len(fields) != 10 or fields[0] != f"R{joint_id}":
+                raise RuntimeError(f"状态格式异常：{line}")
+            state, fault, mode = int(fields[5]), int(fields[6]), int(fields[9])
+            if fault or state == 2:
+                raise RuntimeError(f"关节{joint_id}故障：{line}")
+            angle, speed = float(fields[1]), float(fields[2])
+            age = int(fields[8])
+            if not math.isfinite(angle) or not math.isfinite(speed) or not 0 <= age <= FEEDBACK_MAX_MS:
+                raise RuntimeError(f"关节{joint_id}反馈无效：{line}")
+            now = time.monotonic()
+            # 网关可能返回下发前的缓存，不能把旧STOP当作本次动作完成或失败。
+            if age >= (now - sent_at) * 1000 - 1:
+                continue
+            arrived = abs(angle - target) <= ARRIVAL_DEG and abs(speed) <= ARRIVAL_DPS
+            if not hold:
+                if state == 0 and mode == 0:
+                    if not arrived:
+                        raise RuntimeError(f"关节{joint_id}未到目标便停止：{line}")
+                    del pending[joint_id]
+                elif state != 1 or mode != 1:
+                    raise RuntimeError(f"关节{joint_id}已被其他指令覆盖：{line}")
+            else:
+                if state != 1 or mode != 1:
+                    raise RuntimeError(f"关节{joint_id}保持控制已停止：{line}")
+                if not arrived:
+                    stable.pop(joint_id, None)
+                else:
+                    stable.setdefault(joint_id, now)
+                    if now - stable[joint_id] >= ARRIVAL_SECONDS:
+                        del pending[joint_id]
+        if pending:
+            time.sleep(0.05)
+
+
+def run_batch(port, commands, repeat, hz, wait_timeout):
+    pending, pwm = {}, set()
+    motion_attempted = False
+    try:
+        next_tick = time.monotonic()
+        for _ in range(repeat):
+            for command in commands:
+                op, axes = motion_axes(command)
+                modes = {}
+                if op == "R":
+                    for joint_id in axes:
+                        response = checked_exchange(port, f"H{joint_id}")[0].split()
+                        if len(response) != 2 or response[1] not in ("0", "1"):
+                            raise RuntimeError("到位保持参数响应异常")
+                        modes[joint_id] = int(response[1])
+                motion_attempted |= op in ("R", "U")
+                print(">", command)
+                checked_exchange(port, command)
+                sent_at = time.monotonic()
+                if op:
+                    for joint_id, target in axes.items():
+                        pending.pop(joint_id, None)
+                        pwm.discard(joint_id)
+                        if op == "R":
+                            pending[joint_id] = (target, modes[joint_id], sent_at)
+                        elif op == "U":
+                            pwm.add(joint_id)
+            next_tick += 1 / hz
+            time.sleep(max(0, next_tick - time.monotonic()))
+        # 先停止仍在PWM模式的轴，不能用全局X取消另一轴的位置保持。
+        for joint_id in sorted(pwm):
+            checked_exchange(port, f"X{joint_id}")
+        wait_positions(port, pending, wait_timeout)
+    except BaseException:
+        if motion_attempted:
+            try:
+                exchange(port, "X")
+            except (OSError, TimeoutError, RuntimeError, serial.SerialException):
+                pass  # 总线失联由板间看门狗停止；主板USB失联不会取消位置保持。
+        raise
+
+
 def main():
-    parser = argparse.ArgumentParser(description="机械臂USB文本API终端")
+    parser = argparse.ArgumentParser(description="机械臂USB文本API 0.3终端")
     parser.add_argument("--port", required=True)
-    parser.add_argument("--command", action="append", help="可重复；默认仅查询身份、状态及原始传感器")
+    parser.add_argument("--command", action="append", help="可重复；角度和PID直接填写实际小数")
     parser.add_argument("--repeat", type=int, default=1)
     parser.add_argument("--hz", type=float, default=20)
-    parser.add_argument("--interactive", action="store_true", help="按回车发送完整命令，保持连接和RAM标定")
+    parser.add_argument("--wait-timeout", type=float, default=60, help="批处理角度到位最长等待秒数，默认60")
+    parser.add_argument("--interactive", action="store_true", help="保持连接，手动发送新目标覆盖运动；退出发送X")
     args = parser.parse_args()
-    if args.repeat < 1 or not 0 < args.hz <= 20:
+    if args.repeat < 1 or not math.isfinite(args.hz) or not 0 < args.hz <= 20:
         parser.error("repeat须>=1，hz须在(0,20]内")
-    commands = args.command or ["$info", "$version", "R", "$raw 1", "A1", "J1", "P1"]
-    motion = any(c.startswith("U") or (c.startswith("R") and len(c.split()) > 1) for c in commands)
+    if not math.isfinite(args.wait_timeout) or args.wait_timeout <= 0:
+        parser.error("wait-timeout须为有限正数")
+    commands = args.command or ["$info", "$version", "R", "$raw 1", "A1", "J1", "P1", "H1"]
     port = serial.Serial(port=None, baudrate=115200, timeout=0.1, write_timeout=1)
     port.dtr = False
     port.rts = False
     port.port = args.port
     port.open()
+    interactive_motion = False
     try:
         port.write(b"\n")
         time.sleep(0.05)
         port.reset_input_buffer()
+        if checked_exchange(port, "$version") != ["$version 0.3"]:
+            raise RuntimeError("工具需要0.3固件；旧版使用不同数值单位，请配套升级主从板")
         if args.interactive:
-            print("整行发送；输入 :quit 退出。X使用配置中立值，不能代替舵机动力断电。")
+            print("整行发送；:quit退出并停止。角度目标无需刷新；X输出配置中立值。")
             while True:
                 try:
                     command = input("> ").strip()
@@ -63,30 +185,22 @@ def main():
                     break
                 if not command:
                     continue
-                if command.startswith("U") or (command.startswith("R") and len(command.split()) > 1):
-                    motion = True
+                op, _ = motion_axes(command)
+                interactive_motion |= op in ("R", "U")
                 try:
-                    for line in exchange(port, command):
-                        print("<", line)
-                except (TimeoutError, UnicodeError) as exc:
+                    checked_exchange(port, command)
+                except (TimeoutError, UnicodeError, RuntimeError) as exc:
+                    if interactive_motion:
+                        exchange(port, "X")
                     print("请求未完成：", exc)
-            return
-        next_tick = time.monotonic()
-        for _ in range(args.repeat):
-            for command in commands:
-                print(">", command)
-                for line in exchange(port, command):
-                    print("<", line)
-                    if line.startswith("!"):
-                        raise RuntimeError(line)
-            next_tick += 1 / args.hz
-            time.sleep(max(0, next_tick - time.monotonic()))
+        else:
+            run_batch(port, commands, args.repeat, args.hz, args.wait_timeout)
     finally:
-        if motion:
+        if interactive_motion:
             try:
                 exchange(port, "X")
-            except (OSError, TimeoutError, serial.SerialException):
-                pass  # 线路失效由关节自身100ms超时兜底。
+            except (OSError, TimeoutError, RuntimeError, serial.SerialException):
+                pass
         port.close()
 
 

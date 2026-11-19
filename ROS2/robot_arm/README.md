@@ -1,8 +1,10 @@
 <!-- 作用：说明机械臂独立工作区；使用方法：在已安装 ROS 2 Jazzy 的终端按下列步骤构建。 -->
 # 机械臂工作区
 
+当前机械臂为两关节控制板固件测试台，每轴独立执行目标位置与板端PID，是否同步到位由上位机协调。
+
 当前只提供 robot_arm 的 ament_python 包骨架，不依赖小车包，尚未实现硬件驱动或运动控制。
-ESP32-C3关节固件位于[ESP32/arm_joint](../../ESP32/arm_joint/README.md)，支持master/slave、板端PID角度控制和直接PWM控制。
+ESP32-C3关节固件位于[ESP32/arm_joint](../../ESP32/arm_joint/README.md)，使用0.3浮点接口，支持master/slave、单次角度执行、逐轴到位保持参数和100ms直接PWM控制。
 接口和标定说明见[硬件API](docs/hardware_api.md)；电路、CAD及设计历史位于仓库根目录的`机械臂/`。
 ROS包仍为骨架，尚未实现ROS串口驱动；固件与ROS工作区分别构建。
 

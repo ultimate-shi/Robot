@@ -82,36 +82,29 @@ static void ok_reply(char *out,const arm_command_t *c) {
     if (strchr("zsc",c->op)) snprintf(out,OUT_CAP,"%s %d OK",c->name,c->id);
     else snprintf(out,OUT_CAP,"%s OK",c->name);
 }
-static bool settings_valid(const arm_settings_t *c) {
-    return c->zero_raw>=0 && c->zero_raw<=4095 &&
-        (c->encoder_dir==1 || c->encoder_dir==-1) && (c->motor_dir==1 || c->motor_dir==-1) &&
-        c->neutral_us>=500 && c->neutral_us<=2500 && isfinite(c->vmax) && c->vmax>0 && c->vmax<=ARM_MAX_VMAX &&
-        isfinite(c->amax) && c->amax>0 && c->amax<=ARM_MAX_AMAX && isfinite(c->kp) && c->kp>=0 && c->kp<=100 &&
-        isfinite(c->ki) && c->ki>=0 && c->ki<=100 && isfinite(c->kd) && c->kd>=0 && c->kd<=10;
-}
 static void load_settings(arm_settings_t *c) {
     arm_defaults(c); nvs_handle_t h;
     if (nvs_open_from_partition("arm_cfg","arm_joint",NVS_READONLY,&h)!=ESP_OK) return;
-    arm_settings_t stored; size_t n=sizeof(stored); uint32_t schema=0;
-    if (nvs_get_u32(h,"schema",&schema)==ESP_OK && schema==2 &&
-        nvs_get_blob(h,"settings",&stored,&n)==ESP_OK && n==sizeof(stored) && settings_valid(&stored)) *c=stored;
+    unsigned char stored[sizeof(arm_settings_t)]; size_t n=sizeof(stored); uint32_t schema=0;
+    if (nvs_get_u32(h,"schema",&schema)==ESP_OK &&
+        nvs_get_blob(h,"settings",stored,&n)==ESP_OK) arm_settings_decode(c,schema,stored,n);
     nvs_close(h);
 }
 static bool save_settings(const arm_settings_t *c) {
     nvs_handle_t h; if (nvs_open_from_partition("arm_cfg","arm_joint",NVS_READWRITE,&h)!=ESP_OK) return false;
     esp_err_t e=nvs_set_blob(h,"settings",c,sizeof(*c));
-    if (e==ESP_OK) e=nvs_set_u32(h,"schema",2);
+    if (e==ESP_OK) e=nvs_set_u32(h,"schema",3);
     if (e==ESP_OK) e=nvs_commit(h);
     nvs_close(h); return e==ESP_OK;
 }
 static void local_state(char *out) {
     lock(); arm_joint_t j=joint; unlock();
     int64_t now=now_us(); int age=j.sample_us?(int)((now-j.sample_us)/1000):-1;
-    int remaining=j.state==RUN?(int)fmax(0,(j.deadline_us-now)/1000):0;
+    int remaining=j.state==RUN && j.mode==PWM?(int)fmax(0,(j.deadline_us-now)/1000):0;
     char a[24]="NA",v[24]="NA",ag[24]="NA";
     if (j.sensor_valid && j.cfg.zero_valid && j.cfg.direction_valid && age>=0 && age<=20) {
-        snprintf(a,sizeof(a),"%d",(int)lroundf(j.angle*100));
-        snprintf(v,sizeof(v),"%d",(int)lroundf(j.speed*100));
+        snprintf(a,sizeof(a),"%.4f",(double)j.angle);
+        snprintf(v,sizeof(v),"%.4f",(double)j.arrival_speed);
     }
     if (age>=0) snprintf(ag,sizeof(ag),"%d",age);
     int fault=j.fault;
@@ -126,22 +119,23 @@ static void local_command(const arm_command_t *c,int64_t deadline,char *out) {
     const char *err=NULL;
     if (c->op=='X') { arm_stop(&joint); }
     else if ((c->op=='R' || c->op=='U') && c->argc) {
-        int value=c->val[c->id?0:ARM_NODE_ID-1];
+        float value=c->val[c->id?0:ARM_NODE_ID-1];
         err=flash_busy?"BUSY":arm_move_check(&joint,c->op,value);
-        if (!err && deadline<=now_us()) err="TIMEOUT";
+        if (!err && c->op=='U' && deadline<=now_us()) err="TIMEOUT";
         if (!err) arm_move(&joint,c->op,value,deadline);
-    } else if (strchr("AJP",c->op)) {
+    } else if (strchr("AJPH",c->op)) {
         if (c->argc) err=arm_setting(&joint,c);
         else if (c->op=='A') snprintf(out,OUT_CAP,"%s %d %d %d",c->name,joint.cfg.zero_raw,joint.cfg.encoder_dir,joint.cfg.motor_dir);
-        else if (c->op=='J') snprintf(out,OUT_CAP,"%s %d %d %d",c->name,(int)lroundf(joint.cfg.vmax*100),
-                (int)lroundf(joint.cfg.amax*100),joint.cfg.neutral_us);
-        else snprintf(out,OUT_CAP,"%s %d %d %d",c->name,(int)lroundf(joint.cfg.kp*1000),
-                (int)lroundf(joint.cfg.ki*1000),(int)lroundf(joint.cfg.kd*1000));
+        else if (c->op=='H') snprintf(out,OUT_CAP,"%s %d",c->name,joint.cfg.hold);
+        else if (c->op=='J') snprintf(out,OUT_CAP,"%s %.6f %.6f %d",c->name,(double)joint.cfg.vmax,
+                (double)joint.cfg.amax,joint.cfg.neutral_us);
+        else snprintf(out,OUT_CAP,"%s %.6f %.6f %.6f",c->name,(double)joint.cfg.kp,
+                (double)joint.cfg.ki,(double)joint.cfg.kd);
     } else if (c->op=='z') {
         if (joint.state==RUN) err="BUSY";
         else if (!joint.sensor_valid) err="FAULT";
         else { joint.cfg.zero_raw=joint.raw; joint.cfg.zero_valid=true;
-            joint.angle=joint.speed=0; arm_stop(&joint); }
+            joint.angle=joint.speed=joint.arrival_speed=0; arm_stop(&joint); }
     } else if (c->op=='c') {
         if (joint.state==RUN) err="BUSY";
         else if (!joint.sensor_valid || !joint.cfg.zero_valid || !joint.cfg.direction_valid ||
@@ -244,7 +238,7 @@ static void poll_task(void *arg) {
         if (xSemaphoreTake(bus_lock,pdMS_TO_TICKS(2))==pdTRUE) {
             bool good=transaction("R2",reply) && peer_parse(reply,&state,&fault);
             lock(); bool was_online=peer.online;
-            if (good) { snprintf(peer.line,sizeof(peer.line),"%s",reply); peer.received=now_us(); peer.online=true; }
+            if (good) { snprintf(peer.line,sizeof(peer.line),"%s",reply); peer.received=now_us(); peer.online=true; arm_bus_seen(&joint,peer.received); }
             else if (peer.received && now_us()-peer.received>100000) peer.online=false;
             bool lost=was_online && !peer.online;
             bool running=joint.state==RUN;
@@ -265,7 +259,7 @@ static void master_request(const char *input) {
     int64_t deadline=now_us()+ARM_COMMAND_US;
     if (err) { fail_reply(out,c.name,err); usb_line(out); return; }
     if (c.op=='i') { usb_line("$info ARM 2 1 2"); return; }
-    if (c.op=='v') { usb_line("$version 0.2"); return; }
+    if (c.op=='v') { usb_line("$version 0.3"); return; }
     if (c.op=='b') { bus_diagnostics(out); usb_line(out); return; }
     if (c.op=='h') { bus_raw_diagnostics(out); usb_line(out); return; }
     if (c.op=='R' && !c.argc) {
@@ -291,13 +285,14 @@ static void master_request(const char *input) {
     xSemaphoreTake(bus_lock,portMAX_DELAY);
     if (remote) {
         char body[ARM_USB_LINE+20];
-        if (motion) {
+        if (motion && c.op=='R') { if (!send_bus(input)) err="TIMEOUT"; }
+        else if (motion) {
             /* 先估计最坏帧长，扣除排队和串口在线时间，防止下游重新获得完整100ms。 */
             int wire_us=(int)((strlen(input)+24)*10*1000000/ARM_BUS_BAUD)+1000;
             int ttl=(int)((deadline-now_us()-wire_us)/1000);
             if (ttl<1) err="TIMEOUT";
             else { snprintf(body,sizeof(body),"%s %d",input,ttl); if (!send_bus(body)) err="TIMEOUT"; }
-        } else if (c.op=='X') send_bus(input);
+        } else if (c.op=='X') { if (!send_bus(input)) err="TIMEOUT"; }
         else {
             bool good=transaction(input,out);
             /* 错误也必须回显本请求命令，配置命令还需匹配ID。 */
@@ -332,10 +327,10 @@ static void usb_task(void *arg) {
             /* 从板USB只开放只读检查；运动与设置仅由总线master控制。 */
             arm_command_t c; const char *e=arm_parse(line.data,false,&c); char out[OUT_CAP];
             if (!e && c.op=='i') snprintf(out,sizeof(out),"$info ARM_NODE %d",ARM_NODE_ID);
-            else if (!e && c.op=='v') snprintf(out,sizeof(out),"$version 0.2");
+            else if (!e && c.op=='v') snprintf(out,sizeof(out),"$version 0.3");
             else if (!e && c.op=='b') bus_diagnostics(out);
             else if (!e && c.op=='h') bus_raw_diagnostics(out);
-            else if (!e && c.id==ARM_NODE_ID && (!c.argc || c.op=='d') && strchr("RAJPd",c.op)) local_command(&c,0,out);
+            else if (!e && c.id==ARM_NODE_ID && (!c.argc || c.op=='d') && strchr("RAJPHd",c.op)) local_command(&c,0,out);
             else fail_reply(out,c.name,e?e:"CMD");
             usb_line(out);
 #endif
@@ -354,12 +349,12 @@ static void slave_task(void *arg) {
         arm_command_t c; const char *err=arm_parse(body,true,&c);
         /* 无ID的信息请求不能触发所有从板同时应答。 */
         if (c.id!=ARM_NODE_ID && !(c.id==0 && strchr("RUX",c.op))) continue;
-        lock(); bus_stats.hit++; unlock();
+        lock(); bus_stats.hit++; if (!err) arm_bus_seen(&joint,now_us()); unlock();
         bool motion=(c.op=='R' || c.op=='U') && c.argc;
         bool reply=c.id==ARM_NODE_ID && !motion && c.op!='X';
         char out[OUT_CAP];
         if (err) { if (reply) fail_reply(out,c.name,err); else continue; }
-        else local_command(&c,now_us()+c.ttl_ms*1000LL,out);
+        else local_command(&c,c.op=='U'?now_us()+c.ttl_ms*1000LL:0,out);
         if (reply) {
             char packet[ARM_BUS_LINE+2];
             if (!arm_bus_encode(seq,out,packet,sizeof(packet))) continue;
@@ -375,6 +370,8 @@ void app_main(void) {
     ESP_ERROR_CHECK(nvs_flash_init_partition("arm_cfg"));
     joint_lock=xSemaphoreCreateMutex(); bus_lock=xSemaphoreCreateMutex();
     arm_settings_t cfg; load_settings(&cfg); arm_init(&joint,&cfg);
+    /* 两板均从启动起启用总线看门狗，未建立通信也不能持续运动。 */
+    arm_bus_seen(&joint,now_us());
     gpio_config_t gate={.pin_bit_mask=1ULL<<ARM_TX_EN_PIN,.mode=GPIO_MODE_OUTPUT};
     ESP_ERROR_CHECK(gpio_config(&gate)); gpio_set_level(ARM_TX_EN_PIN,ARM_MASTER?1:0);
     ledc_timer_config_t timer={.speed_mode=LEDC_LOW_SPEED_MODE,.duty_resolution=LEDC_TIMER_14_BIT,

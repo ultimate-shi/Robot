@@ -1,4 +1,4 @@
-/* 作用：实现文本解析、CRC、100ms授权、输出轴PID和限位；用法：由main硬件任务调用，clang可独立测试。 */
+/* 作用：实现文本解析、CRC、PWM期限、角度到位/保持、输出轴PID和限位；用法：由main硬件任务调用，clang可独立测试。 */
 #include "arm_core.h"
 #include <ctype.h>
 #include <errno.h>
@@ -12,12 +12,35 @@ void arm_defaults(arm_settings_t *c) {
     *c=(arm_settings_t){.encoder_dir=1,.motor_dir=1,.neutral_us=ARM_PWM_NEUTRAL,
         .vmax=ARM_DEFAULT_VMAX,.amax=ARM_DEFAULT_AMAX,.kp=ARM_DEFAULT_KP};
 }
+/* schema=2采用旧结构前40字节，schema=3追加hold；只在校验成功后覆盖配置。 */
+bool arm_settings_decode(arm_settings_t *c,uint32_t schema,const void *blob,size_t size) {
+    arm_settings_t stored; arm_defaults(&stored);
+    _Static_assert(offsetof(arm_settings_t,hold)==40,"legacy settings layout changed");
+    if (!((schema==2 && size==offsetof(arm_settings_t,hold)) ||
+          (schema==3 && size==sizeof(stored)))) return false;
+    /* 对标志逐字节检查，避免损坏Flash生成非法bool表示。 */
+    const unsigned char *b=blob;
+    for (size_t i=offsetof(arm_settings_t,zero_valid);i<=offsetof(arm_settings_t,neutral_valid);i++)
+        if (b[i]>1) return false;
+    memcpy(&stored,blob,size);
+    if (stored.zero_raw<0 || stored.zero_raw>4095 ||
+        (stored.encoder_dir!=1 && stored.encoder_dir!=-1) || (stored.motor_dir!=1 && stored.motor_dir!=-1) ||
+        stored.neutral_us<500 || stored.neutral_us>2500 ||
+        !isfinite(stored.vmax) || stored.vmax<0.01f || stored.vmax>ARM_MAX_VMAX ||
+        !isfinite(stored.amax) || stored.amax<0.01f || stored.amax>ARM_MAX_AMAX ||
+        !isfinite(stored.kp) || stored.kp<0 || stored.kp>100 ||
+        !isfinite(stored.ki) || stored.ki<0 || stored.ki>100 ||
+        !isfinite(stored.kd) || stored.kd<0 || stored.kd>10 || (stored.hold!=0 && stored.hold!=1)) return false;
+    *c=stored; return true;
+}
+void arm_bus_seen(arm_joint_t *j,int64_t now) { j->bus_deadline_us=now+ARM_BUS_WATCHDOG_US; }
 void arm_init(arm_joint_t *j,const arm_settings_t *c) {
     memset(j,0,sizeof(*j)); j->cfg=*c; j->pwm_us=0;
 }
 void arm_stop(arm_joint_t *j) {
     j->state=j->fault?FAULT:STOP; j->mode=NONE; j->deadline_us=0;
     j->target=j->ref=j->angle; j->ref_speed=0; j->integral=0; j->prev_error=0; j->d_filtered=0;
+    j->settled_us=0;
     j->pwm_us=j->cfg.neutral_valid?j->cfg.neutral_us:0;
 }
 void arm_fault(arm_joint_t *j,int fault) { j->fault=fault; arm_stop(j); }
@@ -28,34 +51,44 @@ void arm_sample(arm_joint_t *j,bool valid,int raw,int64_t now) {
         float dt=(now-j->sample_us)*1e-6f;
         float v=remainderf(angle-j->angle,360.0f)/dt;
         if (j->state==RUN && fabsf(v)>360.0f) { arm_fault(j,4); }
+        /* 控制/制动保留原快速速度估计；到位/反馈另滤波，避免削弱限位响应。 */
         j->speed+=0.25f*(v-j->speed);
-    } else j->speed=0;
+        j->arrival_speed+=dt/(ARM_SPEED_FILTER_US*1e-6f+dt)*(v-j->arrival_speed);
+    } else j->speed=j->arrival_speed=0;
     j->raw=raw; j->angle=angle; j->sample_us=now; j->sensor_valid=true;
     if (j->cfg.zero_valid && fabsf(angle)>ARM_LIMIT_DEG+0.5f) arm_fault(j,3);
 }
-const char *arm_move_check(const arm_joint_t *j,char op,int value) {
-    if ((op=='R' && (value < -9000 || value>9000)) ||
-        (op=='U' && (value<ARM_PWM_MIN || value>ARM_PWM_MAX))) return "RANGE";
+const char *arm_move_check(const arm_joint_t *j,char op,float value) {
+    if (!isfinite(value) || (op=='R' && (value < -90 || value>90)) ||
+        (op=='U' && (value<ARM_PWM_MIN || value>ARM_PWM_MAX || truncf(value)!=value))) return "RANGE";
     /* 固件首次运行没有可信中立点，必须显式完成A/J标定后才开放运动。 */
     if (j->fault || !j->sensor_valid || !j->cfg.zero_valid ||
         !j->cfg.direction_valid || !j->cfg.neutral_valid) return "FAULT";
     return NULL;
 }
-void arm_move(arm_joint_t *j,char op,int value,int64_t deadline) {
+void arm_move(arm_joint_t *j,char op,float value,int64_t deadline) {
     arm_mode_t mode=op=='R'?POS:PWM;
     if (mode!=j->mode) { j->integral=0; j->d_filtered=0; j->prev_error=0;
         j->ref=j->angle; j->ref_speed=j->speed; }
-    j->mode=mode; j->state=RUN; j->deadline_us=deadline;
-    if (mode==POS) j->target=value*0.01f; else j->pwm_us=value;
+    if (mode!=j->mode || (mode==POS && j->target!=value)) j->settled_us=0;
+    j->mode=mode; j->state=RUN; j->deadline_us=mode==PWM?deadline:0;
+    if (mode==POS) j->target=value; else j->pwm_us=(int)value;
 }
 void arm_tick(arm_joint_t *j,int64_t now) {
     float dt=j->tick_us?(now-j->tick_us)*1e-6f:0.005f;
     j->tick_us=now;
     if (j->state!=RUN) return;
-    if (now>=j->deadline_us) { arm_stop(j); return; }
+    if ((j->mode==PWM && now>=j->deadline_us) ||
+        (j->bus_deadline_us && now>=j->bus_deadline_us)) { arm_stop(j); return; }
     if (dt>0.020f || dt<=0) { arm_fault(j,4); return; }
     if (!j->sensor_valid || now-j->sample_us>ARM_ENCODER_STALE_US) { arm_fault(j,1); return; }
     if (j->mode==POS) {
+        bool arrived=fabsf(j->target-j->angle)<=ARM_ARRIVAL_DEG && fabsf(j->arrival_speed)<=ARM_ARRIVAL_DPS;
+        if (!arrived) j->settled_us=0;
+        else if (!j->settled_us) j->settled_us=now;
+        if (!j->cfg.hold && j->settled_us && now-j->settled_us>=ARM_ARRIVAL_US) {
+            arm_stop(j); return;
+        }
         float distance=j->target-j->ref;
         float desired=copysignf(fminf(j->cfg.vmax,sqrtf(2*j->cfg.amax*fabsf(distance))),distance);
         j->ref_speed+=clip(desired-j->ref_speed,-j->cfg.amax*dt,j->cfg.amax*dt);
@@ -90,6 +123,23 @@ static bool number(const char *s,int *v) {
     if (errno || *end || n<INT_MIN || n>INT_MAX) return false;
     *v=(int)n; return true;
 }
+/* 仅接受十进制浮点（含科学计数），拒绝十六进制、非有限值和未消费字符。 */
+static bool decimal(const char *s,float *v) {
+    const char *p=s; if (*p=='-' || *p=='+') p++;
+    bool digit=false;
+    while (isdigit((unsigned char)*p)) { digit=true; p++; }
+    if (*p=='.') { p++; while (isdigit((unsigned char)*p)) { digit=true; p++; } }
+    if (!digit) return false;
+    if (*p=='e' || *p=='E') {
+        p++; if (*p=='-' || *p=='+') p++;
+        if (!isdigit((unsigned char)*p)) return false;
+        while (isdigit((unsigned char)*p)) p++;
+    }
+    if (*p) return false;
+    errno=0; char *end; float n=strtof(s,&end);
+    if (errno || *end || !isfinite(n)) return false;
+    *v=n; return true;
+}
 const char *arm_parse(const char *line,bool bus,arm_command_t *c) {
     memset(c,0,sizeof(*c)); c->ttl_ms=100;
     if (strlen(line)>ARM_USB_LINE) return "ARG";
@@ -108,51 +158,63 @@ const char *arm_parse(const char *line,bool bus,arm_command_t *c) {
         else if (!strcmp(word,"$busraw")) c->op='h';
         else return "CMD";
     } else {
-        c->op=word[0]; if (!strchr("RUXAJP",c->op)) return "CMD";
+        c->op=word[0]; if (!strchr("RUXAJPH",c->op)) return "CMD";
         if (word[1] && (!number(word+1,&c->id) || c->id<1 || c->id>ARM_COUNT)) return "ID";
     }
+    char *args[4];
     while ((word=strtok_r(NULL," \t",&save))) {
-        if (c->argc==4 || !number(word,&c->val[c->argc])) return "ARG";
-        c->argc++;
+        if (c->argc==4) return "ARG";
+        args[c->argc++]=word;
+    }
+    for (int i=0;i<c->argc;i++) {
+        bool real=c->op=='R' || c->op=='P' || (c->op=='J' && i<2);
+        if (real) { if (!decimal(args[i],&c->val[i])) return "ARG"; }
+        else { int n; if (!number(args[i],&n)) return "ARG"; c->val[i]=(float)n; }
     }
     if (strchr("zscd",c->op)) {
         if (c->argc!=1) return "ARG";
-        c->id=c->val[0]; c->argc=0;
+        if (!number(args[0],&c->id)) return "ARG";
+        c->argc=0;
         return c->id>=1 && c->id<=ARM_COUNT?NULL:"ID";
     }
     if (c->op=='i' || c->op=='v' || c->op=='b' || c->op=='h' || c->op=='X') return c->argc?"ARG":NULL;
     if (c->op=='R' || c->op=='U') {
-        if (bus && c->argc) {
+        if (bus && c->op=='U' && c->argc) {
             if (c->argc<2) return "ARG";
-            c->ttl_ms=c->val[--c->argc]; if (c->ttl_ms<1 || c->ttl_ms>100) return "RANGE";
+            int ttl; if (!number(args[--c->argc],&ttl)) return "ARG";
+            c->ttl_ms=ttl; if (c->ttl_ms<1 || c->ttl_ms>100) return "RANGE";
         }
         if (c->op=='R' && !c->argc) return NULL;
         int count=c->id?1:ARM_COUNT;
         if (c->argc!=count) return "ARG";
         for (int i=0;i<count;i++) {
-            int n=c->val[i]; if (c->op=='R'?(n < -9000 || n>9000):(n<500 || n>2500)) return "RANGE";
+            float n=c->val[i]; if (c->op=='R'?(n < -90 || n>90):(n<500 || n>2500)) return "RANGE";
         }
         return NULL;
     }
     if (!c->id) return "ID";
+    if (c->op=='H') return c->argc==0 || (c->argc==1 && (c->val[0]==0 || c->val[0]==1))?NULL:"ARG";
     return c->argc==0 || c->argc==3?NULL:"ARG";
 }
 const char *arm_setting(arm_joint_t *j,const arm_command_t *c) {
-    if (j->state==RUN) return "BUSY";
+    if (j->state==RUN || (c->op=='H' && j->state!=STOP)) return "BUSY";
     if (c->op=='A') {
         if (c->val[0]<0 || c->val[0]>4095 || (c->val[1]!=1 && c->val[1]!=-1) || (c->val[2]!=1 && c->val[2]!=-1)) return "RANGE";
         j->cfg.zero_raw=c->val[0]; j->cfg.encoder_dir=c->val[1]; j->cfg.motor_dir=c->val[2];
         j->cfg.zero_valid=true; j->cfg.direction_valid=true;
         j->sensor_valid=false; j->sample_us=0;
     } else if (c->op=='J') {
-        if (c->val[0]<1 || c->val[0]>ARM_MAX_VMAX*100 || c->val[1]<1 ||
-            c->val[1]>ARM_MAX_AMAX*100 || c->val[2]<500 || c->val[2]>2500) return "RANGE";
-        j->cfg.vmax=c->val[0]*0.01f; j->cfg.amax=c->val[1]*0.01f;
+        if (c->val[0]<0.01f || c->val[0]>ARM_MAX_VMAX || c->val[1]<0.01f ||
+            c->val[1]>ARM_MAX_AMAX || c->val[2]<500 || c->val[2]>2500) return "RANGE";
+        j->cfg.vmax=c->val[0]; j->cfg.amax=c->val[1];
         j->cfg.neutral_us=c->val[2]; j->cfg.neutral_valid=true;
     } else if (c->op=='P') {
-        if (c->val[0]<0 || c->val[0]>100000 || c->val[1]<0 || c->val[1]>100000 ||
-            c->val[2]<0 || c->val[2]>10000) return "RANGE";
-        j->cfg.kp=c->val[0]*0.001f; j->cfg.ki=c->val[1]*0.001f; j->cfg.kd=c->val[2]*0.001f;
+        if (c->val[0]<0 || c->val[0]>100 || c->val[1]<0 || c->val[1]>100 ||
+            c->val[2]<0 || c->val[2]>10) return "RANGE";
+        j->cfg.kp=c->val[0]; j->cfg.ki=c->val[1]; j->cfg.kd=c->val[2];
+    } else if (c->op=='H') {
+        if (c->argc!=1 || (c->val[0]!=0 && c->val[0]!=1)) return "RANGE";
+        j->cfg.hold=(int)c->val[0];
     } else return "CMD";
     arm_stop(j); return NULL;
 }

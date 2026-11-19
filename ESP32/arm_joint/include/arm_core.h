@@ -10,6 +10,7 @@ typedef struct {
     int zero_raw, encoder_dir, motor_dir, neutral_us;
     bool zero_valid, direction_valid, neutral_valid;
     float vmax, amax, kp, ki, kd;
+    int hold; /* 追加字段，旧schema=2前缀布局保持不变。 */
 } arm_settings_t;
 typedef struct {
     arm_settings_t cfg;
@@ -17,12 +18,13 @@ typedef struct {
     arm_mode_t mode;
     int fault, raw, pwm_us;
     bool sensor_valid;
-    float angle, speed, target, ref, ref_speed, integral, prev_error, d_filtered;
-    int64_t sample_us, deadline_us, tick_us;
+    float angle, speed, arrival_speed, target, ref, ref_speed, integral, prev_error, d_filtered;
+    int64_t sample_us, deadline_us, tick_us, settled_us, bus_deadline_us;
 } arm_joint_t;
 typedef struct {
     char name[16], op;
-    int id, argc, val[4], ttl_ms;
+    int id, argc, ttl_ms;
+    float val[4];
 } arm_command_t;
 typedef struct {
     char data[ARM_BUS_LINE+1];
@@ -31,13 +33,15 @@ typedef struct {
     int64_t started_us;
 } arm_line_t;
 void arm_defaults(arm_settings_t *c);
+bool arm_settings_decode(arm_settings_t *c, uint32_t schema, const void *blob, size_t size);
+void arm_bus_seen(arm_joint_t *j, int64_t now);
 void arm_init(arm_joint_t *j, const arm_settings_t *c);
 void arm_stop(arm_joint_t *j);
 void arm_fault(arm_joint_t *j, int fault);
 void arm_sample(arm_joint_t *j, bool valid, int raw, int64_t now);
 void arm_tick(arm_joint_t *j, int64_t now);
-const char *arm_move_check(const arm_joint_t *j, char op, int value);
-void arm_move(arm_joint_t *j, char op, int value, int64_t deadline);
+const char *arm_move_check(const arm_joint_t *j, char op, float value);
+void arm_move(arm_joint_t *j, char op, float value, int64_t deadline);
 const char *arm_parse(const char *line, bool bus, arm_command_t *c);
 const char *arm_setting(arm_joint_t *j, const arm_command_t *c);
 uint16_t arm_crc(const char *data, size_t n);

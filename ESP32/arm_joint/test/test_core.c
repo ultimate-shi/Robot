@@ -11,19 +11,19 @@ static arm_joint_t calibrated(void) {
 }
 static void parser_test(void) {
     arm_command_t c;
-    assert(!arm_parse("R 3000 -2000",false,&c) && c.argc==2 && !c.id);
+    assert(!arm_parse("R 30.5 -20.25",false,&c) && c.argc==2 && !c.id);
     assert(!arm_parse("U2 1510",false,&c) && c.id==2 && c.op=='U');
-    assert(!arm_parse("R2 -2000 96",true,&c) && c.ttl_ms==96 && c.argc==1);
+    assert(!arm_parse("R2 -20.25",true,&c) && c.ttl_ms==100 && c.argc==1);
     assert(!arm_parse("R2",true,&c) && !c.argc);
     assert(!arm_parse("$save 2",false,&c) && c.op=='s' && c.id==2);
     assert(!arm_parse("$bus",false,&c) && c.op=='b' && !c.argc);
     assert(arm_parse("$bus 2",false,&c));
     assert(!arm_parse("$busraw",false,&c) && c.op=='h' && !c.argc);
     assert(arm_parse("$busraw 2",false,&c));
-    const char *bad[]={"R 0","R1 9001","R1 12.5","R1 2147483648","U1 499","U1 2501", "P1 1 2","A0","R3 1","$save 1 2","X1 1","R1 nan","R1 0x1","R1 1junk"};
+    const char *bad[]={"R 0","R1 90.01","R1 2147483648","U1 499","U1 2501", "P1 1 2","A0","R3 1","$save 1 2","X1 1","R1 nan","R1 0x1","R1 1junk"};
     for (unsigned i=0;i<sizeof(bad)/sizeof(*bad);i++) assert(arm_parse(bad[i],false,&c));
-    assert(arm_parse("R2 100 0",true,&c));
-    assert(arm_parse("R2 100 101",true,&c));
+    assert(arm_parse("U2 1500 0",true,&c));
+    assert(arm_parse("U2 1500 101",true,&c));
     arm_joint_t j=calibrated();
     assert(!arm_parse("A1 0 -2147483648 1",false,&c));
     assert(arm_setting(&j,&c)); /* INT_MIN不得造成abs溢出。 */
@@ -35,19 +35,19 @@ static void timeout_modes_test(void) {
     assert(j.mode==PWM && j.pwm_us==1510 && j.state==RUN);
     arm_command_t query; assert(!arm_parse("R1",false,&query));
     assert(j.deadline_us==101000); /* 查询解析不改变期限或模式。 */
-    j.integral=3; arm_move(&j,'R',1000,151000);
+    j.integral=3; arm_move(&j,'R',10,151000);
     assert(j.mode==POS && j.integral==0);
-    j.integral=2; arm_move(&j,'R',1000,151000);
+    j.integral=2; arm_move(&j,'R',10,151000);
     assert(j.integral==2); /* 相同模式刷新不清积分。 */
     arm_move(&j,'U',1520,151000); assert(j.integral==0 && j.pwm_us==1520);
     arm_tick(&j,151000); assert(j.state==STOP && j.mode==NONE && j.pwm_us==1500);
-    arm_move(&j,'R',100,251000); assert(j.state==RUN);
+    arm_move(&j,'R',1,251000); assert(j.state==RUN);
     arm_fault(&j,1); assert(j.state==FAULT && j.mode==NONE && j.pwm_us==1500);
     assert(arm_move_check(&j,'R',100));
 }
 static void limits_sensor_test(void) {
     arm_joint_t j=calibrated();
-    assert(arm_move_check(&j,'R',9001));
+    assert(arm_move_check(&j,'R',90.01f));
     arm_sample(&j,true,3061,6000); /* 约89.03度，向外保护区。 */
     j.speed=0; arm_move(&j,'U',1600,106000); arm_tick(&j,6000);
     assert(j.pwm_us==1500);
@@ -64,7 +64,7 @@ static void trajectory_test(void) {
     arm_joint_t j=calibrated(); float angle=0;
     for (int i=1;i<=200;i++) {
         int64_t now=1000+i*5000;
-        if (i==1 || i%10==0) arm_move(&j,'R',2000,now+100000);
+        if (i==1 || i%10==0) arm_move(&j,'R',20,now+100000);
         int raw=2048+(int)lroundf(angle*4096/360);
         arm_sample(&j,true,raw,now); arm_tick(&j,now);
         assert(j.state==RUN && j.mode==POS);
@@ -156,7 +156,136 @@ static void bus_resync_test(void) {
         assert(result==1 && arm_bus_decode(line.data,&seq,&body) && seq==42 && !strcmp(body,"R2"));
     }
 }
+
+static void float_settings_test(void) {
+    arm_command_t c; arm_joint_t j=calibrated();
+    const char *good[]={"R1 30.5","R -90 90","R1 -2.025e1","R1 +.5","P1 1.25 .01 0","J1 10.5 30.25 1500","H1 0","H2 1","H1"};
+    for (unsigned i=0;i<sizeof(good)/sizeof(*good);i++) assert(!arm_parse(good[i],false,&c));
+    const char *bad[]={"R1 nan","R1 NaN","R1 inf","R1 -inf","R1 1e99","R1 1e-99","R1 0x1p0","R1 .","R1 1e","R1 1.0x","R1 90.01","R1 -90.01","P1 nan 0 0","J1 10 30 1500.5","U1 1500.0","H1 1.0","H1 2","H 1","H1 0 1","$save 2147483647","$save -2147483648"};
+    for (unsigned i=0;i<sizeof(bad)/sizeof(*bad);i++) assert(arm_parse(bad[i],false,&c));
+    assert(!arm_parse("P1 1.25 0.01 0.5",false,&c)); assert(!arm_setting(&j,&c));
+    assert(j.cfg.kp==1.25f && j.cfg.ki==.01f && j.cfg.kd==.5f);
+    assert(!arm_parse("J1 10.5 30.25 1499",false,&c)); assert(!arm_setting(&j,&c));
+    assert(j.cfg.vmax==10.5f && j.cfg.amax==30.25f && j.cfg.neutral_us==1499);
+    const char *range[]={"P1 -0.1 0 0","P1 0 100.1 0","P1 0 0 10.1","J1 .001 30 1500","J1 90.01 30 1500","J1 10 360.1 1500"};
+    for (unsigned i=0;i<sizeof(range)/sizeof(*range);i++) {
+        arm_settings_t before=j.cfg;
+        assert(!arm_parse(range[i],false,&c) && arm_setting(&j,&c));
+        assert(!memcmp(&before,&j.cfg,sizeof(before)));
+    }
+    assert(!arm_parse("H1 1",false,&c)); assert(!arm_setting(&j,&c) && j.cfg.hold==1);
+    arm_move(&j,'R',10,0); assert(arm_setting(&j,&c));
+    arm_stop(&j); assert(!arm_setting(&j,&c));
+    arm_fault(&j,1); assert(arm_setting(&j,&c));
+}
+/* 用真实AS5600量化及理想脉宽/速度映射驱动真实控制核心；不是硬件精度证明。 */
+static void simulate(arm_joint_t *j,float *angle,int64_t now) {
+    int raw=2048+(int)lroundf(*angle*4096/360);
+    arm_sample(j,true,raw,now); arm_tick(j,now);
+    *angle+=(j->pwm_us-j->cfg.neutral_us)/(ARM_PWM_US_PER_DPS*j->cfg.motor_dir)*.005f;
+}
+static void position_modes_test(void) {
+    arm_joint_t j=calibrated();
+    arm_move(&j,'R',0,0);
+    for (int i=1;i<=40;i++) {arm_sample(&j,true,2048,1000+i*5000LL);arm_tick(&j,1000+i*5000LL);}
+    assert(j.state==RUN); /* 195ms还不能停。 */
+    int64_t first=j.settled_us;
+    arm_move(&j,'R',0,0); assert(j.settled_us==first);
+    arm_sample(&j,true,2048,206000);arm_tick(&j,206000);
+    assert(j.state==STOP && j.mode==NONE && j.pwm_us==1500);
+    arm_sample(&j,true,2060,211000);arm_tick(&j,211000);
+    assert(j.state==STOP && j.pwm_us==1500); /* 推偏不重新纠正。 */
+    j=calibrated(); arm_move(&j,'R',0,0);
+    for (int i=1;i<=30;i++) {arm_sample(&j,true,2048,1000+i*5000LL);arm_tick(&j,1000+i*5000LL);}
+    j.arrival_speed=2; arm_tick(&j,156000); assert(j.settled_us==0);
+    j.arrival_speed=0;arm_tick(&j,161000);assert(j.settled_us==161000);
+    arm_move(&j,'R',.25f,0); assert(j.settled_us==0 && j.target==.25f);
+    j=calibrated(); j.cfg.hold=1; float a=0;arm_move(&j,'R',2.5f,0);
+    for (int i=1;i<=1600;i++) simulate(&j,&a,1000+i*5000LL);
+    assert(j.state==RUN && j.mode==POS && fabsf(a-2.5f)<.2f && j.deadline_us==0);
+    /* 缓慢施加外力，避免不可信编码器跳变触发保护。 */
+    for (int i=1601;i<=1700;i++) {a-=.02f; simulate(&j,&a,1000+i*5000LL);}
+    assert(j.state==RUN && a<2.0f);
+    for (int i=1701;i<=3000;i++) simulate(&j,&a,1000+i*5000LL);
+    assert(fabsf(a-2.5f)<.2f && j.state==RUN);
+    arm_move(&j,'U',1510,15101000);assert(j.mode==PWM && j.integral==0);
+    arm_move(&j,'R',-2.5f,0);assert(j.mode==POS && j.deadline_us==0);
+    for (int i=3001;i<=4600;i++) simulate(&j,&a,1000+i*5000LL);
+    assert(fabsf(a+2.5f)<.2f && j.state==RUN);
+    arm_stop(&j);assert(j.state==STOP && j.pwm_us==1500);
+}
+static void independent_test(void) {
+    arm_joint_t j[]={calibrated(),calibrated()}; float a[]={0,0}; int stopped[]={0,0};
+    arm_command_t c;assert(!arm_parse("R 30.5 -10.25",false,&c));
+    for (int k=0;k<2;k++) arm_move(&j[k],'R',c.val[k],0);
+    for (int i=1;i<=2400;i++) for (int k=0;k<2;k++) {
+        simulate(&j[k],&a[k],1000+i*5000LL);
+        assert(j[k].state!=FAULT);
+        if (!stopped[k] && j[k].state==STOP) stopped[k]=i;
+    }
+    assert(stopped[0]>stopped[1] && stopped[1]>0);
+    assert(fabsf(a[0]-30.5f)<.5f && fabsf(a[1]+10.25f)<.5f);
+    j[1].cfg.hold=1; arm_move(&j[0],'R',-15.25f,0);arm_move(&j[1],'R',-10.25f,0);
+    for (int i=2401;i<=4800;i++) for (int k=0;k<2;k++) simulate(&j[k],&a[k],1000+i*5000LL);
+    assert(j[0].state==STOP && j[1].state==RUN);
+    assert(fabsf(a[0]+15.25f)<.5f && fabsf(a[1]+10.25f)<.2f);
+}
+static void watchdog_test(void) {
+    for (int hold=0;hold<=1;hold++) {
+        arm_joint_t j=calibrated();j.cfg.hold=hold;arm_bus_seen(&j,1000);arm_move(&j,'R',30,0);
+        for(int i=1;i<=20;i++){arm_sample(&j,true,2048,1000+i*5000LL);arm_tick(&j,1000+i*5000LL);}
+        assert(j.state==STOP && j.mode==NONE && j.pwm_us==1500);
+        arm_bus_seen(&j,106000);arm_sample(&j,true,2048,106000);arm_tick(&j,106000);
+        assert(j.state==STOP); /* 通信恢复不能恢复旧动作。 */
+        arm_move(&j,'R',30,0);
+        for(int i=22;i<=80;i++) {
+            int64_t now=1000+i*5000LL;
+            if(i%10==0) arm_bus_seen(&j,now);
+            arm_sample(&j,true,2048,now);arm_tick(&j,now);assert(j.state==RUN);
+        }
+        arm_sample(&j,false,0,406000);assert(j.state==FAULT && j.pwm_us==1500);
+    }
+    arm_joint_t j=calibrated();arm_move(&j,'U',1510,101000);
+    for(int i=1;i<=30;i++) {
+        int64_t now=1000+i*5000LL;
+        arm_bus_seen(&j,now);arm_sample(&j,true,2048,now);arm_tick(&j,now);
+    }
+    assert(j.state==STOP); /* 总线查询不能延长PWM期限。 */
+    j=calibrated();arm_move(&j,'U',1510,101000);
+    for(int i=1;i<=29;i++) {
+        int64_t now=1000+i*5000LL;
+        if(i==10) arm_move(&j,'U',1520,now+100000);
+        arm_sample(&j,true,2048,now);arm_tick(&j,now);assert(j.state==RUN);
+    }
+    arm_sample(&j,true,2048,151000);arm_tick(&j,151000);assert(j.state==STOP);
+}
+static void migration_test(void) {
+    arm_settings_t old=calibrated().cfg,loaded;old.kp=1.25f;old.ki=.01f;old.kd=.5f;
+    old.hold=1;arm_defaults(&loaded);
+    assert(arm_settings_decode(&loaded,2,&old,40));
+    assert(loaded.hold==0 && loaded.zero_raw==2048 && loaded.zero_valid && loaded.direction_valid && loaded.neutral_valid);
+    assert(loaded.kp==1.25f && loaded.ki==.01f && loaded.kd==.5f);
+    assert(arm_settings_decode(&loaded,3,&old,sizeof(old)) && loaded.hold==1);
+    old.hold=2;assert(!arm_settings_decode(&loaded,3,&old,sizeof(old)) && loaded.hold==1);
+    old.hold=1;old.kp=NAN;assert(!arm_settings_decode(&loaded,3,&old,sizeof(old)));
+    assert(!arm_settings_decode(&loaded,2,&old,39));assert(!arm_settings_decode(&loaded,4,&old,sizeof(old)));
+    unsigned char blob[sizeof(old)];old.kp=2;memcpy(blob,&old,sizeof(old));blob[offsetof(arm_settings_t,zero_valid)]=255;
+    assert(!arm_settings_decode(&loaded,3,blob,sizeof(blob)));
+}
+static void bus_motion_test(void) {
+    const char *commands[]={"R 30.5 -20.25","R2 -20.25","U 1510 1490 93","U2 1490 93","H2 1","P2 1.25 .01 0","J2 10.5 30.25 1500"};
+    for(unsigned k=0;k<sizeof(commands)/sizeof(*commands);k++) {
+        char frame[194];arm_line_t line={0};uint16_t seq;char *body;arm_command_t c;
+        assert(arm_bus_encode(12,commands[k],frame,sizeof(frame)));
+        int result=0;for(size_t i=0;i<strlen(frame);i++) result=arm_bus_line_feed(&line,(unsigned char)frame[i],i*87);
+        assert(result==1 && arm_bus_decode(line.data,&seq,&body));assert(!arm_parse(body,true,&c));
+        if(c.op=='R') assert(c.val[c.id?0:1]==-20.25f);
+        if(c.op=='U') assert(c.ttl_ms==93);
+    }
+    arm_command_t c;assert(arm_parse("R2 -20.25 96",true,&c));
+    assert(arm_parse("U2 1490",true,&c));assert(arm_parse("U2 1490 93.0",true,&c));
+}
 int main(void) {
-    parser_test(); timeout_modes_test(); limits_sensor_test(); trajectory_test(); framing_crc_test(); bus_query_test(); bus_resync_test();
-    puts("PASS: parser, expiry, modes, limits, sensor loss, trajectory, framing, CRC, bus queries, captured UART replay"); return 0;
+    float_settings_test(); position_modes_test(); independent_test(); watchdog_test(); migration_test(); bus_motion_test(); parser_test(); timeout_modes_test(); limits_sensor_test(); trajectory_test(); framing_crc_test(); bus_query_test(); bus_resync_test();
+    puts("PASS: float API, arrival/hold, independent axes, bus watchdog, settings migration, parser, expiry, modes, limits, sensor loss, trajectory, framing, CRC, bus queries, captured UART replay"); return 0;
 }
