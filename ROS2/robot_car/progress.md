@@ -1,6 +1,12 @@
 <!-- 作用：记录 ROS 2 开发过程；使用方法：按日期记录本次修改、验证结果、当前卡点和踩坑。 -->
 # 过程记录
 
+## 2026-11-24
+
+- 修复迁移后 `ros2 launch robot_main robot.launch.py mode:=real` 报 `ModuleNotFoundError: No module named 'robot_navigation.mapping'`。迁移时 Git 将任意深度的 `mapping/` 都视为运行数据，导致导航源码子包遗漏。从迁移前提交恢复数据库校验、快照保存与恢复、PLY 发布等模块，并将 `mapping/` 忽略规则限定到工作区根目录，继续排除活跃建图库。
+- 验证结果：现有 Jazzy 容器已重新构建 `robot_navigation` 和 `robot_main`；实机整车与地图定位 launch 参数解析、地图恢复命令加载均通过。整车和导航 Python 回归 111 项通过，10 项需显式启用的集成测试跳过。
+- 隔离容器以只读方式挂载工作区，在无网络和无机器人设备的条件下验证实机入口，网页控制台、RTAB-Map、地图快照和 Nav2 控制器进程均已启动；实车设备与运动未验证。`git diff --check` 通过。
+
 ## 2026-11-19
 
 - 本次修改：通过 SSH 将 RK3588 `/home/radxa/Robot/ROS2/` 外层的 build、install、log、calibration_output、calibration_reports、maps、model、qwen_logs、.runtime、.pytest_cache 整体迁入 robot_car；原 src/scripts 的缓存合并到新目录，无文件冲突。目录迁移使用同文件系统重命名并核对 inode，保留地图、模型、标定及日志。外层只保留导航 README、robot_car、robot_arm 和系统元数据。

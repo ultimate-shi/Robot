@@ -18,7 +18,9 @@
 /ROS2/**/install/
 /ROS2/**/log/
 /ROS2/**/maps/
-/ROS2/**/mapping/
+# 仅忽略工作区根目录的活跃建图库，保留导航包的 mapping 源码。
+/ROS2/mapping/
+/ROS2/*/mapping/
 /ROS2/**/model/
 /ROS2/**/qwen_logs/
 /ROS2/**/.runtime/
